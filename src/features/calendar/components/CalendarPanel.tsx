@@ -18,6 +18,8 @@ interface CalendarPanelProps {
   onChangeMonth: (month: Date) => void;
   onSelectDate: (day: Date) => void;
   onEditEvent?: (event: CalendarEvent) => void;
+  onAddEventForDate?: (day: Date) => void;
+  onMoveEvent?: (eventId: string, newDate: Date) => void;
 }
 
 function buildMonthGrid(currentMonth: Date): Date[] {
@@ -43,6 +45,8 @@ export default function CalendarPanel({
   onChangeMonth,
   onSelectDate,
   onEditEvent,
+  onAddEventForDate,
+  onMoveEvent,
 }: CalendarPanelProps) {
   const days = buildMonthGrid(currentMonth);
 
@@ -69,6 +73,8 @@ export default function CalendarPanel({
         activeFilters={activeFilters}
         getEventsForDate={getEventsForDate}
         onSelectDate={onSelectDate}
+        onAddEventForDate={onAddEventForDate}
+        onMoveEvent={onMoveEvent}
       />
 
       <EventStrip

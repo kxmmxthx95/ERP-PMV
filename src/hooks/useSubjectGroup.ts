@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import type { Subject } from '@/types/curriculum';
 import {
   type SubjectGroup,
@@ -67,87 +67,25 @@ const CODE_PREFIX_TO_GROUP: Record<string, SubjectGroupId> = {
   M4002: 'other',
 };
 
-export type NewSubjectGroup = Omit<SubjectGroup, 'id'>;
-
 export function useSubjectGroup(subjects: Subject[] = []) {
-  const [groups, setGroups] = useState<SubjectGroup[]>(() => {
-    // Auto-map subjects ที่รู้จักเข้า group ทันทีตอน init
+  // คำนวณ groups ใหม่เสมอเมื่อ subjects เปลี่ยนแปลง เพื่อความ reactive
+  const groups = useMemo<SubjectGroup[]>(() => {
     const initial = SEED_GROUPS.map(g => ({ ...g, subjectIds: [] as string[] }));
+    
     for (const subject of subjects) {
-      const groupKey = CODE_PREFIX_TO_GROUP[subject.code];
-      if (groupKey) {
-        const idx = initial.findIndex(g => g.groupKey === groupKey);
-        if (idx !== -1 && !initial[idx].subjectIds.includes(subject.id)) {
-          initial[idx].subjectIds.push(subject.id);
-        }
+      // 1. ใช้ค่าจาก subjectGroup property ในตัว subject (ถ้ามี)
+      // 2. ถ้าไม่มี ให้ใช้ auto-map จากรหัสวิชา (Legacy)
+      // 3. ถ้ายังไม่พบอีก ให้ลง 'other'
+      const groupKey = (subject.subjectGroup as SubjectGroupId) || CODE_PREFIX_TO_GROUP[subject.code.slice(0, 5)];
+      
+      const targetKey = groupKey || 'other';
+      const idx = initial.findIndex(g => g.groupKey === targetKey);
+      if (idx !== -1) {
+        initial[idx].subjectIds.push(subject.id);
       }
     }
     return initial;
-  });
-
-  // ── CRUD ────────────────────────────────────────────────────────────────────
-
-  const addGroup = (data: NewSubjectGroup) => {
-    setGroups(prev => [...prev, { ...data, id: `group-${Date.now()}` }]);
-  };
-
-  const updateGroup = (id: string, data: Partial<Omit<SubjectGroup, 'id'>>) => {
-    setGroups(prev => prev.map(g => g.id === id ? { ...g, ...data } : g));
-  };
-
-  const deleteGroup = (id: string) => {
-    setGroups(prev => prev.filter(g => g.id !== id));
-  };
-
-  // ── Subject ↔ Group assignment ───────────────────────────────────────────────
-
-  /** เพิ่ม subject เข้า group (ลบออกจาก group เดิมก่อนถ้ามี) */
-  const assignSubjectToGroup = (subjectId: string, groupId: string) => {
-    setGroups(prev => prev.map(g => {
-      if (g.id === groupId) {
-        return g.subjectIds.includes(subjectId)
-          ? g
-          : { ...g, subjectIds: [...g.subjectIds, subjectId] };
-      }
-      // ลบออกจาก group อื่น (1 วิชา → 1 group เท่านั้น)
-      return { ...g, subjectIds: g.subjectIds.filter(id => id !== subjectId) };
-    }));
-  };
-
-  /** toggle membership โดยไม่ย้าย group (ใช้เมื่อ 1 วิชาอยู่ได้หลาย group) */
-  const toggleSubjectInGroup = (subjectId: string, groupId: string) => {
-    setGroups(prev => prev.map(g => {
-      if (g.id !== groupId) return g;
-      const has = g.subjectIds.includes(subjectId);
-      return {
-        ...g,
-        subjectIds: has
-          ? g.subjectIds.filter(id => id !== subjectId)
-          : [...g.subjectIds, subjectId],
-      };
-    }));
-  };
-
-  const removeSubjectFromGroup = (subjectId: string, groupId: string) => {
-    setGroups(prev => prev.map(g =>
-      g.id === groupId
-        ? { ...g, subjectIds: g.subjectIds.filter(id => id !== subjectId) }
-        : g,
-    ));
-  };
-
-  // ── Derived ─────────────────────────────────────────────────────────────────
-
-  /** subjects ที่อยู่ใน group (ต้องการ subjects array ภายนอก) */
-  const getGroupSubjects = (groupId: string): Subject[] => {
-    const group = groups.find(g => g.id === groupId);
-    if (!group) return [];
-    return subjects.filter(s => group.subjectIds.includes(s.id));
-  };
-
-  /** group ที่ subject อยู่ (returns undefined ถ้ายังไม่ assign) */
-  const getSubjectGroup = (subjectId: string): SubjectGroup | undefined =>
-    groups.find(g => g.subjectIds.includes(subjectId));
+  }, [subjects]);
 
   /** subjects ที่ยังไม่ถูก assign group ใดเลย */
   const unassignedSubjects = useMemo<Subject[]>(() => {
@@ -179,8 +117,8 @@ export function useSubjectGroup(subjects: Subject[] = []) {
         groupKey: g.groupKey,
         name: g.name,
         subjectCount: subs.length,
-        totalCredits: subs.reduce((sum, s) => sum + s.credits, 0),
-        totalHours: subs.reduce((sum, s) => sum + s.hoursPerWeek, 0),
+        totalCredits: subs.reduce((sum, s) => sum + (s.credits || 0), 0),
+        totalHours: subs.reduce((sum, s) => sum + (s.hoursPerWeek || 0), 0),
       };
     }).sort((a, b) => {
       const orderA = SUBJECT_GROUP_CONFIG[a.groupKey]?.order ?? 99;
@@ -190,22 +128,13 @@ export function useSubjectGroup(subjects: Subject[] = []) {
   }, [groups, subjectsByGroup]);
 
   return {
-    // state
     groups,
     sortedGroups,
     subjectsByGroup,
     unassignedSubjects,
     groupStats,
-    // CRUD
-    addGroup,
-    updateGroup,
-    deleteGroup,
-    // assignment
-    assignSubjectToGroup,
-    toggleSubjectInGroup,
-    removeSubjectFromGroup,
     // queries
-    getGroupSubjects,
-    getSubjectGroup,
+    getGroupSubjects: (groupId: string) => subjectsByGroup[groupId] || [],
+    getSubjectGroup: (subjectId: string) => groups.find(g => g.subjectIds.includes(subjectId)),
   };
 }

@@ -28,8 +28,8 @@ export default function SyllabusManager() {
   const mgr = useSyllabusManager();
   const [newModalOpen, setNewModalOpen] = useState(false);
 
-  const handleCreate = (subject: Subject, teacher: TeacherProfile, gradeLevel: string) => {
-    mgr.createSyllabusForSubject(subject, teacher, gradeLevel);
+  const handleCreate = async (subject: Subject, teacher: TeacherProfile, gradeLevel: string) => {
+    await mgr.createSyllabusForSubject(subject, teacher, gradeLevel);
   };
 
   return (
@@ -90,11 +90,11 @@ export default function SyllabusManager() {
               subject={mgr.selectedSubject}
               teacher={mgr.selectedTeacher}
               teachingWeekInfo={mgr.getTeachingWeeksForSubject(mgr.selectedSyllabus.subjectId)}
-              onUpdate={data => mgr.updateSyllabus(mgr.selectedSyllabus!.id, data)}
-              onUpdateWeek={(week, data) => mgr.updateWeeklyPlan(mgr.selectedSyllabus!.id, week, data)}
-              onUpdateAssessment={a => mgr.updateAssessment(mgr.selectedSyllabus!.id, a)}
-              onSubmit={() => mgr.submitSyllabus(mgr.selectedSyllabus!.id)}
-              onApprove={() => mgr.approveSyllabus(mgr.selectedSyllabus!.id)}
+              onUpdate={async data => await mgr.updateSyllabus(mgr.selectedSyllabus!.id, data)}
+              onUpdateWeek={async (week, data) => await mgr.updateWeeklyPlan(mgr.selectedSyllabus!.id, week, data)}
+              onUpdateAssessment={async a => await mgr.updateAssessment(mgr.selectedSyllabus!.id, a)}
+              onSubmit={async () => await mgr.submitSyllabus(mgr.selectedSyllabus!.id)}
+              onApprove={async () => await mgr.approveSyllabus(mgr.selectedSyllabus!.id)}
             />
           ) : (
             <EmptyState onNew={() => setNewModalOpen(true)} />

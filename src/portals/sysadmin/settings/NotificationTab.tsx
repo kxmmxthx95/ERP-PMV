@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Bell, BellOff, Mail, MessageSquare, Smartphone,
@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { GLASS_CARD } from './constants';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Channel = 'inApp' | 'email' | 'sms';
@@ -185,17 +187,17 @@ function ChannelBadge({
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function NotificationTab() {
-  const [settings, setSettings] = useState<NotificationSettings>(() => {
-    try {
-      const saved = localStorage.getItem('school_notification_settings');
-      if (saved) {
-        const parsed = JSON.parse(saved) as Partial<NotificationSettings>;
-        return { ...DEFAULT_SETTINGS, ...parsed };
-      }
-    } catch { /* ignore */ }
-    return DEFAULT_SETTINGS;
-  });
+  const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
   const [savedMsg, setSavedMsg] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, 'systemConfig', 'notification'), (docSnap) => {
+      if (docSnap.exists()) {
+        setSettings({ ...DEFAULT_SETTINGS, ...(docSnap.data() as NotificationSettings) });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // ── Updaters ────────────────────────────────────────────────────────────────
   const setGlobalChannel = (ch: Channel, val: boolean) =>
@@ -220,15 +222,18 @@ export default function NotificationTab() {
     val: NotificationSettings['digest'][K]
   ) => setSettings(s => ({ ...s, digest: { ...s.digest, [key]: val } }));
 
-  const handleSave = () => {
-    localStorage.setItem('school_notification_settings', JSON.stringify(settings));
-    setSavedMsg(true);
-    setTimeout(() => setSavedMsg(false), 2000);
+  const handleSave = async () => {
+    try {
+      await setDoc(doc(db, 'systemConfig', 'notification'), settings, { merge: true });
+      setSavedMsg(true);
+      setTimeout(() => setSavedMsg(false), 2000);
+    } catch (error) {
+      console.error('Error saving notification settings:', error);
+    }
   };
 
   const handleReset = () => {
     setSettings(DEFAULT_SETTINGS);
-    localStorage.removeItem('school_notification_settings');
   };
 
   return (

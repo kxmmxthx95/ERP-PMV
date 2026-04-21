@@ -52,7 +52,7 @@ export default function ClassCard({ card, onEdit }: ClassCardProps) {
 
         {/* Edit button */}
         <button
-          onClick={onEdit}
+          onClick={(e) => { e.stopPropagation(); onEdit(); }}
           className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-xl flex items-center justify-center text-black/40 hover:bg-black/06 hover:text-black/60"
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -139,7 +139,10 @@ export default function ClassCard({ card, onEdit }: ClassCardProps) {
       </div>
 
       {/* ── Quick Actions ── */}
-      <div className="grid grid-cols-3 divide-x divide-black/[0.05] border-t border-black/[0.05]">
+      <div
+        className="grid grid-cols-3 divide-x divide-black/[0.05] border-t border-black/[0.05]"
+        onClick={(e) => e.stopPropagation()}
+      >
         <QuickAction
           label="นักเรียน"
           icon={<Users size={12} />}

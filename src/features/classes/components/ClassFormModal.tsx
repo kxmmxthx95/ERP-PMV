@@ -1,15 +1,12 @@
 import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
+import { Search, Check } from 'lucide-react';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import FormModal from '@/components/ui/FormModal';
 import type { ClassRoom, NewClassRoom } from '@/types/class';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
@@ -50,26 +47,42 @@ export default function ClassFormModal({
   const { departments, getGradesBySection } = useSchoolStructure();
   
   const [form, setForm] = useState<NewClassRoom>({ ...DEFAULT, academicYearId: yearId, semester });
+  const [teacherSearch, setTeacherSearch] = useState('');
+  const [showTeacherResults, setShowTeacherResults] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     if (editingClass) {
       const { id: _id, createdAt: _ca, ...rest } = editingClass;
       setForm(rest);
+      const teacher = teachers.find(t => t.id === rest.homeroomTeacherId);
+      setTeacherSearch(teacher?.name || '');
     } else {
       setForm({ ...DEFAULT, academicYearId: yearId, semester });
+      setTeacherSearch('');
     }
-  }, [open, editingClass, yearId, semester]);
+  }, [open, editingClass, yearId, semester, teachers]);
 
   const set = <K extends keyof NewClassRoom>(k: K, v: NewClassRoom[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
 
   const handleDeptChange = (dept: Department) => {
     set('departmentId', dept);
-    // auto-select first grade of new dept
     const normalizedDept = dept === 'early' ? 'early-childhood' : dept;
     const grades = getGradesBySection(normalizedDept as any);
-    set('gradeLevel', grades.length > 0 ? grades[0].id : '');
+    set('gradeLevel', grades.length > 0 ? grades[0].shortLabel : '');
+  };
+
+  const filteredTeachers = teachers.filter(t => 
+    t.name.toLowerCase().includes(teacherSearch.toLowerCase()) ||
+    t.employeeCode?.toLowerCase().includes(teacherSearch.toLowerCase())
+  );
+
+
+  const selectTeacher = (t: TeacherProfile) => {
+    set('homeroomTeacherId', t.id);
+    setTeacherSearch(t.name);
+    setShowTeacherResults(false);
   };
 
   const isValid = form.gradeLevel && form.roomNumber.trim() && form.homeroomTeacherId;
@@ -77,12 +90,22 @@ export default function ClassFormModal({
 
   const handleSubmit = () => {
     if (!isValid) return;
-    if (isEdit && editingClass) {
-      onUpdate(editingClass.id, form);
-    } else {
-      onSubmit(form);
+    try {
+      const generatedClassName = `${form.gradeLevel}/${form.roomNumber}`;
+      const finalForm = { 
+        ...form, 
+        className: generatedClassName 
+      };
+
+      if (isEdit && editingClass) {
+        onUpdate(editingClass.id, finalForm);
+      } else {
+        onSubmit(finalForm);
+      }
+      onClose();
+    } catch (err) {
+      console.error(err);
     }
-    onClose();
   };
 
   const handleDelete = () => {
@@ -97,176 +120,139 @@ export default function ClassFormModal({
   const gradesForDept = getGradesBySection(normalizedDept as any);
 
   return (
-    <Dialog open={open} onOpenChange={v => !v && onClose()}>
-      <DialogContent
-        className="max-w-sm sm:max-w-[400px] rounded-3xl border-0 p-0 overflow-hidden"
-        style={{
-          background: 'rgba(255,255,255,0.97)',
-          backdropFilter: 'blur(32px)',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.14)',
-        }}
-      >
-        <DialogHeader className="px-5 pt-5 pb-3 border-b border-black/05">
-          <div className="flex items-center justify-between">
-            <DialogTitle className="text-base font-bold text-black/80">
-              {isEdit ? `แก้ไขห้อง ${editingClass?.className}` : 'สร้างห้องเรียนใหม่'}
-            </DialogTitle>
-            <button onClick={onClose} className="w-7 h-7 rounded-full flex items-center justify-center text-black/40 hover:bg-black/06 transition-colors">
-              <X size={15} />
-            </button>
-          </div>
-          <p className="text-xs text-black/40 mt-1">
-            ปีการศึกษา {yearId} · ภาคเรียนที่ {semester}
-          </p>
-        </DialogHeader>
+    <FormModal
+      open={open}
+      onClose={onClose}
+      title={isEdit ? `แก้ไขห้อง ${editingClass?.className}` : 'สร้างห้องเรียนใหม่'}
+      onSubmit={handleSubmit}
+      submitLabel={isEdit ? 'บันทึก' : 'สร้างห้องเรียน'}
+      submitDisabled={!isValid}
+      onDelete={isEdit ? handleDelete : undefined}
+      deleteLabel="ลบห้อง"
+      maxWidth="sm"
+    >
+      {/* Department selector */}
+      <div className="space-y-1.5">
+        <Label className="text-[11px] font-bold text-black/40 ml-1 uppercase tracking-wider">ระดับ/แผนก <span className="text-red-400">*</span></Label>
+        <div className="flex h-9 bg-black/5 p-0.5 rounded-xl border border-black/5">
+          {departments.map(d => {
+            const deptValue = d.id === 'early-childhood' ? 'early' : d.id;
+            const cfg = DEPARTMENT_CONFIG[deptValue as Department];
+            const isActive = form.departmentId === deptValue;
+            return (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => handleDeptChange(deptValue as Department)}
+                className={`flex-1 rounded-lg text-[11px] font-bold transition-all ${
+                  isActive 
+                    ? 'bg-[#1e1e1e] text-white shadow-md' 
+                    : 'text-black/40 hover:text-black/60 hover:bg-black/5'
+                }`}
+              >
+                {cfg.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-        <div className="px-5 py-4 space-y-3 max-h-[75vh] overflow-y-auto">
-          {/* Department selector */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-black/60">ระดับ/แผนก <span className="text-red-400">*</span></Label>
-            <div className="flex gap-2">
-              {departments.map(d => {
-                const deptValue = d.id === 'early-childhood' ? 'early' : d.id;
-                const cfg = DEPARTMENT_CONFIG[deptValue as Department];
-                const isActive = form.departmentId === deptValue;
-                return (
-                  <button
-                    key={d.id}
-                    onClick={() => handleDeptChange(deptValue as Department)}
-                    className="flex-1 py-2 rounded-xl text-xs font-semibold transition-all border"
-                    style={{
-                      background: isActive ? cfg.bg : 'transparent',
-                      color: isActive ? cfg.color : 'rgba(0,0,0,0.40)',
-                      borderColor: isActive ? cfg.border : 'rgba(0,0,0,0.08)',
-                    }}
-                  >
-                    {cfg.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+      {/* Grade */}
+      <div className="space-y-1.5">
+        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">ระดับชั้น <span className="text-red-400">*</span></Label>
+        <Select value={form.gradeLevel} onValueChange={v => set('gradeLevel', v)}>
+          <SelectTrigger className="w-full h-9 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus:ring-1 focus:ring-slate-300">
+            <SelectValue placeholder="เลือกชั้น..." />
+          </SelectTrigger>
+          <SelectContent className="rounded-xl max-h-52">
+            {gradesForDept.map(g => (
+              <SelectItem key={g.id} value={g.shortLabel} className="text-[11px]">{g.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
-          {/* Grade + Room number */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-black/60">ระดับชั้น <span className="text-red-400">*</span></Label>
-            <Select value={form.gradeLevel} onValueChange={v => set('gradeLevel', v)}>
-              <SelectTrigger className="w-full h-9 text-xs rounded-xl bg-black/[0.03] border-transparent focus:ring-1 focus:ring-slate-300">
-                <SelectValue placeholder="เลือกชั้น..." />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl max-h-52">
-                {gradesForDept.map(g => (
-                  <SelectItem key={g.id} value={g.id} className="text-xs">{g.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-black/60">เลขห้อง <span className="text-red-400">*</span></Label>
-            <Input
-              value={form.roomNumber}
-              onChange={e => set('roomNumber', e.target.value)}
-              placeholder="เช่น 1, 2, A"
-              className="w-full h-9 text-xs rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
-            />
-          </div>
+      {/* Room number */}
+      <div className="space-y-1.5">
+        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">เลขห้อง <span className="text-red-400">*</span></Label>
+        <Input
+          value={form.roomNumber}
+          onChange={e => set('roomNumber', e.target.value)}
+          placeholder="เช่น 1, 2"
+          className="h-9 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
+        />
+      </div>
 
-          {/* Preview */}
-          {form.gradeLevel && form.roomNumber && (
-            <div
-              className="rounded-xl px-4 py-2.5 flex items-center gap-2"
-              style={{ background: DEPARTMENT_CONFIG[form.departmentId].bg }}
-            >
-              <span className="text-xs font-bold" style={{ color: DEPARTMENT_CONFIG[form.departmentId].color }}>
-                ชื่อห้อง:
-              </span>
-              <span className="text-sm font-bold text-black/70">
-                {form.gradeLevel}/{form.roomNumber}
-              </span>
-            </div>
-          )}
-
-          {/* Homeroom teacher */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-black/60">ครูประจำชั้น <span className="text-red-400">*</span></Label>
-            <Select value={form.homeroomTeacherId} onValueChange={v => set('homeroomTeacherId', v)}>
-              <SelectTrigger className="w-full h-9 text-xs rounded-xl bg-black/[0.03] border-transparent focus:ring-1 focus:ring-slate-300">
-                <SelectValue placeholder="เลือกครูประจำชั้น..." />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl max-h-52">
-                {teachers
-                  .filter(t => t.department === form.departmentId || true) // show all, filter by dept optionally
-                  .map(t => (
-                    <SelectItem key={t.id} value={t.id} className="text-xs">
-                      {t.name}
-                      <span className="ml-1.5 text-black/35 text-[10px]">{t.position}</span>
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Student count + capacity */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-black/60">จำนวนนักเรียน</Label>
-            <Input
-              type="number" min={0} max={100}
-              value={form.studentCount}
-              onChange={e => set('studentCount', Number(e.target.value))}
-              className="w-full h-9 text-xs rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
-            />
-          </div>
-
-          {/* Room location */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-black/60">ที่ตั้งห้องเรียน</Label>
-            <Input
-              value={form.room ?? ''}
-              onChange={e => set('room', e.target.value)}
-              placeholder="เช่น อาคาร 2 ห้อง 301"
-              className="w-full h-9 text-xs rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 placeholder:text-black/25"
-            />
-          </div>
-
-          {/* Note */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-black/60">หมายเหตุ</Label>
-            <Textarea
-              value={form.note ?? ''}
-              onChange={e => set('note', e.target.value)}
-              placeholder="หมายเหตุเพิ่มเติม..."
-              rows={2}
-              className="w-full text-xs rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 placeholder:text-black/25 resize-none"
-            />
-          </div>
+      {/* Searchable Homeroom teacher */}
+      <div className="space-y-1.5 relative">
+        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">ครูประจำชั้น <span className="text-red-400">*</span></Label>
+        <div className="relative">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30" />
+          <Input
+            value={teacherSearch}
+            onChange={e => {
+              setTeacherSearch(e.target.value);
+              setShowTeacherResults(true);
+              if (!e.target.value) set('homeroomTeacherId', '');
+            }}
+            onFocus={() => setShowTeacherResults(true)}
+            placeholder="ค้นหาชื่อครู..."
+            className="h-8 pl-8 pr-3 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
+          />
         </div>
 
-        {/* Footer */}
-        <div className="px-5 pb-5 pt-2 flex items-center justify-between gap-2 border-t border-black/[0.04]">
-          <div>
-            {isEdit && (
-              <Button
-                variant="ghost" size="sm" onClick={handleDelete}
-                className="text-red-500 hover:text-red-600 hover:bg-red-50 text-xs h-8 rounded-lg"
-              >
-                ลบห้อง
-              </Button>
+        {showTeacherResults && teacherSearch && (
+          <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white/98 backdrop-blur-xl border border-black/5 rounded-2xl shadow-2xl overflow-hidden max-h-48 overflow-y-auto divide-y divide-black/5 custom-scrollbar">
+            {filteredTeachers.length > 0 ? (
+              filteredTeachers.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => selectTeacher(t)}
+                  className="w-full px-4 py-2 text-left hover:bg-black/5 transition-colors flex items-center justify-between"
+                >
+                  <div>
+                    <p className="text-[11px] font-bold text-black/80">{t.name}</p>
+                    <p className="text-[9px] text-black/40">{t.position || 'ครูผู้สอน'}</p>
+                  </div>
+                  {form.homeroomTeacherId === t.id && <Check size={12} className="text-emerald-500" />}
+                </button>
+              ))
+            ) : (
+              <div className="px-4 py-3 text-[10px] text-center text-black/30">ไม่พบรายชื่อครู</div>
             )}
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={onClose}
-              className="text-xs h-8 rounded-lg border-black/10">
-              ยกเลิก
-            </Button>
-            <Button
-              size="sm" onClick={handleSubmit} disabled={!isValid}
-              className="text-xs h-8 rounded-lg bg-[#1e1e1e] hover:bg-[#2a2a2a] text-white disabled:opacity-40"
-            >
-              {isEdit ? 'บันทึก' : 'สร้างห้องเรียน'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+        )}
+        {/* Click outside to close (Overlay) */}
+        {showTeacherResults && (
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setShowTeacherResults(false)}
+          />
+        )}
+      </div>
+
+      {/* Room location */}
+      <div className="space-y-1.5">
+        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">ที่ตั้งห้องเรียน</Label>
+        <Input
+          value={form.room ?? ''}
+          onChange={e => set('room', e.target.value)}
+          placeholder="เช่น อาคาร 2 ชั้น 3 ห้อง 301"
+          className="h-8 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
+        />
+      </div>
+
+      {/* Note */}
+      <div className="space-y-1.5">
+        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">หมายเหตุ</Label>
+        <Textarea
+          value={form.note ?? ''}
+          onChange={e => set('note', e.target.value)}
+          placeholder="ระบุรายละเอียดเพิ่มเติม..."
+          rows={2}
+          className="text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 resize-none p-2.5"
+        />
+      </div>
+    </FormModal>
   );
 }

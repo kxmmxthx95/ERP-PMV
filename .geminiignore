@@ -1,0 +1,60 @@
+# --- Dependencies & Build Artifacts ---
+node_modules/
+dist/
+build/
+.next/
+out/
+.vercel/
+
+# --- Environment & Secrets ---
+.env
+.env.*
+!.env.example
+firebase-key.json
+*.pem
+
+# --- Package Manager Locks (พวกนี้ไฟล์ใหญ่มาก ไม่จำเป็นต้องอ่าน) ---
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+
+# --- Version Control ---
+.git/
+.gitignore
+.svn/
+.hg/
+
+# --- Logs & Temp ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.tmp/
+.cache/
+
+# --- Static Assets (รูปภาพและไอคอนไม่ต้องให้ AI วิเคราะห์โค้ด) ---
+public/assets/
+public/favicon.ico
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+
+# --- Documentation & Config that's self-explanatory ---
+README.md
+LICENSE
+.editorconfig
+.prettierrc
+.eslintrc.cjs
+
+# --- Internal Tools Config ---
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

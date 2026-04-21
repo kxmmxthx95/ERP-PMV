@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build files
+dist/
+build/
+.next/
+out/
+
+# Environment variables (sensitive)
+.env
+.env.local
+.env.*.local
+
+# Version control
+.git/
+.gitignore
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Misc
+.cache/
+.turbo/
+.next/
+coverage/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Firebase
+.firebase/
+.firebaserc
+
+# Generated files
+*.min.js
+*.min.css
+
+# Documentation (HTML renders)
+school-management-architecture.html
+GEMINI.md
+README.md

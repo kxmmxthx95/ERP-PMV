@@ -12,7 +12,7 @@ interface EventStripProps {
 }
 
 // Google Calendar holidays (id starts with "gcal-") are read-only
-const isEditable = (event: CalendarEvent) => !event.id.startsWith('gcal-');
+const isEditable = (event: CalendarEvent) => !event.id.startsWith('gcal-') && !event.id.startsWith('api-');
 
 export default function EventStrip({ selectedDate, events, activeFilters, onEditEvent }: EventStripProps) {
   const filtered = events.filter(e => activeFilters.has(e.type));
@@ -42,7 +42,13 @@ export default function EventStrip({ selectedDate, events, activeFilters, onEdit
                   return (
                     <div
                       key={ev.id}
-                      className="flex items-start gap-3 p-3 rounded-2xl"
+                      draggable={editable}
+                      onDragStart={(e: any) => {
+                        if (!editable) return;
+                        e.dataTransfer.setData('text/plain', ev.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      className={`flex items-start gap-3 p-3 rounded-2xl ${editable ? 'cursor-grab active:cursor-grabbing' : ''}`}
                       style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}
                     >
                       <span

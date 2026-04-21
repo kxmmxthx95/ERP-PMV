@@ -124,7 +124,7 @@ export function useTeacherSyllabus(
   const selectedSubject  = selectedCard?.subject  ?? null;
 
   // ── Create Syllabus ───────────────────────────────────────────────────────────
-  const createSyllabus = (subject: Subject, gradeLevel: string) => {
+  const createSyllabus = async (subject: Subject, gradeLevel: string) => {
     if (!currentTeacher) return;
 
     const weeklyPlanTemplate = generateWeeklyPlanSlots(
@@ -144,7 +144,7 @@ export function useTeacherSyllabus(
       note:             slot.note,
     }));
 
-    syllabusStore.createSyllabus({
+    await syllabusStore.createSyllabus({
       subjectId:    subject.id,
       teacherId:    currentTeacherId,
       academicYear: activeYearStr,
@@ -230,10 +230,10 @@ export function useTeacherSyllabus(
 
     // Actions (teacher-scoped)
     createSyllabus,
-    updateSyllabus:    (id: string, data: Partial<CourseSyllabus>) => syllabusStore.updateSyllabus(id, data),
-    updateWeeklyPlan:  (id: string, week: number, data: Partial<WeeklyPlan>) => syllabusStore.updateWeeklyPlan(id, week, data),
-    updateAssessment:  (id: string, a: AssessmentSchema) => syllabusStore.updateAssessment(id, a),
-    submitSyllabus:    (id: string) => syllabusStore.submitSyllabus(id),
+    updateSyllabus:    async (id: string, data: Partial<CourseSyllabus>) => await syllabusStore.updateSyllabus(id, data),
+    updateWeeklyPlan:  async (id: string, week: number, data: Partial<WeeklyPlan>) => await syllabusStore.updateWeeklyPlan(id, week, data),
+    updateAssessment:  async (id: string, a: AssessmentSchema) => await syllabusStore.updateAssessment(id, a),
+    submitSyllabus:    async (id: string) => await syllabusStore.submitSyllabus(id),
     // deleteSyllabus ไม่เปิดให้ teacher ลบ — ต้องผ่าน admin
   };
 }

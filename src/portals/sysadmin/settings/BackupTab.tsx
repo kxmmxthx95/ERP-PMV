@@ -1,11 +1,11 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   HardDrive, Download, Upload, CheckCircle2, AlertCircle,
   RefreshCw, FileArchive, Trash2, Clock, ChevronDown, X,
 } from 'lucide-react';
 import {
-  collection, getDocs, writeBatch, doc,
+  collection, getDocs, writeBatch, doc, onSnapshot, setDoc,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { GLASS_CARD } from './constants';
@@ -81,25 +81,6 @@ function downloadJson(payload: BackupPayload, filename: string) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
-}
-
-function getBackupHistory(): BackupRecord[] {
-  try {
-    return JSON.parse(localStorage.getItem('pmv_backup_history') || '[]');
-  } catch {
-    return [];
-  }
-}
-
-function saveBackupHistory(record: BackupRecord) {
-  const history = getBackupHistory();
-  history.unshift(record);
-  localStorage.setItem('pmv_backup_history', JSON.stringify(history.slice(0, 10)));
-}
-
-function removeBackupHistory(id: string) {
-  const history = getBackupHistory().filter(r => r.id !== id);
-  localStorage.setItem('pmv_backup_history', JSON.stringify(history));
 }
 
 // ── Collection Selector ───────────────────────────────────────────────────────
@@ -189,7 +170,18 @@ function BackupPanel() {
   );
   const [status, setStatus] = useState<BackupStatus>('idle');
   const [message, setMessage] = useState('');
-  const [history, setHistory] = useState<BackupRecord[]>(getBackupHistory);
+  const [history, setHistory] = useState<BackupRecord[]>([]);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, 'systemConfig', 'backup'), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().history) {
+        setHistory(docSnap.data().history as BackupRecord[]);
+      } else {
+        setHistory([]);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   const handleToggle = (id: string, checked: boolean) => {
     setSelected(prev => {
@@ -245,8 +237,9 @@ function BackupPanel() {
         docCount: totalDocs,
         sizeKb,
       };
-      saveBackupHistory(record);
-      setHistory(getBackupHistory());
+      
+      const newHistory = [record, ...history].slice(0, 10);
+      await setDoc(doc(db, 'systemConfig', 'backup'), { history: newHistory }, { merge: true });
 
       setStatus('success');
       setMessage(`สำรองข้อมูลสำเร็จ — ${totalDocs} รายการ ใน ${selected.size} collection`);
@@ -256,9 +249,13 @@ function BackupPanel() {
     }
   };
 
-  const handleDeleteHistory = (id: string) => {
-    removeBackupHistory(id);
-    setHistory(getBackupHistory());
+  const handleDeleteHistory = async (id: string) => {
+    const newHistory = history.filter(r => r.id !== id);
+    try {
+      await setDoc(doc(db, 'systemConfig', 'backup'), { history: newHistory }, { merge: true });
+    } catch (err) {
+      console.error('Error deleting backup history:', err);
+    }
   };
 
   return (

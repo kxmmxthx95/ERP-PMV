@@ -1,27 +1,44 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { Filter, CalendarPlus, RefreshCw, CloudOff, Cloud } from 'lucide-react';
-import { EVENT_TYPE_CONFIG, type CalendarEventType } from '@/types/calendar';
-import { ALL_TYPES } from '../constants';
+import { CalendarPlus, RefreshCw, CloudOff, Cloud } from 'lucide-react';
 import { toThaiFullDate } from '../utils';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { EVENT_TYPE_CONFIG, type CalendarEventType } from '@/types/calendar';
 
 export interface HolidayStatus {
   isLoading: boolean;
   error: string | null;
-  count: number;  // จำนวนวันหยุดที่โหลดมาได้
+  count: number;
 }
 
 interface CalendarHeaderProps {
-  activeFilters: Set<CalendarEventType>;
-  onToggleFilter: (type: CalendarEventType) => void;
   onAddEvent: () => void;
   holidayStatus: HolidayStatus;
+  // Filter Props
+  filterType: string;
+  onTypeChange: (val: string) => void;
+  allTypes: CalendarEventType[];
+  filterDept: string;
+  onDeptChange: (val: string) => void;
+  departments: any[];
+  deptIdMap: Record<string, string>;
 }
 
 export default function CalendarHeader({
-  activeFilters,
-  onToggleFilter,
   onAddEvent,
   holidayStatus,
+  filterType,
+  onTypeChange,
+  allTypes,
+  filterDept,
+  onDeptChange,
+  departments,
+  deptIdMap,
 }: CalendarHeaderProps) {
   const today = new Date();
 
@@ -29,56 +46,73 @@ export default function CalendarHeader({
     <motion.div
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+      className="flex flex-col md:flex-row md:items-center justify-between gap-4"
     >
-      {/* ── Left: Title + date + holiday status ── */}
+      {/* ── Left: Title + date ── */}
       <div>
         <div className="flex items-center gap-2.5">
-          <h1 className="text-2xl font-bold text-black/85 tracking-tight">ปฏิทินการศึกษา</h1>
+          <h1 className="text-xl font-bold text-black/85 tracking-tight">ปฏิทินการศึกษา</h1>
           <HolidayStatusBadge status={holidayStatus} />
         </div>
-        <p className="text-sm text-black/35 mt-0.5">{toThaiFullDate(today)}</p>
+        <p className="text-xs text-black/35 mt-0.5">{toThaiFullDate(today)}</p>
       </div>
 
-      {/* ── Right: Add button + filters ── */}
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* ── Right: Compact Filter Bar & Add Button ── */}
+      <div className="flex flex-col sm:flex-row items-center gap-0.5 w-full md:w-auto rounded-xl shadow-sm"
+        style={{
+          background: 'rgba(255, 255, 255, 0.4)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          border: '1px solid rgba(255, 255, 255, 0.6)',
+          padding: '0.15rem',
+        }}
+      >
+        {/* Type Filter */}
+        <div className="w-full sm:w-32 flex-shrink-0">
+          <Select value={filterType} onValueChange={onTypeChange}>
+            <SelectTrigger className="w-full px-2.5 py-0.5 bg-transparent hover:bg-black/5 border-none outline-none text-[11px] text-black/70 shadow-none focus:ring-0 h-auto rounded-md transition-colors">
+              <SelectValue placeholder="ดูทั้งหมด" />
+            </SelectTrigger>
+            <SelectContent className="bg-white/90 backdrop-blur-xl border-white/50 rounded-xl">
+              <SelectItem value="all" className="text-[11px] rounded-lg">กิจกรรมทั้งหมด</SelectItem>
+              {allTypes.map((t) => (
+                <SelectItem key={t} value={t} className="text-[11px] rounded-lg">
+                  {EVENT_TYPE_CONFIG[t]?.label ?? t}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Dept Filter */}
+        <div className="w-full sm:w-36 flex-shrink-0">
+          <Select value={filterDept} onValueChange={onDeptChange}>
+            <SelectTrigger className="w-full px-2.5 py-0.5 bg-transparent hover:bg-black/5 border-none outline-none text-[11px] text-black/70 shadow-none focus:ring-0 h-auto rounded-md transition-colors">
+              <SelectValue placeholder="แผนกทั้งหมด" />
+            </SelectTrigger>
+            <SelectContent className="bg-white/90 backdrop-blur-xl border-white/50 rounded-xl">
+              <SelectItem value="all" className="text-[11px] rounded-lg">แผนกทั้งหมด</SelectItem>
+              {departments.map((d) => {
+                const val = deptIdMap[d.id] ?? d.id;
+                return (
+                  <SelectItem key={d.id} value={val} className="text-[11px] rounded-lg">
+                    {d.label}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Add Button */}
         <button
           onClick={onAddEvent}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-2xl text-xs font-semibold text-white transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
-          style={{
-            background: 'linear-gradient(135deg,#7c3aed,#4f46e5)',
-            boxShadow: '0 0 16px #7c3aed50, 0 4px 10px rgba(0,0,0,0.12)',
-          }}
+          className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-white transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] h-auto border-0 bg-[#1e1e1e] hover:bg-[#2a2a2a] flex-shrink-0 ml-0.5"
+          style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
         >
-          <CalendarPlus size={13} />
+          <CalendarPlus size={14} />
           เพิ่มกิจกรรม
         </button>
-
-        <div className="w-px h-4 bg-black/10 flex-shrink-0" />
-        <Filter size={13} className="text-black/30 flex-shrink-0" />
-
-        {ALL_TYPES.map(type => {
-          const cfg = EVENT_TYPE_CONFIG[type];
-          const active = activeFilters.has(type);
-          return (
-            <button
-              key={type}
-              onClick={() => onToggleFilter(type)}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold transition-all duration-150"
-              style={{
-                background: active ? cfg.bg : 'rgba(0,0,0,0.04)',
-                border: `1px solid ${active ? cfg.border : 'transparent'}`,
-                color: active ? cfg.color : 'rgba(0,0,0,0.35)',
-              }}
-            >
-              <span
-                className="w-1.5 h-1.5 rounded-full"
-                style={{ background: active ? cfg.color : 'rgba(0,0,0,0.2)' }}
-              />
-              {cfg.label}
-            </button>
-          );
-        })}
       </div>
     </motion.div>
   );

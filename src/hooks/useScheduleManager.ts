@@ -8,7 +8,7 @@ import { SCHOOL_DAYS, PERIOD_COUNT, LUNCH_PERIOD } from '@/types/schedule';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 
-export type ViewMode = 'class' | 'teacher';
+export type ViewMode = 'class' | 'teacher' | 'compare';
 
 export interface SlotModalState {
   open: boolean;
@@ -20,7 +20,7 @@ export interface SlotModalState {
 export function useScheduleManager() {
   const { year: academicYear, activeSemester } = useActiveAcademicYear();
   const activeYear = academicYear ?? '2568';
-  const semester = (activeSemester ?? 1) as 1 | 2;
+  const [semester, setSemester] = useState<1 | 2>((activeSemester ?? 1) as 1 | 2);
 
   const schedule = useSchedule();
   const curriculum = useCurriculum();
@@ -65,10 +65,22 @@ export function useScheduleManager() {
     teacherManager.scheduleTeachers[0]?.id ?? '',
   );
 
+  // ── Compare mode — second selection ───────────────────────────────────────────
+  const [compareClassId, setCompareClassIdRaw] = useState<string>(schedule.classes[7]?.id ?? defaultClassId);
+  const [compareTeacherId, setCompareTeacherId] = useState<string>(
+    teacherManager.scheduleTeachers[1]?.id ?? teacherManager.scheduleTeachers[0]?.id ?? '',
+  );
+
+  const resolvedCompareClassId = schedule.classes.some(c => c.id === compareClassId)
+    ? compareClassId
+    : (schedule.classes[0]?.id ?? '');
+
+  const setCompareClassId = (id: string) => setCompareClassIdRaw(id);
+
   // เมื่อ filter เปลี่ยน ถ้า selectedClassId ไม่อยู่ใน filteredClasses ให้ reset
-  const resolvedClassId = filteredClasses.some(c => c.id === selectedClassId)
-    ? selectedClassId
-    : (filteredClasses[0]?.id ?? selectedClassId);
+  const resolvedClassId = selectedClassId 
+    ? (filteredClasses.some(c => c.id === selectedClassId) ? selectedClassId : (filteredClasses[0]?.id ?? ''))
+    : '';
 
   const setSelectedClassId = (id: string) => setSelectedClassIdRaw(id);
 
@@ -82,11 +94,8 @@ export function useScheduleManager() {
 
   const handleSetFilterGrade = (grade: string) => {
     setFilterGrade(grade);
-    const newFiltered = schedule.classes.filter(c =>
-      (filterDept === 'all' || c.department === filterDept) &&
-      (grade === 'all' || c.gradeLevel === grade),
-    );
-    if (newFiltered.length > 0) setSelectedClassIdRaw(newFiltered[0].id);
+    // Reset room selection to force manual choice
+    setSelectedClassIdRaw('');
   };
 
   // ── Slot modal ────────────────────────────────────────────────────────────────
@@ -104,7 +113,7 @@ export function useScheduleManager() {
 
   // ── Derived grid data ─────────────────────────────────────────────────────────
   const displayedEntries = useMemo(() => {
-    if (viewMode === 'class') {
+    if (viewMode === 'class' || viewMode === 'compare') {
       return schedule.getEntriesForClass(resolvedClassId, activeYear, semester);
     }
     return schedule.getEntriesForTeacher(selectedTeacherId, activeYear, semester);
@@ -125,6 +134,26 @@ export function useScheduleManager() {
     return g;
   }, [displayedEntries]);
 
+  // ── Compare grid ──────────────────────────────────────────────────────────────
+  const compareEntries = useMemo(() => {
+    if (viewMode !== 'compare') return [];
+    return schedule.getEntriesForClass(resolvedCompareClassId, activeYear, semester);
+  }, [viewMode, resolvedCompareClassId, activeYear, semester, schedule.entries]);
+
+  const compareGrid = useMemo(() => {
+    const g: Record<number, Record<number, ScheduleEntry | null>> = {};
+    for (const day of SCHOOL_DAYS) {
+      g[day] = {};
+      for (let p = 1; p <= PERIOD_COUNT; p++) {
+        g[day][p] = null;
+      }
+    }
+    for (const entry of compareEntries) {
+      if (g[entry.day]) g[entry.day][entry.period] = entry;
+    }
+    return g;
+  }, [compareEntries]);
+
   // สรุปจำนวนคาบต่อครูในภาพรวม
   const currentTeacherLoad = schedule.teacherLoadSummary[selectedTeacherId] ?? 0;
 
@@ -139,6 +168,7 @@ export function useScheduleManager() {
     // Academic year
     activeYear,
     semester,
+    setSemester,
 
     // View mode
     viewMode,
@@ -176,10 +206,18 @@ export function useScheduleManager() {
     teacherLoadSummary: schedule.teacherLoadSummary,
     currentTeacherLoad,
 
+    // Compare mode
+    compareClassId: resolvedCompareClassId,
+    setCompareClassId,
+    compareTeacherId,
+    setCompareTeacherId,
+    compareGrid,
+
     // Schedule actions
     addEntry: schedule.addEntry,
     updateEntry: schedule.updateEntry,
     deleteEntry: schedule.deleteEntry,
+    moveEntry: schedule.moveEntry,
     detectConflicts: schedule.detectConflicts,
   };
 }

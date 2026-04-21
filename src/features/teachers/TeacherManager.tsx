@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Users } from 'lucide-react';
 import { useTeacherManager } from '@/hooks/useTeacherManager';
-import { useSchedule } from '@/hooks/useSchedule';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import TeacherListPanel from './components/TeacherListPanel';
 import TeacherSubjectPanel from './components/TeacherSubjectPanel';
@@ -30,8 +29,6 @@ export default function TeacherManager() {
     allSubjects,
   } = useTeacherManager();
 
-  const schedule = useSchedule();
-
   // ── Local State ───────────────────────────────────────────────────────────────
   const [selectedId, setSelectedId] = useState<string | null>(teachers[0]?.id ?? null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -50,13 +47,13 @@ export default function TeacherManager() {
     setModalOpen(true);
   };
 
-  const handleAddTeacher = (data: Parameters<typeof addTeacher>[0]) => {
-    const newTeacher = addTeacher(data);
+  const handleAddTeacher = async (data: Parameters<typeof addTeacher>[0]) => {
+    const newTeacher = await addTeacher(data);
     setSelectedId(newTeacher.id);
   };
 
-  const handleDelete = (id: string) => {
-    deleteTeacher(id);
+  const handleDelete = async (id: string) => {
+    await deleteTeacher(id);
     if (selectedId === id) {
       setSelectedId(teachers.find(t => t.id !== id)?.id ?? null);
     }
@@ -95,7 +92,6 @@ export default function TeacherManager() {
           <TeacherListPanel
             teachers={teachers}
             selectedId={selectedId}
-            teacherLoadSummary={schedule.teacherLoadSummary}
             onSelect={setSelectedId}
             onAdd={openAddModal}
           />
@@ -107,10 +103,9 @@ export default function TeacherManager() {
             <TeacherSubjectPanel
               teacher={selectedTeacher}
               allSubjects={allSubjects}
-              currentHours={schedule.teacherLoadSummary[selectedTeacher.id] ?? 0}
               onEdit={openEditModal}
-              onToggleStatus={() => toggleTeacherStatus(selectedTeacher.id)}
-              onToggleSubject={(subjectId) => toggleSubjectAssignment(selectedTeacher.id, subjectId)}
+              onToggleStatus={async () => await toggleTeacherStatus(selectedTeacher.id)}
+              onToggleSubject={async (subjectId) => await toggleSubjectAssignment(selectedTeacher.id, subjectId)}
             />
           ) : (
             <div
@@ -135,9 +130,10 @@ export default function TeacherManager() {
       <AddTeacherModal
         open={modalOpen}
         editingTeacher={editingTeacher}
+        existingTeachers={teachers}
         onClose={() => setModalOpen(false)}
         onSubmit={handleAddTeacher}
-        onUpdate={(id, data) => updateTeacher(id, data)}
+        onUpdate={async (id, data) => await updateTeacher(id, data)}
         onDelete={handleDelete}
       />
     </div>

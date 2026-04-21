@@ -6,8 +6,9 @@ import GeneralTab from './GeneralTab';
 import NotificationTab from './NotificationTab';
 import SecurityTab from './SecurityTab';
 import ImportTab from './ImportTab';
-import FirestoreRulesTab from './FirestoreRulesTab';
 import BackupTab from './BackupTab';
+import RolePermissionManager from '@/features/roles/RolePermissionManager';
+import { useAuth } from '@/hooks/useAuth';
 import { setActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { SETTINGS_TABS, GLASS_CARD } from './constants';
 import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, writeBatch } from 'firebase/firestore';
@@ -16,6 +17,7 @@ import type { AcademicYear } from './types';
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function SysAdminSettings() {
+  const { role } = useAuth();
   const [activeTab, setActiveTab] = useState('academic-year');
   const [years, setYears] = useState<AcademicYear[]>([]);
 
@@ -83,7 +85,12 @@ export default function SysAdminSettings() {
             padding: '0.25rem',
           }}
         >
-          {SETTINGS_TABS.filter(tab => tab.label !== 'หลักสูตร').map(tab => {
+          {SETTINGS_TABS.filter(tab => {
+            if (tab.id === 'curriculum') return false;
+            // Only sysadmin can see 'roles' tab
+            if (tab.id === 'roles' && role !== 'sysadmin') return false;
+            return true;
+          }).map(tab => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
           return (
@@ -149,15 +156,25 @@ export default function SysAdminSettings() {
           <ImportTab key="import" />
         )}
 
-        {activeTab === 'firestore-rules' && (
-          <FirestoreRulesTab key="firestore-rules" />
-        )}
-
         {activeTab === 'backup' && (
           <BackupTab key="backup" />
         )}
 
-        {activeTab !== 'academic-year' && activeTab !== 'general' && activeTab !== 'notification' && activeTab !== 'security' && activeTab !== 'import' && activeTab !== 'firestore-rules' && activeTab !== 'backup' && (
+        {activeTab === 'roles' && role === 'sysadmin' && (
+          <motion.div
+            key="roles"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={{ duration: 0.2 }}
+            className="rounded-2xl overflow-hidden shadow-sm"
+            style={GLASS_CARD}
+          >
+            <RolePermissionManager />
+          </motion.div>
+        )}
+
+        {activeTab !== 'academic-year' && activeTab !== 'general' && activeTab !== 'notification' && activeTab !== 'security' && activeTab !== 'import' && activeTab !== 'backup' && activeTab !== 'roles' && (
           <motion.div
             key={activeTab}
             initial={{ opacity: 0, y: 10 }}

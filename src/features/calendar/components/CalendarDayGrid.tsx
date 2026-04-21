@@ -11,6 +11,8 @@ interface CalendarDayGridProps {
   activeFilters: Set<CalendarEventType>;
   getEventsForDate: (dateStr: string) => CalendarEvent[];
   onSelectDate: (day: Date) => void;
+  onAddEventForDate?: (day: Date) => void;
+  onMoveEvent?: (eventId: string, newDate: Date) => void;
 }
 
 export default function CalendarDayGrid({
@@ -20,6 +22,8 @@ export default function CalendarDayGrid({
   activeFilters,
   getEventsForDate,
   onSelectDate,
+  onAddEventForDate,
+  onMoveEvent,
 }: CalendarDayGridProps) {
   const handleSelect = (day: Date) => {
     const isAlreadySelected = selectedDate ? isSameDay(day, selectedDate) : false;
@@ -57,6 +61,8 @@ export default function CalendarDayGrid({
               events={dayEvents}
               activeFilters={activeFilters}
               onSelect={handleSelect}
+              onDoubleClick={() => onAddEventForDate?.(day)}
+              onDropEvent={onMoveEvent}
             />
           );
         })}

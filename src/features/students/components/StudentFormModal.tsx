@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { X, UserPlus, Save } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { UserPlus, Save, GraduationCap } from 'lucide-react';
 import type { Student, NewStudent, Gender } from '@/types/student';
+import { NativeSelect } from '@/components/ui/native-select';
+import FormModal from '@/components/ui/FormModal';
 
 interface StudentFormModalProps {
   open: boolean;
@@ -34,13 +35,6 @@ const DEFAULT_FORM: NewStudent = {
   status: 'active',
 };
 
-const glassPanel: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.96)',
-  backdropFilter: 'blur(24px)',
-  border: '1px solid rgba(0,0,0,0.08)',
-  boxShadow: '0 24px 64px rgba(0,0,0,0.14)',
-};
-
 export default function StudentFormModal({ open, onClose, onSubmit, editingStudent }: StudentFormModalProps) {
   const [form, setForm] = useState<NewStudent>(DEFAULT_FORM);
   const isEditing = !!editingStudent;
@@ -62,220 +56,161 @@ export default function StudentFormModal({ open, onClose, onSubmit, editingStude
     setForm(prev => ({ ...prev, prefix, gender }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = () => {
     if (!form.studentCode.trim() || !form.firstName.trim() || !form.lastName.trim()) return;
     onSubmit(form);
     onClose();
   };
 
-  const inputCls = 'w-full h-9 px-3 rounded-xl text-sm text-black/80 outline-none transition-all border border-black/10 focus:border-black/30 bg-white/70';
-  const labelCls = 'block text-[11px] font-semibold text-black/40 uppercase tracking-wider mb-1';
+  const inputCls = 'w-full h-10 px-4 rounded-xl text-sm text-black/80 outline-none transition-all border-transparent bg-black/[0.03] focus:bg-black/[0.05] focus:ring-1 focus:ring-slate-300 shadow-sm font-medium';
+  const labelCls = 'block text-[10px] font-bold text-black/40 uppercase tracking-widest mb-1 pl-1';
 
   return (
-    <AnimatePresence>
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          {/* Overlay */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={onClose}
-          />
-
-          {/* Panel */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 8 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 28 }}
-            className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl"
-            style={glassPanel}
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-black/06" style={{ background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(12px)' }}>
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center">
-                  {isEditing ? <Save size={15} className="text-white" /> : <UserPlus size={15} className="text-white" />}
-                </div>
-                <div>
-                  <h2 className="text-sm font-bold text-black/80">{isEditing ? 'แก้ไขข้อมูลนักเรียน' : 'เพิ่มนักเรียนใหม่'}</h2>
-                  <p className="text-[11px] text-black/40">{isEditing ? `รหัส ${editingStudent?.studentCode}` : 'กรอกข้อมูลนักเรียน'}</p>
-                </div>
-              </div>
-              <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-black/30 hover:text-black/60 hover:bg-black/06 transition-colors">
-                <X size={16} />
-              </button>
+    <FormModal
+      open={open}
+      onClose={onClose}
+      title={isEditing ? 'แก้ไขข้อมูลนักเรียน' : 'เพิ่มนักเรียนใหม่'}
+      subtitle={isEditing ? `รหัสประจำตัว ${editingStudent?.studentCode}` : 'กรอกรายละเอียดพื้นฐานของนักเรียน'}
+      icon={isEditing ? <Save size={18} /> : <UserPlus size={18} />}
+      onSubmit={handleSubmit}
+      submitLabel={isEditing ? 'บันทึกการแก้ไข' : 'ยืนยันเพิ่มนักเรียน'}
+      submitDisabled={!form.studentCode.trim() || !form.firstName.trim() || !form.lastName.trim()}
+      maxWidth="2xl"
+    >
+      <div className="space-y-6 py-2">
+        {/* ── Section: ข้อมูลส่วนตัว ── */}
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <GraduationCap size={14} className="text-blue-500" />
+            <h3 className="text-xs font-bold text-black/60 uppercase tracking-widest">ข้อมูลส่วนตัว</h3>
+            <div className="h-px flex-1 bg-black/5" />
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            {/* Prefix */}
+            <div>
+              <label className={labelCls}>คำนำหน้า</label>
+              <NativeSelect value={form.prefix} onChange={e => handlePrefixChange(e.target.value)}>
+                {PREFIXES.map(p => <option key={p} value={p}>{p}</option>)}
+              </NativeSelect>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-6">
+            {/* Student Code */}
+            <div>
+              <label className={labelCls}>เลขประจำตัวนักเรียน *</label>
+              <input
+                required
+                value={form.studentCode}
+                onChange={e => set('studentCode', e.target.value)}
+                placeholder="เช่น 67001"
+                className={inputCls}
+              />
+            </div>
 
-              {/* ── Section: ข้อมูลส่วนตัว ── */}
-              <section>
-                <h3 className="text-xs font-bold text-black/50 uppercase tracking-widest mb-4">ข้อมูลส่วนตัว</h3>
-                <div className="grid grid-cols-2 gap-4">
+            {/* First name */}
+            <div>
+              <label className={labelCls}>ชื่อ (ไทย) *</label>
+              <input required value={form.firstName} onChange={e => set('firstName', e.target.value)} placeholder="ชื่อ" className={inputCls} />
+            </div>
 
-                  {/* Prefix */}
-                  <div>
-                    <label className={labelCls}>คำนำหน้า</label>
-                    <select value={form.prefix} onChange={e => handlePrefixChange(e.target.value)} className={inputCls}>
-                      {PREFIXES.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                  </div>
+            {/* Last name */}
+            <div>
+              <label className={labelCls}>นามสกุล (ไทย) *</label>
+              <input required value={form.lastName} onChange={e => set('lastName', e.target.value)} placeholder="นามสกุล" className={inputCls} />
+            </div>
 
-                  {/* Student Code */}
-                  <div>
-                    <label className={labelCls}>เลขประจำตัวนักเรียน *</label>
-                    <input
-                      required
-                      value={form.studentCode}
-                      onChange={e => set('studentCode', e.target.value)}
-                      placeholder="67001"
-                      className={inputCls}
-                    />
-                  </div>
+            {/* Birthdate */}
+            <div>
+              <label className={labelCls}>วันเกิด</label>
+              <input type="date" value={form.birthDate ?? ''} onChange={e => set('birthDate', e.target.value)} className={inputCls} />
+            </div>
 
-                  {/* First name */}
-                  <div>
-                    <label className={labelCls}>ชื่อ (ไทย) *</label>
-                    <input required value={form.firstName} onChange={e => set('firstName', e.target.value)} placeholder="ชื่อ" className={inputCls} />
-                  </div>
+            {/* Blood type */}
+            <div>
+              <label className={labelCls}>หมู่เลือด</label>
+              <NativeSelect value={form.bloodType ?? ''} onChange={e => set('bloodType', e.target.value as NewStudent['bloodType'])}>
+                <option value="">— ไม่ระบุ —</option>
+                {BLOOD_TYPES.map(b => <option key={b} value={b}>{b}</option>)}
+              </NativeSelect>
+            </div>
 
-                  {/* Last name */}
-                  <div>
-                    <label className={labelCls}>นามสกุล (ไทย) *</label>
-                    <input required value={form.lastName} onChange={e => set('lastName', e.target.value)} placeholder="นามสกุล" className={inputCls} />
-                  </div>
+            {/* Nationality */}
+            <div>
+              <label className={labelCls}>สัญชาติ</label>
+              <input value={form.nationality ?? ''} onChange={e => set('nationality', e.target.value)} placeholder="ไทย" className={inputCls} />
+            </div>
 
-                  {/* First name EN */}
-                  <div>
-                    <label className={labelCls}>ชื่อ (อังกฤษ)</label>
-                    <input value={form.firstNameEn ?? ''} onChange={e => set('firstNameEn', e.target.value)} placeholder="First name" className={inputCls} />
-                  </div>
+            {/* Religion */}
+            <div>
+              <label className={labelCls}>ศาสนา</label>
+              <NativeSelect value={form.religion ?? ''} onChange={e => set('religion', e.target.value)}>
+                <option value="">— ไม่ระบุ —</option>
+                {RELIGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+              </NativeSelect>
+            </div>
 
-                  {/* Last name EN */}
-                  <div>
-                    <label className={labelCls}>นามสกุล (อังกฤษ)</label>
-                    <input value={form.lastNameEn ?? ''} onChange={e => set('lastNameEn', e.target.value)} placeholder="Last name" className={inputCls} />
-                  </div>
+            {/* Address */}
+            <div className="col-span-2">
+              <label className={labelCls}>ที่อยู่</label>
+              <textarea
+                value={form.address ?? ''}
+                onChange={e => set('address', e.target.value)}
+                rows={2}
+                placeholder="บ้านเลขที่ ถนน ตำบล อำเภอ จังหวัด"
+                className="w-full px-4 py-2 rounded-xl text-sm text-black/80 outline-none transition-all border border-black/10 focus:border-black/30 bg-white/70 resize-none shadow-sm"
+              />
+            </div>
+          </div>
+        </section>
 
-                  {/* Birthdate */}
-                  <div>
-                    <label className={labelCls}>วันเกิด</label>
-                    <input type="date" value={form.birthDate ?? ''} onChange={e => set('birthDate', e.target.value)} className={inputCls} />
-                  </div>
+        {/* ── Section: ข้อมูลผู้ปกครอง ── */}
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <h3 className="text-xs font-bold text-black/60 uppercase tracking-widest">ข้อมูลผู้ปกครอง</h3>
+            <div className="h-px flex-1 bg-black/5" />
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>ชื่อผู้ปกครอง</label>
+              <input value={form.guardianName ?? ''} onChange={e => set('guardianName', e.target.value)} placeholder="ชื่อ-นามสกุล" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>ความสัมพันธ์</label>
+              <NativeSelect value={form.guardianRelation ?? ''} onChange={e => set('guardianRelation', e.target.value)}>
+                <option value="">— ไม่ระบุ —</option>
+                {['บิดา', 'มารดา', 'ผู้ปกครอง', 'ปู่/ตา', 'ย่า/ยาย', 'อื่น ๆ'].map(r => <option key={r} value={r}>{r}</option>)}
+              </NativeSelect>
+            </div>
+            <div className="col-span-2">
+              <label className={labelCls}>เบอร์โทรศัพท์ผู้ปกครอง</label>
+              <input value={form.guardianPhone ?? ''} onChange={e => set('guardianPhone', e.target.value)} placeholder="08X-XXX-XXXX" className={inputCls} />
+            </div>
+          </div>
+        </section>
 
-                  {/* Blood type */}
-                  <div>
-                    <label className={labelCls}>หมู่เลือด</label>
-                    <select value={form.bloodType ?? ''} onChange={e => set('bloodType', e.target.value as NewStudent['bloodType'])} className={inputCls}>
-                      <option value="">— ไม่ระบุ —</option>
-                      {BLOOD_TYPES.map(b => <option key={b} value={b}>{b}</option>)}
-                    </select>
-                  </div>
-
-                  {/* Nationality */}
-                  <div>
-                    <label className={labelCls}>สัญชาติ</label>
-                    <input value={form.nationality ?? ''} onChange={e => set('nationality', e.target.value)} placeholder="ไทย" className={inputCls} />
-                  </div>
-
-                  {/* Religion */}
-                  <div>
-                    <label className={labelCls}>ศาสนา</label>
-                    <select value={form.religion ?? ''} onChange={e => set('religion', e.target.value)} className={inputCls}>
-                      <option value="">— ไม่ระบุ —</option>
-                      {RELIGIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                    </select>
-                  </div>
-
-                  {/* Allergies */}
-                  <div className="col-span-2">
-                    <label className={labelCls}>ประวัติแพ้ยา / แพ้อาหาร</label>
-                    <input value={form.allergies ?? ''} onChange={e => set('allergies', e.target.value)} placeholder="ระบุถ้ามี เช่น แพ้ยาเพนนิซิลิน" className={inputCls} />
-                  </div>
-
-                  {/* Address */}
-                  <div className="col-span-2">
-                    <label className={labelCls}>ที่อยู่</label>
-                    <textarea
-                      value={form.address ?? ''}
-                      onChange={e => set('address', e.target.value)}
-                      rows={2}
-                      placeholder="บ้านเลขที่ ถนน ตำบล อำเภอ จังหวัด"
-                      className="w-full px-3 py-2 rounded-xl text-sm text-black/80 outline-none transition-all border border-black/10 focus:border-black/30 bg-white/70 resize-none"
-                    />
-                  </div>
-                </div>
-              </section>
-
-              {/* ── Section: ข้อมูลผู้ปกครอง ── */}
-              <section>
-                <h3 className="text-xs font-bold text-black/50 uppercase tracking-widest mb-4">ข้อมูลผู้ปกครอง</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className={labelCls}>ชื่อผู้ปกครอง</label>
-                    <input value={form.guardianName ?? ''} onChange={e => set('guardianName', e.target.value)} placeholder="ชื่อ-นามสกุล" className={inputCls} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>ความสัมพันธ์</label>
-                    <select value={form.guardianRelation ?? ''} onChange={e => set('guardianRelation', e.target.value)} className={inputCls}>
-                      <option value="">— ไม่ระบุ —</option>
-                      {['บิดา', 'มารดา', 'ผู้ปกครอง', 'ปู่/ตา', 'ย่า/ยาย', 'อื่น ๆ'].map(r => <option key={r} value={r}>{r}</option>)}
-                    </select>
-                  </div>
-                  <div className="col-span-2">
-                    <label className={labelCls}>เบอร์โทรผู้ปกครอง</label>
-                    <input value={form.guardianPhone ?? ''} onChange={e => set('guardianPhone', e.target.value)} placeholder="08X-XXX-XXXX" className={inputCls} />
-                  </div>
-                </div>
-              </section>
-
-              {/* ── Section: สถานะ ── */}
-              <section>
-                <h3 className="text-xs font-bold text-black/50 uppercase tracking-widest mb-4">สถานะ</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  {(['active', 'inactive', 'graduated', 'transferred'] as const).map(s => (
-                    <label key={s} className="flex items-center gap-2.5 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="status"
-                        value={s}
-                        checked={form.status === s}
-                        onChange={() => set('status', s)}
-                        className="w-4 h-4 accent-emerald-500"
-                      />
-                      <span className="text-sm text-black/70">
-                        {s === 'active' ? 'กำลังศึกษา' : s === 'inactive' ? 'พักการศึกษา' : s === 'graduated' ? 'จบการศึกษา' : 'ย้ายออก'}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </section>
-
-              {/* ── Actions ── */}
-              <div className="flex items-center justify-end gap-3 pt-2 border-t border-black/06">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-5 py-2 rounded-xl text-sm font-medium text-black/50 hover:text-black/70 hover:bg-black/05 transition-colors"
-                >
-                  ยกเลิก
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 transition-all shadow-sm"
-                >
-                  {isEditing ? 'บันทึกการแก้ไข' : 'เพิ่มนักเรียน'}
-                </button>
-              </div>
-            </form>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+        {/* ── Section: สถานะ ── */}
+        <section className="bg-black/[0.02] p-4 rounded-2xl border border-black/5">
+          <h3 className="text-[10px] font-bold text-black/30 uppercase tracking-widest mb-3">สถานะการศึกษา</h3>
+          <div className="flex flex-wrap gap-6">
+            {(['active', 'inactive', 'graduated', 'transferred'] as const).map(s => (
+              <label key={s} className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="status"
+                  value={s}
+                  checked={form.status === s}
+                  onChange={() => set('status', s)}
+                  className="w-4 h-4 accent-emerald-500"
+                />
+                <span className="text-xs font-medium text-black/70">
+                  {s === 'active' ? 'กำลังศึกษา' : s === 'inactive' ? 'พักการศึกษา' : s === 'graduated' ? 'จบการศึกษา' : 'ย้ายออก'}
+                </span>
+              </label>
+            ))}
+          </div>
+        </section>
+      </div>
+    </FormModal>
   );
 }

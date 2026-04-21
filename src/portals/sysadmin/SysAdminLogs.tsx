@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Download, Search, User, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -18,14 +18,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { recentLogs } from './mockDashboard';
+import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 // ── Type Definitions ──────────────────────────────────────────────────────
 interface AuditLog {
-  id: number;
+  id: string;
   action: string;
   user: string;
-  time: string;
+  time?: string;
   timestamp: string;
   status: 'success' | 'warning' | 'error';
   category: 'user' | 'system' | 'security' | 'academic' | 'data';
@@ -64,10 +65,23 @@ export default function SysAdminLogs() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+
+  useEffect(() => {
+    const q = query(collection(db, 'logs'), orderBy('timestamp', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetchedLogs = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as AuditLog[];
+      setLogs(fetchedLogs);
+    });
+    return () => unsubscribe();
+  }, []);
 
   // ── Filter and compute stats ──
   const filteredLogs = useMemo(() => {
-    return (recentLogs as AuditLog[]).filter(log => {
+    return logs.filter(log => {
       // Text search
       if (searchText && !log.action.toLowerCase().includes(searchText.toLowerCase()) &&
           !log.user.toLowerCase().includes(searchText.toLowerCase())) {

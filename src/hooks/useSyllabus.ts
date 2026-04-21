@@ -1,4 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import type {
   CourseSyllabus, NewSyllabus, WeeklyPlan, TeachingWeekInfo, AssessmentSchema,
 } from '@/types/syllabus';
@@ -113,86 +115,63 @@ export function generateWeeklyPlanSlots(
   });
 }
 
-// ── Seed Data ─────────────────────────────────────────────────────────────────
-
-const SEED_SYLLABI: CourseSyllabus[] = [
-  {
-    id: 'syl-001',
-    subjectId: 's31',
-    teacherId: 't03',
-    academicYear: '2568',
-    semester: 1,
-    gradeLevel: 'ม.3',
-    subjectCode: 'M1002',
-    subjectName: 'คณิตศาสตร์',
-    credits: 1,
-    hoursPerWeek: 3,
-    teacherName: 'ครูประเสริฐ มั่นคง',
-    department: 'secondary',
-    description: 'ศึกษาเกี่ยวกับจำนวนและพีชคณิต ฟังก์ชัน สมการ และความน่าจะเป็น เพื่อพัฒนาทักษะการคิดเชิงตรรกะและการแก้ปัญหาทางคณิตศาสตร์',
-    objectives: [
-      'นักเรียนสามารถแก้สมการกำลังสองได้',
-      'นักเรียนเข้าใจแนวคิดฟังก์ชันและสามารถวาดกราฟได้',
-      'นักเรียนคำนวณความน่าจะเป็นเบื้องต้นได้',
-    ],
-    weeklyPlan: [
-      { week: 1, topic: 'ปฐมนิเทศและทบทวนพื้นฐาน', learningOutcomes: ['ทบทวนเนื้อหาระดับ ม.2'], activities: ['ทดสอบก่อนเรียน', 'อภิปรายกลุ่ม'] },
-      { week: 2, topic: 'จำนวนและการดำเนินการ', learningOutcomes: ['เข้าใจสมบัติของจำนวนจริง'], activities: ['บรรยาย', 'ฝึกแบบฝึกหัด'] },
-    ],
-    assessment: { classwork: 30, midterm: 30, final: 40 },
-    status: 'approved',
-    createdAt: '2025-05-01',
-    updatedAt: '2025-05-10',
-  },
-];
-
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useSyllabus() {
-  const [syllabi, setSyllabi] = useState<CourseSyllabus[]>(SEED_SYLLABI);
+  const [syllabi, setSyllabi] = useState<CourseSyllabus[]>([]);
+
+  // ── ดึงข้อมูล Real-time จาก Firebase ──────────────────────────────────────────
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'syllabi'), (snap) => {
+      setSyllabi(snap.docs.map(d => ({ id: d.id, ...d.data() } as CourseSyllabus)));
+    });
+    return () => unsub();
+  }, []);
 
   // ── CRUD ──────────────────────────────────────────────────────────────────────
 
-  const createSyllabus = (data: NewSyllabus): CourseSyllabus => {
+  const createSyllabus = async (data: NewSyllabus): Promise<CourseSyllabus> => {
     const now = new Date().toISOString().slice(0, 10);
-    const newSyllabus: CourseSyllabus = {
+    const newSyllabusData = {
       ...data,
-      id: `syl-${Date.now()}`,
       createdAt: now,
       updatedAt: now,
     };
-    setSyllabi(prev => [...prev, newSyllabus]);
-    return newSyllabus;
+    const docRef = await addDoc(collection(db, 'syllabi'), newSyllabusData);
+    return { id: docRef.id, ...newSyllabusData } as CourseSyllabus;
   };
 
-  const updateSyllabus = (id: string, data: Partial<Omit<CourseSyllabus, 'id' | 'createdAt'>>) => {
-    setSyllabi(prev => prev.map(s =>
-      s.id === id ? { ...s, ...data, updatedAt: new Date().toISOString().slice(0, 10) } : s,
-    ));
+  const updateSyllabus = async (id: string, data: Partial<Omit<CourseSyllabus, 'id' | 'createdAt'>>) => {
+    await updateDoc(doc(db, 'syllabi', id), {
+      ...data,
+      updatedAt: new Date().toISOString().slice(0, 10)
+    });
   };
 
-  const deleteSyllabus = (id: string) => {
-    setSyllabi(prev => prev.filter(s => s.id !== id));
+  const deleteSyllabus = async (id: string) => {
+    await deleteDoc(doc(db, 'syllabi', id));
   };
 
   // ── Weekly Plan CRUD ──────────────────────────────────────────────────────────
 
-  const updateWeeklyPlan = (syllabusId: string, week: number, data: Partial<WeeklyPlan>) => {
-    setSyllabi(prev => prev.map(s => {
-      if (s.id !== syllabusId) return s;
-      const updatedPlan = s.weeklyPlan.map(w =>
-        w.week === week ? { ...w, ...data } : w,
-      );
-      return { ...s, weeklyPlan: updatedPlan, updatedAt: new Date().toISOString().slice(0, 10) };
-    }));
+  const updateWeeklyPlan = async (syllabusId: string, week: number, data: Partial<WeeklyPlan>) => {
+    const syllabus = syllabi.find(s => s.id === syllabusId);
+    if (!syllabus) return;
+    const updatedPlan = syllabus.weeklyPlan.map(w =>
+      w.week === week ? { ...w, ...data } : w,
+    );
+    await updateDoc(doc(db, 'syllabi', syllabusId), {
+      weeklyPlan: updatedPlan,
+      updatedAt: new Date().toISOString().slice(0, 10)
+    });
   };
 
-  const updateAssessment = (syllabusId: string, assessment: AssessmentSchema) => {
-    updateSyllabus(syllabusId, { assessment });
+  const updateAssessment = async (syllabusId: string, assessment: AssessmentSchema) => {
+    await updateSyllabus(syllabusId, { assessment });
   };
 
-  const submitSyllabus = (id: string) => updateSyllabus(id, { status: 'submitted' });
-  const approveSyllabus = (id: string) => updateSyllabus(id, { status: 'approved' });
+  const submitSyllabus = async (id: string) => await updateSyllabus(id, { status: 'submitted' });
+  const approveSyllabus = async (id: string) => await updateSyllabus(id, { status: 'approved' });
 
   // ── Queries ───────────────────────────────────────────────────────────────────
 

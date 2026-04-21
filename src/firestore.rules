@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── 1. Helper Functions (Global) ───────────────────────────────────────────
+    
+    function isAuth() {
+      return request.auth != null;
+    }
+    
+    function isGodMode() {
+      return isAuth() && request.auth.token.email == 'sysadmin@pmv.com';
+    }
+
+    function getRole() {
+      return request.auth.token.role;
+    }
+
+    function hasRole(r) {
+      return isGodMode() || (isAuth() && getRole() == r);
+    }
+
+    function hasAnyRole(roles) {
+      return isGodMode() || (isAuth() && getRole() in roles);
+    }
+
+    function isSysAdmin() { return hasRole('sysadmin'); }
+    function isAdmin() { return hasAnyRole(['admin', 'sysadmin']); }
+    function isStaff() { return hasAnyRole(['staff', 'admin', 'sysadmin']); }
+    function isTeacher() { return hasAnyRole(['teacher', 'admin', 'sysadmin']); }
+
+    function isOwner(uid) {
+      return isAuth() && (request.auth.uid == uid || isGodMode());
+    }
+
+    // ── 2. Security Rules (Collections) ────────────────────────────────────────
+
+    match /{document=**} {
+      allow read, write: if isGodMode();
+    }
+
+    match /users/{userId} {
+      allow read: if isAuth();
+      allow create: if isAdmin();
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isSysAdmin();
+    }
+
+    match /registration_requests/{requestId} {
+      allow read: if isAdmin() || isOwner(requestId);
+      allow create: if isAuth() && request.auth.uid == requestId;
+      allow update, delete: if isAdmin();
+    }
+
+    match /students/{studentId} {
+      allow read: if isTeacher() || isStaff() || isOwner(resource.data.uid) ||
+        (getRole() == 'parent' && request.auth.uid in resource.data.parentUIDs);
+      allow create: if isAdmin();
+      allow update: if isAdmin() || isTeacher();
+      allow delete: if isSysAdmin();
+    }
+
+    match /classes/{classId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    match /grades/{gradeId} {
+      allow read: if isTeacher() || isStaff() || isOwner(resource.data.studentId) ||
+        (getRole() == 'parent' && request.auth.uid in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parentUIDs);
+      allow create: if isTeacher();
+      allow update: if isTeacher() && (resource.data.teacherId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /schedules/{scheduleId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    match /attendance/{attendanceId} {
+      allow read: if isTeacher() || isStaff() || isOwner(resource.data.studentId) ||
+        (getRole() == 'parent' && request.auth.uid in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parentUIDs);
+      allow create: if isTeacher();
+      allow update: if isTeacher() && (resource.data.recordedBy == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notifId} {
+      allow read: if isAuth() && (getRole() in resource.data.targetRoles || request.auth.uid in resource.data.targetUIDs || isAdmin());
+      allow create: if isTeacher() || isStaff();
+      allow update: if isAdmin() || resource.data.createdBy == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+
+    match /academic_years/{yearId} {
+      allow read: if isAuth();
+      allow write: if isSysAdmin();
+    }
+
+    match /systemConfig/{configId} {
+      allow read: if isAuth();
+      allow write: if isSysAdmin();
+    }
+
+    match /subjects/{subjectId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    match /curriculum_maps/{mapId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    match /calendar_events/{eventId} {
+      allow read: if isAuth();
+      allow create, update: if isTeacher() || isStaff();
+      allow delete: if isAdmin();
+    }
+
+    match /logs/{logId} {
+      allow read: if isSysAdmin();
+      allow create: if isAuth();
+    }
+  }
+}

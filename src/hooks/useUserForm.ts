@@ -20,7 +20,6 @@ export function useUserForm(onSuccess: (user: Omit<UserData, 'id'>) => void) {
 
   const handleRoleChange = (newRole: string) => {
     setRole(newRole);
-    setPrefix(''); // เคลียร์คำนำหน้าทิ้งเมื่อเปลี่ยนบทบาท
   };
 
   const resetForm = () => {
@@ -38,8 +37,8 @@ export function useUserForm(onSuccess: (user: Omit<UserData, 'id'>) => void) {
   const setFormForEdit = (user: UserData) => {
     setRole(user.role);
     setEmail(user.email);
-    setDepartment('');
-    setPhone('');
+    setDepartment(user.department || '');
+    setPhone((user as any).phone || '');
     setPassword('********');
     
     const parts = extractNameParts(user.name);
@@ -48,18 +47,38 @@ export function useUserForm(onSuccess: (user: Omit<UserData, 'id'>) => void) {
     setLastName(parts.lastName);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!prefix || !firstName || !lastName || !email || !department || !phone || !password) return;
+  const handleSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    
+    // Trim values before check
+    const cleanPrefix = prefix.trim();
+    const cleanFirstName = firstName.trim();
+    const cleanLastName = lastName.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanDepartment = department.trim();
+    const cleanPhone = phone.trim();
+    const cleanPassword = password.trim();
 
-    const fullName = formatFullName(prefix, firstName, lastName);
+    if (!cleanPrefix || !cleanFirstName || !cleanLastName || !cleanEmail || !cleanDepartment || !cleanPhone || !cleanPassword) {
+      alert('กรุณากรอกข้อมูลให้ครบทุกช่อง');
+      return;
+    }
+
+    // Email Regex Validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      alert('รูปแบบอีเมลไม่ถูกต้อง');
+      return;
+    }
+
+    const fullName = formatFullName(cleanPrefix, cleanFirstName, cleanLastName);
     const newUserObj: Omit<UserData, 'id'> = {
       name: fullName,
-      email: email,
+      email: cleanEmail,
       role: role,
       status: 'active',
       lastLogin: 'ไม่เคยเข้าสู่ระบบ',
-      department: department,
+      department: cleanDepartment,
     };
 
     onSuccess(newUserObj); // ส่งข้อมูลกลับไปให้ Component หลักจัดการต่อ

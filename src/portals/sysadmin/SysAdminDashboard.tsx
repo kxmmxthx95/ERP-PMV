@@ -1,3 +1,5 @@
+
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -7,6 +9,8 @@ import {
 } from 'lucide-react';
 import type { LucideProps } from 'lucide-react';
 import type { ComponentType } from 'react';
+import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 const STAT_ICON_MAP: Record<string, ComponentType<LucideProps>> = {
   group: Users,
@@ -51,55 +55,7 @@ const glassBright: React.CSSProperties = {
   boxShadow: '0 8px 24px rgba(0, 0, 0, 0.05)',
 };
 
-// ── Mock Data ────────────────────────────────────────────────────────────────
-const stats = [
-  {
-    label: 'บัญชีผู้ใช้ทั้งหมด',
-    value: '1,248',
-    sub: '+12% จากเดือนที่แล้ว',
-    trend: 'up',
-    icon: 'group',
-    glow: '#7c3aed',
-    gradient: 'from-violet-500 to-indigo-500',
-  },
-  {
-    label: 'ผู้ใช้ออนไลน์วันนี้',
-    value: '87',
-    sub: '+5% จากเมื่อวาน',
-    trend: 'up',
-    icon: 'person_check',
-    glow: '#059669',
-    gradient: 'from-emerald-400 to-teal-500',
-  },
-  {
-    label: 'พื้นที่จัดเก็บ (GB)',
-    value: '45',
-    sub: '45 / 100 GB ที่ใช้',
-    trend: 'neutral',
-    icon: 'database',
-    glow: '#d97706',
-    gradient: 'from-amber-400 to-orange-500',
-  },
-  {
-    label: 'สถานะระบบ',
-    value: 'Online',
-    sub: 'Uptime 99.9%',
-    trend: 'up',
-    icon: 'heart_check',
-    glow: '#0ea5e9',
-    gradient: 'from-sky-400 to-blue-500',
-  },
-];
-
-const roleBreakdown = [
-  { role: 'นักเรียน',      count: 650, pct: 92, color: '#7c3aed' },
-  { role: 'ผู้ปกครอง',    count: 310, pct: 68, color: '#2563eb' },
-  { role: 'ครูผู้สอน',    count: 84,  pct: 38, color: '#e11d48' },
-  { role: 'เจ้าหน้าที่', count: 28,  pct: 25, color: '#059669' },
-  { role: 'ผู้บริหาร', count: 12,  pct: 15, color: '#d97706' },
-  { role: 'System Admin', count: 4,   pct: 6,  color: '#64748b' },
-];
-
+// ── Static Data (UI Setup) ───────────────────────────────────────────────────
 const quickActions = [
   { label: 'เพิ่มผู้ใช้',   icon: 'person_add',          path: '/sysadmin/users',    glow: '#7c3aed', gradient: 'from-violet-500 to-indigo-500' },
   { label: 'กำหนดสิทธิ์',  icon: 'admin_panel_settings', path: '/sysadmin/roles',    glow: '#2563eb', gradient: 'from-sky-500 to-blue-600' },
@@ -115,15 +71,6 @@ const systemServices = [
   { name: 'FCM Notifications',  latency: '65ms',  ok: true },
 ];
 
-const recentLogs = [
-  { id: 1, action: 'User Role Updated',      user: 'admin_somchai',    time: '10 นาทีที่แล้ว',  status: 'success' },
-  { id: 2, action: 'System Backup Created',  user: 'system',           time: '1 ชั่วโมงที่แล้ว', status: 'success' },
-  { id: 3, action: 'Failed Login Attempt',   user: 'unknown@mail.com', time: '2 ชั่วโมงที่แล้ว', status: 'warning' },
-  { id: 4, action: 'New Teacher Registered', user: 'admin_malee',      time: '3 ชั่วโมงที่แล้ว', status: 'success' },
-  { id: 5, action: 'Academic Year Changed',  user: 'sysadmin_root',    time: '1 วันที่แล้ว',     status: 'success' },
-  { id: 6, action: 'Security Rule Modified', user: 'sysadmin_root',    time: '1 วันที่แล้ว',     status: 'warning' },
-];
-
 // ── Animation ────────────────────────────────────────────────────────────────
 const container = {
   hidden: { opacity: 0 },
@@ -137,9 +84,112 @@ const cardAnim = {
 // ── Dashboard ────────────────────────────────────────────────────────────────
 export default function SysAdminDashboard() {
   const navigate = useNavigate();
+  
+  // 1. สร้าง State สำหรับเก็บข้อมูลจริง
+  const [stats, setStats] = useState<any[]>([]);
+  const [roleBreakdown, setRoleBreakdown] = useState<any[]>([]);
+  const [recentLogs, setRecentLogs] = useState<any[]>([]);
+
+  // 2. ใช้ useEffect สำหรับ Fetch ข้อมูลจาก Firebase เมื่อหน้าโหลด
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        // 1. ดึงข้อมูลผู้ใช้เพื่อนับจำนวนและแยกตาม Role
+        const usersSnap = await getDocs(collection(db, 'users'));
+        let activeUsers = 0;
+        const roleCount: Record<string, number> = {
+          student: 0, parent: 0, teacher: 0, staff: 0, admin: 0, sysadmin: 0
+        };
+
+        usersSnap.forEach(doc => {
+          const data = doc.data();
+          if (data.role && roleCount[data.role] !== undefined) {
+            roleCount[data.role]++;
+          }
+          if (data.status === 'active') {
+            activeUsers++;
+          }
+        });
+
+        const totalUsers = usersSnap.size;
+
+        setRoleBreakdown([
+          { role: 'นักเรียน', count: roleCount.student, pct: totalUsers ? Math.round((roleCount.student / totalUsers) * 100) : 0, color: '#7c3aed' },
+          { role: 'ผู้ปกครอง', count: roleCount.parent, pct: totalUsers ? Math.round((roleCount.parent / totalUsers) * 100) : 0, color: '#2563eb' },
+          { role: 'ครูผู้สอน', count: roleCount.teacher, pct: totalUsers ? Math.round((roleCount.teacher / totalUsers) * 100) : 0, color: '#e11d48' },
+          { role: 'เจ้าหน้าที่', count: roleCount.staff, pct: totalUsers ? Math.round((roleCount.staff / totalUsers) * 100) : 0, color: '#059669' },
+          { role: 'ผู้บริหาร', count: roleCount.admin, pct: totalUsers ? Math.round((roleCount.admin / totalUsers) * 100) : 0, color: '#d97706' },
+          { role: 'System Admin', count: roleCount.sysadmin, pct: totalUsers ? Math.round((roleCount.sysadmin / totalUsers) * 100) : 0, color: '#64748b' },
+        ]);
+
+        setStats([
+          {
+            label: 'บัญชีผู้ใช้ทั้งหมด',
+            value: totalUsers.toLocaleString(),
+            sub: 'บัญชีทั้งหมดในระบบ',
+            trend: 'neutral',
+            icon: 'group',
+            glow: '#7c3aed',
+            gradient: 'from-violet-500 to-indigo-500',
+          },
+          {
+            label: 'ผู้ใช้ที่ Active',
+            value: activeUsers.toLocaleString(),
+            sub: 'สถานะปกติ',
+            trend: 'up',
+            icon: 'person_check',
+            glow: '#059669',
+            gradient: 'from-emerald-400 to-teal-500',
+          },
+          {
+            label: 'พื้นที่จัดเก็บ (GB)',
+            value: '45',
+            sub: '45 / 100 GB ที่ใช้',
+            trend: 'neutral',
+            icon: 'database',
+            glow: '#d97706',
+            gradient: 'from-amber-400 to-orange-500',
+          },
+          {
+            label: 'สถานะระบบ',
+            value: 'Online',
+            sub: 'Uptime 99.9%',
+            trend: 'up',
+            icon: 'heart_check',
+            glow: '#0ea5e9',
+            gradient: 'from-sky-400 to-blue-500',
+          },
+        ]);
+
+        // 2. ดึงข้อมูล Audit Logs ล่าสุด (5 รายการ)
+        const logsQuery = query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(5));
+        const logsSnap = await getDocs(logsQuery);
+        const logsData = logsSnap.docs.map(doc => {
+          const data = doc.data();
+          const date = data.timestamp ? new Date(data.timestamp) : new Date();
+          return {
+            id: doc.id,
+            action: data.action || 'Unknown Action',
+            user: data.user || 'System',
+            time: date.toLocaleString('th-TH', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
+            status: data.status || 'success',
+          };
+        });
+        setRecentLogs(logsData);
+
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+      }
+    };
+
+    fetchDashboardData();
+  }, []);
+
   const today = new Date().toLocaleDateString('th-TH', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
+
+  const totalUsersCount = roleBreakdown.reduce((sum, r) => sum + r.count, 0);
 
   return (
     <div className="space-y-5 text-black">
@@ -227,7 +277,7 @@ export default function SysAdminDashboard() {
         >
           <div className="flex items-center justify-between mb-5">
             <h2 className="font-bold text-black/75 text-sm">ผู้ใช้แยกตาม Role</h2>
-            <span className="text-xs text-black/35">รวม 1,088 คน</span>
+            <span className="text-xs text-black/35">รวม {totalUsersCount.toLocaleString()} คน</span>
           </div>
           <div className="space-y-4">
             {roleBreakdown.map((r) => (
@@ -398,6 +448,13 @@ export default function SysAdminDashboard() {
                   </td>
                 </tr>
               ))}
+              {recentLogs.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-8 text-center text-xs text-black/30">
+                    ไม่พบประวัติการใช้งานระบบ
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

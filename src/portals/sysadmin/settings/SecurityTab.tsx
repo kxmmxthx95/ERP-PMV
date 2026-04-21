@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Shield, Lock, KeyRound, Clock, UserX,
@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GLASS_CARD } from './constants';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface PasswordPolicy {
@@ -63,8 +65,6 @@ const DEFAULT_SETTINGS: SecuritySettings = {
   auditLog: true,
   ipWhitelist: { enabled: false, ips: '' },
 };
-
-const LS_KEY = 'school_security_settings';
 
 // ── Helper Components ─────────────────────────────────────────────────────────
 function Section({
@@ -212,15 +212,18 @@ function PasswordStrengthBar({ policy }: { policy: PasswordPolicy }) {
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function SecurityTab() {
-  const [settings, setSettings] = useState<SecuritySettings>(() => {
-    try {
-      const saved = localStorage.getItem(LS_KEY);
-      if (saved) return { ...DEFAULT_SETTINGS, ...(JSON.parse(saved) as Partial<SecuritySettings>) };
-    } catch { /* ignore */ }
-    return DEFAULT_SETTINGS;
-  });
+  const [settings, setSettings] = useState<SecuritySettings>(DEFAULT_SETTINGS);
   const [savedMsg, setSavedMsg] = useState(false);
   const [showIpNote, setShowIpNote] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, 'systemConfig', 'security'), (docSnap) => {
+      if (docSnap.exists()) {
+        setSettings({ ...DEFAULT_SETTINGS, ...(docSnap.data() as SecuritySettings) });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // ── Setters ──────────────────────────────────────────────────────────────────
   const setPassword = <K extends keyof PasswordPolicy>(k: K, v: PasswordPolicy[K]) =>
@@ -232,15 +235,18 @@ export default function SecurityTab() {
   const setLogin = <K extends keyof LoginPolicy>(k: K, v: LoginPolicy[K]) =>
     setSettings(s => ({ ...s, login: { ...s.login, [k]: v } }));
 
-  const handleSave = () => {
-    localStorage.setItem(LS_KEY, JSON.stringify(settings));
-    setSavedMsg(true);
-    setTimeout(() => setSavedMsg(false), 2000);
+  const handleSave = async () => {
+    try {
+      await setDoc(doc(db, 'systemConfig', 'security'), settings, { merge: true });
+      setSavedMsg(true);
+      setTimeout(() => setSavedMsg(false), 2000);
+    } catch (error) {
+      console.error('Error saving security settings:', error);
+    }
   };
 
   const handleReset = () => {
     setSettings(DEFAULT_SETTINGS);
-    localStorage.removeItem(LS_KEY);
   };
 
   return (

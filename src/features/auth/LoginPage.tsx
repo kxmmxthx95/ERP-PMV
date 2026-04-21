@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { AtSign, Key, ChevronRight, User, Eye, EyeOff } from 'lucide-react';
@@ -14,6 +14,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useAuth } from '@/hooks/useAuth';
+import { db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import ChangePasswordModal from './components/ChangePasswordModal';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -23,6 +27,10 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(!!localStorage.getItem('remembered_email'));
+  const { user, role: authRole } = useAuth();
+  const [showChangeModal, setShowChangeModal] = useState(false);
+  const [isCheckingPassword, setIsCheckingPassword] = useState(false);
+  const hasToastedWarning = useRef(false);
 
   // สร้าง State สำหรับดึงวันเวลาปัจจุบัน และอัปเดตแบบ Real-time
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -38,6 +46,43 @@ export default function LoginPage() {
   const dateNum = currentTime.getDate().toString().padStart(2, '0');
   const fullMonthYear = currentTime.toLocaleString('en-US', { month: 'long', year: 'numeric' });
   const timeString = currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+  // จัดการการนำไปหน้า Dashboard หรือบังคับเปลี่ยนรหัสผ่าน
+  useEffect(() => {
+    if (user && !isCheckingPassword && !showChangeModal) {
+      const checkPasswordStatus = async () => {
+        setIsCheckingPassword(true);
+        try {
+          const userDoc = await getDoc(doc(db, 'users', user.uid));
+
+          // แจ้งเตือนถ้า role ที่เลือกไม่ตรงกับ role จริงจาก custom claims
+          if (authRole && authRole !== role && !hasToastedWarning.current) {
+            const ROLE_LABELS: Record<string, string> = {
+              student: 'นักเรียน', parent: 'ผู้ปกครอง', teacher: 'ครูผู้สอน',
+              staff: 'เจ้าหน้าที่', admin: 'ผู้บริหาร', sysadmin: 'ผู้ดูแลระบบสูงสุด',
+            };
+            toast.warning(`Role ไม่ตรงกัน — คุณเลือก "${ROLE_LABELS[role] ?? role}" แต่บัญชีนี้เป็น "${ROLE_LABELS[authRole] ?? authRole}" ระบบจะพาไปยังหน้าที่ถูกต้องให้`, { duration: 6000 });
+            hasToastedWarning.current = true;
+          }
+
+          if (userDoc.exists() && userDoc.data().mustChangePassword) {
+            setShowChangeModal(true);
+          } else {
+            const targetRole = authRole || role;
+            navigate(`/${targetRole}`);
+          }
+        } catch (error) {
+          console.error("Error checking password status:", error);
+          const targetRole = authRole || role;
+          navigate(`/${targetRole}`);
+        } finally {
+          setIsCheckingPassword(false);
+        }
+      };
+      
+      checkPasswordStatus();
+    }
+  }, [user, authRole, navigate, role, isCheckingPassword, showChangeModal]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,13 +100,15 @@ export default function LoginPage() {
         localStorage.removeItem('remembered_email');
       }
 
-      await authService.loginWithEmail(email, password);
+      await authService.login(email, password);
       toast.success('เข้าสู่ระบบสำเร็จ');
-      navigate(`/${role}`); 
+      // ไม่ต้องเรียก navigate ที่นี่ ปล่อยให้ useEffect ด้านบนเป็นตัวจัดการเมื่อ state พร้อม
     } catch (error: any) {
-      toast.error('อีเมลหรือรหัสผ่านไม่ถูกต้อง');
+      const msg = error.message === 'ไม่พบชื่อผู้ใช้งานหรือรหัสประจำตัวนี้ในระบบ' 
+        ? error.message 
+        : 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
+      toast.error(msg);
       console.error(error);
-    } finally {
       setIsLoading(false);
     }
   };
@@ -92,7 +139,11 @@ export default function LoginPage() {
               <h1 className="text-xl font-semibold text-slate-800 tracking-tight">
                 Log in
               </h1>
-              <Button variant="link" className="text-xs font-medium text-slate-600 hover:text-slate-800 transition-colors px-0">
+              <Button
+                variant="link"
+                className="text-xs font-medium text-slate-600 hover:text-slate-800 transition-colors px-0"
+                onClick={() => navigate('/signup')}
+              >
                 Sign up
               </Button>
             </div>
@@ -124,12 +175,12 @@ export default function LoginPage() {
                   <AtSign className="w-3 h-3" />
                 </div>
                 <Input
-                  type="email"
+                  type="text"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full h-auto pl-8 pr-3 py-1.5 bg-white/60 border border-white/50 rounded-full text-slate-800 text-xs font-medium focus-visible:ring-2 focus-visible:ring-white/80 transition-all placeholder:text-slate-500 shadow-none"
-                  placeholder="e-mail address"
+                  placeholder="email or username"
                 />
               </div>
 
@@ -192,23 +243,40 @@ export default function LoginPage() {
             </form>
           </motion.div>
 
-          {/* Dark References Card */}
+          {/* School Announcements Card */}
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             transition={{ duration: 0.5, ease: "easeOut", delay: 0.1 }}
-            className="w-full bg-slate-900/80 backdrop-blur-xl border border-white/20 rounded-[1rem] p-3 shadow-[0_8px_32px_0_rgba(0,0,0,0.2)]"
+            className="w-full bg-slate-900/80 backdrop-blur-xl border border-white/20 rounded-[1rem] p-4 shadow-[0_8px_32px_0_rgba(0,0,0,0.2)]"
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="text-sm font-semibold text-white mb-0.5">References</h3>
-                <p className="text-xs text-slate-400">By Pinterest</p>
+                <h3 className="text-sm font-semibold text-white mb-0.5">ประกาศจากทางโรงเรียน</h3>
+                <p className="text-[10px] text-slate-400">โรงเรียนปิยามิตรวิทยา (Piyamit News Feed)</p>
               </div>
-              <Button className="w-7 h-7 bg-slate-700 hover:bg-slate-600 text-white rounded-full p-0 flex items-center justify-center transition-colors">
-                <ChevronRight className="w-3 h-3" />
-              </Button>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-pink-500 animate-pulse shadow-[0_0_8px_rgba(236,72,153,0.5)]" />
+                <Button className="w-7 h-7 bg-white/10 hover:bg-white/20 text-white rounded-full p-0 flex items-center justify-center transition-colors">
+                  <ChevronRight className="w-3 h-3" />
+                </Button>
+              </div>
             </div>
-            <p className="text-[10px] text-slate-300 mt-2 font-semibold">Discover</p>
+            
+            <div className="space-y-2 border-t border-white/5 pt-3">
+              <div className="flex items-start gap-2.5 group cursor-pointer">
+                <div className="w-1 h-1 rounded-full bg-pink-400 mt-1.5 flex-shrink-0" />
+                <p className="text-[10px] text-slate-300 leading-relaxed font-medium group-hover:text-white transition-colors">
+                  📢 แจ้งกำหนดการเปิดภาคเรียนที่ 1 ปีการศึกษา 2567 ในวันที่ 16 พฤษภาคมนี้
+                </p>
+              </div>
+              <div className="flex items-start gap-2.5 group cursor-pointer">
+                <div className="w-1 h-1 rounded-full bg-slate-500 mt-1.5 flex-shrink-0" />
+                <p className="text-[10px] text-slate-400 leading-relaxed group-hover:text-slate-200 transition-colors">
+                  📝 ตรวจสอบรายชื่อห้องเรียนและรหัสนักเรียนใหม่ได้ที่ Dashboard หลังเข้าสู่ระบบ
+                </p>
+              </div>
+            </div>
           </motion.div>
         </div>
 
@@ -255,6 +323,18 @@ export default function LoginPage() {
           </div>
         </motion.div>
       </div>
+      {/* First-time Password Change Modal */}
+      {user && (
+        <ChangePasswordModal 
+          user={user} 
+          isOpen={showChangeModal} 
+          onSuccess={() => {
+            setShowChangeModal(false);
+            const targetRole = authRole || role;
+            navigate(`/${targetRole}`);
+          }} 
+        />
+      )}
     </div>
   );
 }

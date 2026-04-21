@@ -20,6 +20,7 @@ export interface TeacherProfile {
   teachingSubjectIds: string[]; // รหัสวิชาที่ได้รับมอบหมาย (อ้างอิง Subject.id)
   maxHoursPerWeek: number;      // ภาระงานสอนสูงสุด (คาบ/สัปดาห์)
   status: TeacherStatus;
+  photoURL?: string;
   createdAt?: string;           // ISO date string
 }
 

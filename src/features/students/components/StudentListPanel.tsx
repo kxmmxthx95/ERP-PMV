@@ -1,4 +1,4 @@
-import { Search, X, Filter, UserPlus, Users } from 'lucide-react';
+import { Search, X, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
 import type { StudentCard, StudentStatus } from '@/types/student';
 import type { StudentFilter } from '@/hooks/useStudentManager';
@@ -41,11 +41,9 @@ const listAnim = {
 
 export default function StudentListPanel({
   cards, filter, onFilterChange,
-  availableYears, availableGrades, availableClasses,
-  selectedId, onSelect, onAdd, stats,
+  selectedId, onSelect, stats,
 }: StudentListPanelProps) {
 
-  const selectCls = 'h-8 px-3 rounded-lg text-xs text-black/70 border border-black/08 bg-white/70 outline-none focus:border-black/20 transition-all';
 
   return (
     <div className="flex flex-col h-full gap-3">
@@ -65,75 +63,20 @@ export default function StudentListPanel({
         ))}
       </div>
 
-      {/* ── Filter bar ── */}
-      <div className="rounded-2xl p-3 space-y-2" style={glassCard}>
-        {/* Row 1: year + dept + grade + class */}
-        <div className="flex flex-wrap gap-2">
-          <div className="flex items-center gap-1.5">
-            <Filter size={13} className="text-black/30" />
-            <span className="text-[11px] text-black/40 font-medium">กรอง:</span>
-          </div>
-
-          {/* Academic Year */}
-          <select value={filter.academicYearId} onChange={e => onFilterChange({ academicYearId: e.target.value, gradeLevel: '', classId: '' })} className={selectCls}>
-            {availableYears.map(y => <option key={y} value={y}>ปี {y}</option>)}
-          </select>
-
-          {/* Department */}
-          <select value={filter.departmentId} onChange={e => onFilterChange({ departmentId: e.target.value as StudentFilter['departmentId'], gradeLevel: '', classId: '' })} className={selectCls}>
-            <option value="">ทุกแผนก</option>
-            <option value="secondary">มัธยมศึกษา</option>
-            <option value="primary">ประถมศึกษา</option>
-            <option value="early">ปฐมวัย</option>
-          </select>
-
-          {/* Grade Level */}
-          <select value={filter.gradeLevel} onChange={e => onFilterChange({ gradeLevel: e.target.value, classId: '' })} className={selectCls} disabled={!filter.departmentId}>
-            <option value="">ทุกชั้น</option>
-            {availableGrades.map(g => <option key={g} value={g}>{g}</option>)}
-          </select>
-
-          {/* Class */}
-          <select value={filter.classId} onChange={e => onFilterChange({ classId: e.target.value })} className={selectCls} disabled={!filter.gradeLevel}>
-            <option value="">ทุกห้อง</option>
-            {availableClasses.map(c => <option key={c.classId} value={c.classId}>{c.className}</option>)}
-          </select>
-
-          {/* Status */}
-          <select value={filter.status} onChange={e => onFilterChange({ status: e.target.value as StudentFilter['status'] })} className={selectCls}>
-            <option value="">ทุกสถานะ</option>
-            <option value="active">กำลังศึกษา</option>
-            <option value="inactive">พักการศึกษา</option>
-            <option value="graduated">จบการศึกษา</option>
-            <option value="transferred">ย้ายออก</option>
-          </select>
-        </div>
-
-        {/* Row 2: Search + Add button */}
-        <div className="flex gap-2">
-          <div className="flex-1 flex items-center gap-2 h-8 px-3 rounded-lg border border-black/08 bg-white/70 focus-within:border-black/20 transition-all">
-            <Search size={13} className="text-black/30 flex-shrink-0" />
-            <input
-              value={filter.searchText}
-              onChange={e => onFilterChange({ searchText: e.target.value })}
-              placeholder="ค้นหาด้วยชื่อหรือรหัสนักเรียน..."
-              className="bg-transparent text-xs text-black/70 placeholder-black/25 outline-none flex-1"
-            />
-            {filter.searchText && (
-              <button onClick={() => onFilterChange({ searchText: '' })} className="text-black/25 hover:text-black/50 transition-colors flex-shrink-0">
-                <X size={13} />
-              </button>
-            )}
-          </div>
-
-          <button
-            onClick={onAdd}
-            className="flex items-center gap-1.5 h-8 px-4 rounded-lg text-xs font-semibold text-white bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 transition-all shadow-sm flex-shrink-0"
-          >
-            <UserPlus size={13} />
-            เพิ่มนักเรียน
+      {/* ── Search bar (Compact) ── */}
+      <div className="flex items-center gap-2 h-10 px-4 rounded-2xl bg-white shadow-sm border border-black/5 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
+        <Search size={14} className="text-black/30 flex-shrink-0" />
+        <input
+          value={filter.searchText}
+          onChange={e => onFilterChange({ searchText: e.target.value })}
+          placeholder="ค้นหาด้วยชื่อหรือรหัสนักเรียน..."
+          className="bg-transparent text-xs text-black/70 placeholder-black/25 outline-none flex-1 font-medium"
+        />
+        {filter.searchText && (
+          <button onClick={() => onFilterChange({ searchText: '' })} className="text-black/25 hover:text-black/50 transition-colors flex-shrink-0">
+            <X size={14} />
           </button>
-        </div>
+        )}
       </div>
 
       {/* ── Student list ── */}

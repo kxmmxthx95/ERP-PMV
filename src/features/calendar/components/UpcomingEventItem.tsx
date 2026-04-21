@@ -8,12 +8,23 @@ interface UpcomingEventItemProps {
   event: CalendarEvent;
 }
 
+const isEditable = (event: CalendarEvent) => !event.id.startsWith('gcal-') && !event.id.startsWith('api-');
+
 export default function UpcomingEventItem({ event }: UpcomingEventItemProps) {
   const cfg = EVENT_TYPE_CONFIG[event.type];
   const start = parseISO(event.startDate);
+  const editable = isEditable(event);
 
   return (
-    <div className="flex items-start gap-3 px-5 py-3.5 hover:bg-black/[0.02] transition-colors cursor-default">
+    <div 
+      className={`flex items-start gap-3 px-5 py-3.5 hover:bg-black/[0.02] transition-colors ${editable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`}
+      draggable={editable}
+      onDragStart={(e: any) => {
+        if (!editable) return;
+        e.dataTransfer.setData('text/plain', event.id);
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+    >
       {/* Date badge */}
       <div
         className="flex flex-col items-center justify-center w-10 h-10 rounded-2xl flex-shrink-0"

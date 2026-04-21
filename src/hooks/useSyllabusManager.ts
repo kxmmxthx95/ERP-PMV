@@ -137,7 +137,7 @@ export function useSyllabusManager() {
   // ── Create Syllabus ───────────────────────────────────────────────────────────
   // เมื่อ user เลือก subject + teacher → สร้าง syllabus พร้อม weekly plan template
 
-  const createSyllabusForSubject = (
+  const createSyllabusForSubject = async (
     subject:  Subject,
     teacher:  TeacherProfile,
     gradeLevel: string,
@@ -154,7 +154,7 @@ export function useSyllabusManager() {
       note:             slot.note,
     } as WeeklyPlan));
 
-    const newSyl = syllabusStore.createSyllabus({
+    const newSyl = await syllabusStore.createSyllabus({
       subjectId:    subject.id,
       teacherId:    teacher.id,
       academicYear: activeYearStr,

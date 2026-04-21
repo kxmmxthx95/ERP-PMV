@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   FileText, BookOpen, CheckCircle2, Clock, AlertCircle,
-  ChevronRight, TrendingUp, User, Trash2,
+  ChevronRight, TrendingUp, User, Trash2, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -13,16 +13,12 @@ import {
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { useTeacherSyllabus } from '@/hooks/useTeacherSyllabus';
+import { useAuth } from '@/hooks/useAuth';
 import MySubjectPanel    from './components/MySubjectPanel';
 import SyllabusEditorPanel from '@/features/syllabus/components/SyllabusEditorPanel';
 import type { Subject } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 import { useSchoolStructure } from '@/hooks/useSchoolStructure';
-
-// ── Mock Teacher ID ─────────────────────────────────────────────────────────────
-// TODO: แทนที่ด้วย useAuth().user.uid เมื่อ backend พร้อม
-// ตอนนี้ใช้ ครูประเสริฐ มั่นคง (t03) เป็น demo
-const MOCK_TEACHER_ID = 't03';
 
 const containerAnim = {
   hidden: { opacity: 0 },
@@ -34,23 +30,33 @@ const cardAnim = {
 };
 
 export default function TeacherSyllabusPage() {
-  const mgr = useTeacherSyllabus(MOCK_TEACHER_ID);
+  const { user } = useAuth();
+  // ดึง Teacher ID จาก Firebase Auth
+  const mgr = useTeacherSyllabus(user?.uid ?? '');
   const { gradeLevels } = useSchoolStructure();
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [gradeLevel, setGradeLevel] = useState('');
   const [createSubject, setCreateSubject] = useState<Subject | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const openCreateModal = (subject: Subject) => {
     setCreateSubject(subject);
     setGradeLevel('');
+    setIsCreating(false);
     setCreateModalOpen(true);
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!createSubject || !gradeLevel) return;
-    mgr.createSyllabus(createSubject, gradeLevel);
-    setCreateModalOpen(false);
+    setIsCreating(true);
+    try {
+      await mgr.createSyllabus(createSubject, gradeLevel);
+      setCreateModalOpen(false);
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const selectedGrade = gradeLevels.find(g => g.id === gradeLevel);
@@ -173,15 +179,21 @@ export default function TeacherSyllabusPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
+                    disabled={isDeleting}
+                    onClick={async () => {
                       if (window.confirm('คุณแน่ใจหรือไม่ที่จะลบแผนการสอนนี้? ข้อมูลทั้งหมดจะถูกลบอย่างถาวร')) {
-                        (mgr as any).deleteSyllabus?.(mgr.selectedCard!.syllabus!.id);
+                        setIsDeleting(true);
+                        try {
+                          await (mgr as any).deleteSyllabus?.(mgr.selectedCard!.syllabus!.id);
+                        } finally {
+                          setIsDeleting(false);
+                        }
                       }
                     }}
-                    className="h-8 text-[11px] font-semibold text-red-500 hover:text-red-600 hover:bg-red-50 border-red-100 bg-white/90 backdrop-blur-md shadow-sm"
+                    className="h-8 text-[11px] font-semibold text-red-500 hover:text-red-600 hover:bg-red-50 border-red-100 bg-white/90 backdrop-blur-md shadow-sm disabled:opacity-50"
                   >
-                    <Trash2 size={13} className="mr-1.5" />
-                    ลบแผนการสอน
+                    {isDeleting ? <Loader2 size={13} className="mr-1.5 animate-spin" /> : <Trash2 size={13} className="mr-1.5" />}
+                    {isDeleting ? 'กำลังลบ...' : 'ลบแผนการสอน'}
                   </Button>
                 </div>
                   <SyllabusEditorPanel
@@ -192,11 +204,11 @@ export default function TeacherSyllabusPage() {
                     semesterDates={mgr.semesterDates}
                     calendarEvents={mgr.calendarEvents}
                     teachingDays={mgr.getTeachingDaysForSubject(mgr.selectedCard.subject.id)}
-                    onUpdate={data => mgr.updateSyllabus(mgr.selectedCard!.syllabus!.id, data as any)}
-                    onUpdateWeek={(week, data) => mgr.updateWeeklyPlan(mgr.selectedCard!.syllabus!.id, week, data)}
-                    onUpdateAssessment={a => mgr.updateAssessment(mgr.selectedCard!.syllabus!.id, a)}
-                    onSubmit={() => mgr.submitSyllabus(mgr.selectedCard!.syllabus!.id)}
-                    onApprove={() => {}}
+                    onUpdate={async data => await mgr.updateSyllabus(mgr.selectedCard!.syllabus!.id, data as any)}
+                    onUpdateWeek={async (week, data) => await mgr.updateWeeklyPlan(mgr.selectedCard!.syllabus!.id, week, data)}
+                    onUpdateAssessment={async a => await mgr.updateAssessment(mgr.selectedCard!.syllabus!.id, a)}
+                    onSubmit={async () => await mgr.submitSyllabus(mgr.selectedCard!.syllabus!.id)}
+                    onApprove={async () => {}}
                   />
               </div>
             ) : (
@@ -276,10 +288,11 @@ export default function TeacherSyllabusPage() {
             <Button
               size="sm"
               onClick={handleCreate}
-              disabled={!gradeLevel}
+              disabled={!gradeLevel || isCreating}
               className="text-xs h-8 rounded-lg bg-[#1e1e1e] hover:bg-[#2a2a2a] text-white disabled:opacity-40"
             >
-              สร้างแผนการสอน
+              {isCreating ? <Loader2 size={13} className="mr-1.5 animate-spin" /> : null}
+              {isCreating ? 'กำลังสร้าง...' : 'สร้างแผนการสอน'}
             </Button>
           </div>
         </DialogContent>

@@ -19,7 +19,7 @@ const app = initializeApp(firebaseConfig);
 
 // Export Services สำหรับใช้งานใน Features ต่างๆ
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+export const db = getFirestore(app, "all-pmv");
 export const storage = getStorage(app);
 
 export default app;

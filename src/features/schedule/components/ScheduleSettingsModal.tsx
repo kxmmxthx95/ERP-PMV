@@ -3,39 +3,47 @@ import { Clock, Save, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { useScheduleSettings } from '@/hooks/useScheduleSettings';
 
-export default function ScheduleSettingsModal() {
-  const { periodCount, lunchPeriod, periodTimes, updateSettings } = useScheduleSettings();
-  
+interface ScheduleSettingsModalProps {
+  classId?: string;
+}
+
+export default function ScheduleSettingsModal({ classId }: ScheduleSettingsModalProps) {
+  const { periodCount, lunchPeriods, periodTimes, updateSettings } = useScheduleSettings(classId);
+
   const [open, setOpen] = useState(false);
   const [localCount, setLocalCount] = useState(periodCount);
-  const [localLunch, setLocalLunch] = useState(String(lunchPeriod));
+  const [localLunches, setLocalLunches] = useState<number[]>(lunchPeriods);
   const [localTimes, setLocalTimes] = useState(periodTimes);
 
   // ดึงค่าล่าสุดมาแสดงเมื่อเปิด Modal
   useEffect(() => {
     if (open) {
       setLocalCount(periodCount);
-      setLocalLunch(String(lunchPeriod));
+      setLocalLunches(lunchPeriods);
       setLocalTimes(periodTimes);
     }
-  }, [open, periodCount, lunchPeriod, periodTimes]);
+  }, [open, periodCount, lunchPeriods, periodTimes]);
 
-  const handleSave = () => {
-    let finalLunch = Number(localLunch);
-    if (finalLunch > localCount) finalLunch = 0;
-
-    updateSettings({
+  const handleSave = async () => {
+    await updateSettings({
       periodCount: localCount,
-      lunchPeriod: finalLunch,
+      lunchPeriods: localLunches.filter(p => p <= localCount),
       periodTimes: localTimes
     });
     toast.success('บันทึกการตั้งค่าคาบเรียนเรียบร้อยแล้ว');
     setOpen(false);
+  };
+
+  const toggleLunch = (period: number) => {
+    setLocalLunches(prev =>
+      prev.includes(period)
+        ? prev.filter(p => p !== period)
+        : [...prev, period].sort((a, b) => a - b)
+    );
   };
 
   const updateTime = (period: number, value: string) => {
@@ -57,7 +65,7 @@ export default function ScheduleSettingsModal() {
           </div>
           <div className="flex flex-col items-start">
             <DialogTitle className="text-sm font-bold text-black/80">ตั้งค่าคาบเรียนและเวลา</DialogTitle>
-            <p className="text-xs text-black/40 mt-0.5">กำหนดจำนวนคาบเรียนต่อวันและเวลาในแต่ละคาบ</p>
+            <p className="text-xs text-black/40 mt-0.5">กำหนดจำนวนคาบเรียนต่อวันและเวลาในแต่ละคาบ ({classId || 'ค่าเริ่มต้น'})</p>
           </div>
         </DialogHeader>
 
@@ -65,43 +73,40 @@ export default function ScheduleSettingsModal() {
           <div className="space-y-2">
             <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">จำนวนคาบเรียนต่อวัน</Label>
             <div className="flex items-center gap-3">
-               <Button variant="outline" size="sm" onClick={() => setLocalCount(Math.max(1, localCount - 1))} className="h-8 rounded-lg">-</Button>
-               <span className="text-sm font-bold w-6 text-center">{localCount}</span>
-               <Button variant="outline" size="sm" onClick={() => setLocalCount(localCount + 1)} className="h-8 rounded-lg">+</Button>
+              <Button variant="outline" size="sm" onClick={() => setLocalCount(Math.max(1, localCount - 1))} className="h-8 rounded-lg">-</Button>
+              <span className="text-sm font-bold w-6 text-center">{localCount}</span>
+              <Button variant="outline" size="sm" onClick={() => setLocalCount(localCount + 1)} className="h-8 rounded-lg">+</Button>
             </div>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">คาบพักกลางวัน (Lunch Break)</Label>
-            <Select value={localLunch} onValueChange={setLocalLunch}>
-              <SelectTrigger className="w-full sm:w-56 text-xs bg-black/5 border-transparent shadow-none h-8 rounded-lg focus:ring-1 focus:ring-slate-300">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl bg-white/95 backdrop-blur-md border-white/50 shadow-lg">
-                <SelectItem value="0" className="text-xs rounded-lg cursor-pointer">ไม่มีพักกลางวัน</SelectItem>
-                {Array.from({ length: localCount }, (_, i) => i + 1).map(p => (
-                  <SelectItem key={p} value={String(p)} className="text-xs rounded-lg cursor-pointer">คาบที่ {p}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
         </div>
 
         <div className="space-y-3">
-          <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2 block border-b border-black/5 pb-2">กำหนดเวลาแต่ละคาบ</Label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[30vh] overflow-y-auto pr-2">
-            {Array.from({ length: localCount }, (_, i) => i + 1).map(period => (
-              <div key={period} className={`p-3 rounded-xl border ${Number(localLunch) === period ? 'bg-amber-50/50 border-amber-200' : 'bg-black/[0.02] border-black/5'}`}>
-                <Label className={`text-[11px] font-bold mb-1.5 block ${Number(localLunch) === period ? 'text-amber-700' : 'text-black/60'}`}>
-                  คาบที่ {period} {Number(localLunch) === period && '(พัก)'}
-                </Label>
-                <Input
-                  value={localTimes[period] || ''}
-                  onChange={e => updateTime(period, e.target.value)}
-                  placeholder="08:30 - 09:20"
-                  className="h-8 text-[11px] bg-white/60 border-black/10 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none rounded-lg"
-                />
-              </div>
-            ))}
+          <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2 block border-b border-black/5 pb-2">กำหนดเวลาและประเภทคาบ</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[40vh] overflow-y-auto pr-2">
+            {Array.from({ length: localCount }, (_, i) => i + 1).map(period => {
+              const isLunch = localLunches.includes(period);
+              return (
+                <div key={period} className={`p-3 rounded-xl border transition-all ${isLunch ? 'bg-amber-50/50 border-amber-200 shadow-sm ring-1 ring-amber-100' : 'bg-black/[0.02] border-black/5'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className={`text-[11px] font-bold ${isLunch ? 'text-amber-700' : 'text-black/60'}`}>
+                      คาบที่ {period}
+                    </Label>
+                    <button
+                      onClick={() => toggleLunch(period)}
+                      className={`text-[9px] px-1.5 py-0.5 rounded-md font-bold transition-colors ${isLunch ? 'bg-amber-500 text-white' : 'bg-black/10 text-black/40 hover:bg-black/20'}`}
+                    >
+                      {isLunch ? 'พักกลางวัน' : 'ปกติ | พัก'}
+                    </button>
+                  </div>
+                  <Input
+                    value={localTimes[period] || ''}
+                    onChange={e => updateTime(period, e.target.value)}
+                    placeholder="08:30 - 09:20"
+                    className="h-8 text-[11px] bg-white/60 border-black/10 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none rounded-lg"
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
 

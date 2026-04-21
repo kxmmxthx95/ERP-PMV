@@ -1,4 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherManager } from '@/hooks/useTeacherManager';
 import { useSchedule } from '@/hooks/useSchedule';
@@ -90,94 +92,6 @@ export const SUBJECT_GROUPS = Object.values(SUBJECT_GROUP_CONFIG);
 const TEACHING_PERIODS_PER_WEEK = (PERIOD_COUNT - 1) * 5; // 8 × 5 = 40 คาบ
 void LUNCH_PERIOD; // used in calculation above
 
-// ── Seed Data ─────────────────────────────────────────────────────────────────
-// สอดคล้องกับ SEED_CLASSES ใน useSchedule.ts (id ตรงกัน)
-
-const SEED_CLASSES: ClassRoom[] = [
-  // ── ปฐมวัย ──────────────────────────────────────────────────────────────────
-  {
-    id: 'อ.1/1', className: 'อ.1/1', gradeLevel: 'อ.1', roomNumber: '1',
-    departmentId: 'early', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't05', studentCount: 25, maxStudents: 30,
-    room: 'อาคารปฐมวัย ห้อง 101', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'อ.2/1', className: 'อ.2/1', gradeLevel: 'อ.2', roomNumber: '1',
-    departmentId: 'early', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't05', studentCount: 22, maxStudents: 30,
-    room: 'อาคารปฐมวัย ห้อง 102', isActive: true, createdAt: '2025-05-01',
-  },
-  // ── ประถมศึกษา ───────────────────────────────────────────────────────────────
-  {
-    id: 'ป.4/1', className: 'ป.4/1', gradeLevel: 'ป.4', roomNumber: '1',
-    departmentId: 'primary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't01', studentCount: 32, maxStudents: 35,
-    room: 'อาคาร 1 ห้อง 201', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'ป.4/2', className: 'ป.4/2', gradeLevel: 'ป.4', roomNumber: '2',
-    departmentId: 'primary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't02', studentCount: 30, maxStudents: 35,
-    room: 'อาคาร 1 ห้อง 202', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'ป.5/1', className: 'ป.5/1', gradeLevel: 'ป.5', roomNumber: '1',
-    departmentId: 'primary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't07', studentCount: 28, maxStudents: 35,
-    room: 'อาคาร 1 ห้อง 301', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'ป.6/1', className: 'ป.6/1', gradeLevel: 'ป.6', roomNumber: '1',
-    departmentId: 'primary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't02', studentCount: 31, maxStudents: 35,
-    room: 'อาคาร 1 ห้อง 302', isActive: true, createdAt: '2025-05-01',
-  },
-  // ── มัธยมศึกษาตอนต้น ─────────────────────────────────────────────────────────
-  {
-    id: 'ม.1/1', className: 'ม.1/1', gradeLevel: 'ม.1', roomNumber: '1',
-    departmentId: 'secondary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't06', studentCount: 38, maxStudents: 40,
-    room: 'อาคาร 2 ห้อง 101', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'ม.2/1', className: 'ม.2/1', gradeLevel: 'ม.2', roomNumber: '1',
-    departmentId: 'secondary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't04', studentCount: 36, maxStudents: 40,
-    room: 'อาคาร 2 ห้อง 201', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'ม.3/1', className: 'ม.3/1', gradeLevel: 'ม.3', roomNumber: '1',
-    departmentId: 'secondary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't03', studentCount: 40, maxStudents: 40,
-    room: 'อาคาร 2 ห้อง 301', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'ม.3/2', className: 'ม.3/2', gradeLevel: 'ม.3', roomNumber: '2',
-    departmentId: 'secondary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't06', studentCount: 37, maxStudents: 40,
-    room: 'อาคาร 2 ห้อง 302', isActive: true, createdAt: '2025-05-01',
-  },
-  // ── มัธยมศึกษาตอนปลาย ───────────────────────────────────────────────────────
-  {
-    id: 'ม.4/1', className: 'ม.4/1', gradeLevel: 'ม.4', roomNumber: '1',
-    departmentId: 'secondary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't03', studentCount: 35, maxStudents: 40,
-    room: 'อาคาร 3 ห้อง 101', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'ม.5/1', className: 'ม.5/1', gradeLevel: 'ม.5', roomNumber: '1',
-    departmentId: 'secondary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't04', studentCount: 33, maxStudents: 40,
-    room: 'อาคาร 3 ห้อง 201', isActive: true, createdAt: '2025-05-01',
-  },
-  {
-    id: 'ม.6/1', className: 'ม.6/1', gradeLevel: 'ม.6', roomNumber: '1',
-    departmentId: 'secondary', academicYearId: '2568', semester: 1,
-    homeroomTeacherId: 't03', studentCount: 30, maxStudents: 40,
-    room: 'อาคาร 3 ห้อง 301', isActive: true, createdAt: '2025-05-01',
-  },
-];
-
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useClassManager() {
@@ -188,7 +102,15 @@ export function useClassManager() {
   const teacherMgr = useTeacherManager();
   const schedule   = useSchedule();
 
-  const [classes,  setClasses]  = useState<ClassRoom[]>(SEED_CLASSES);
+  const [classes,  setClasses]  = useState<ClassRoom[]>([]);
+
+  // ── ดึงข้อมูล Real-time จาก Firebase ──────────────────────────────────────────
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'classes'), (snap) => {
+      setClasses(snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassRoom)));
+    });
+    return () => unsub();
+  }, []);
 
   // ── Filters ───────────────────────────────────────────────────────────────────
   const [filterDept,  setFilterDeptRaw]  = useState<Department | 'all'>('all');
@@ -208,23 +130,22 @@ export function useClassManager() {
 
   // ── CRUD ──────────────────────────────────────────────────────────────────────
 
-  const addClass = (data: NewClassRoom): ClassRoom => {
-    const newClass: ClassRoom = {
+  const addClass = async (data: NewClassRoom): Promise<ClassRoom> => {
+    const newClassData = {
       ...data,
-      id: `${data.gradeLevel}/${data.roomNumber}-${Date.now()}`,
       className: `${data.gradeLevel}/${data.roomNumber}`,
       createdAt: new Date().toISOString().slice(0, 10),
     };
-    setClasses(prev => [...prev, newClass]);
-    return newClass;
+    const docRef = await addDoc(collection(db, 'classes'), newClassData);
+    return { id: docRef.id, ...newClassData } as ClassRoom;
   };
 
-  const updateClass = (id: string, data: Partial<Omit<ClassRoom, 'id' | 'createdAt'>>) => {
-    setClasses(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
+  const updateClass = async (id: string, data: Partial<Omit<ClassRoom, 'id' | 'createdAt'>>) => {
+    await updateDoc(doc(db, 'classes', id), data as any);
   };
 
-  const deleteClass = (id: string) => {
-    setClasses(prev => prev.filter(c => c.id !== id));
+  const deleteClass = async (id: string) => {
+    await deleteDoc(doc(db, 'classes', id));
   };
 
   // ── Derived Data ──────────────────────────────────────────────────────────────

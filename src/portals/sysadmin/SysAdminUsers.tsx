@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Search, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -18,19 +18,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog';
-import { Switch } from '@/components/ui/switch';
 import type { UserData } from '@/types/user';
-import { ROLE_LABELS } from '@/types/mockUsers';
 import { useUserForm } from '@/hooks/useUserForm';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { toast } from 'sonner';
+import { collection, onSnapshot, setDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import firebaseApp from '@/lib/firebase';
+import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
+import { initializeApp, getApps } from 'firebase/app';
+import FormModal from '@/components/ui/FormModal';
 
 // ── Styles helpers ──────────────────────────────────────────────────────────
 const glassCard: React.CSSProperties = {
@@ -41,14 +37,36 @@ const glassCard: React.CSSProperties = {
   boxShadow: '0 8px 32px rgba(0, 0, 0, 0.04)',
 };
 
+// ── Constants ───────────────────────────────────────────────────────────────
+const ROLE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
+  student:  { label: 'นักเรียน',   color: '#7c3aed', bg: '#f3e8ff' },
+  parent:   { label: 'ผู้ปกครอง', color: '#2563eb', bg: '#dbeafe' },
+  teacher:  { label: 'ครูผู้สอน',  color: '#e11d48', bg: '#ffe4e6' },
+  staff:    { label: 'เจ้าหน้าที่', color: '#059669', bg: '#d1fae5' },
+  admin:    { label: 'ผู้บริหาร',   color: '#d97706', bg: '#fef3c7' },
+  sysadmin: { label: 'SysAdmin', color: '#64748b', bg: '#f1f5f9' },
+};
+
 export default function SysAdminUsers() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState('all');
   const [filterDepartment, setFilterDepartment] = useState('all');
   const [users, setUsers] = useState<UserData[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
-
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Helper สำหรับจัดรูปแบบเบอร์โทรศัพท์ (0xx-xxx-xxxx)
+  const formatPhone = (val: string) => {
+    const cleaned = val.replace(/\D/g, '').slice(0, 10);
+    let formatted = cleaned;
+    if (cleaned.length > 3 && cleaned.length <= 6) {
+      formatted = `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
+    } else if (cleaned.length > 6) {
+      formatted = `${cleaned.slice(0, 3)}-${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
+    }
+    return formatted;
+  };
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
@@ -87,16 +105,52 @@ export default function SysAdminUsers() {
     setFormForEdit,
     resetForm
   } = useUserForm(async (newUser) => {
+    // นำเบอร์โทรศัพท์ (และข้อมูลที่อาจตกหล่น) มารวมเข้ากับ Payload ก่อนบันทึก
+    const completeUserData = {
+      ...newUser,
+      phone: newPhone,
+    };
+
     if (editingUserId) {
-      await updateDoc(doc(db, 'users', editingUserId), newUser as any);
+      await updateDoc(doc(db, 'users', editingUserId), completeUserData as any);
       setEditingUserId(null);
     } else {
-      await addDoc(collection(db, 'users'), newUser);
+      try {
+        // 1. สร้างบัญชีใน Firebase Auth ด้วย Secondary App (เพื่อไม่ให้ Admin ถูกล็อกเอาท์)
+        const secondaryApp = getApps().find(app => app.name === 'SecondaryApp') 
+          || initializeApp(firebaseApp.options, 'SecondaryApp');
+        const secondaryAuth = getAuth(secondaryApp);
+        
+        // ดึงอีเมลจากฟอร์มและทำความสะอาดข้อมูล
+        const emailToCreate = (completeUserData.email || newEmail).trim().toLowerCase();
+        const cleanPassword = newPassword.trim();
+        
+        const userCredential = await createUserWithEmailAndPassword(
+          secondaryAuth, 
+          emailToCreate, 
+          cleanPassword
+        );
+        const newUid = userCredential.user.uid;
+        await secondaryAuth.signOut(); // ล้าง session ที่จำลองขึ้นมา
+
+        // 2. บันทึกข้อมูลลง Firestore โดยใช้ UID ที่ผูกกับ Auth
+        await setDoc(doc(db, 'users', newUid), completeUserData);
+      } catch (error: any) {
+        console.error("เกิดข้อผิดพลาดในการสร้างบัญชี:", error);
+        if (error.code === 'auth/email-already-in-use') {
+          alert("ไม่สามารถสร้างบัญชีได้: อีเมลนี้ถูกใช้งานไปแล้วในระบบ");
+        } else {
+          alert("ไม่สามารถสร้างบัญชีได้: " + (error as Error).message);
+        }
+      }
     }
   });
 
   const filteredUsers = users.filter((u) => {
-    const matchSearch = u.name.includes(searchTerm) || u.email.includes(searchTerm);
+    const name = u.name || u.displayName || '';
+    const email = u.email || '';
+    const matchSearch = name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                      email.toLowerCase().includes(searchTerm.toLowerCase());
     const matchRole = filterRole === 'all' || u.role === filterRole;
     const matchDept = filterDepartment === 'all' || u.department === filterDepartment;
     return matchSearch && matchRole && matchDept;
@@ -118,8 +172,9 @@ export default function SysAdminUsers() {
   };
 
   const handleDeleteUser = async (id: string) => {
-    if (window.confirm('คุณแน่ใจหรือไม่ที่จะลบผู้ใช้งานนี้?')) {
+    if (window.confirm('คุณแน่ใจหรือไม่ที่จะลบรายชื่อผู้ใช้งานนี้?\n\n*หมายเหตุ: การลบนี้จะลบเฉพาะข้อมูลโปรไฟล์ หากต้องการใช้อีเมลนี้สมัครใหม่ คุณต้องไปลบบัญชีออกจาก Firebase Console (Authentication) ด้วยตนเอง')) {
       await deleteDoc(doc(db, 'users', id));
+      toast.success('ลบข้อมูลโปรไฟล์สำเร็จ (อย่าลบลบบัญชีใน Firebase Console หากต้องการใช้อีเมลซ้ำ)');
     }
   };
 
@@ -225,7 +280,6 @@ export default function SysAdminUsers() {
                 <TableHead className="px-3 py-2.5 font-semibold text-black/40 text-[11px] uppercase tracking-wider h-auto">User Directory</TableHead>
                 <TableHead className="px-3 py-2.5 font-semibold text-black/40 text-[11px] uppercase tracking-wider h-auto">Role Assignor</TableHead>
                 <TableHead className="px-3 py-2.5 font-semibold text-black/40 text-[11px] uppercase tracking-wider h-auto">Access Control</TableHead>
-                <TableHead className="px-3 py-2.5 font-semibold text-black/40 text-[11px] uppercase tracking-wider h-auto">Last Login</TableHead>
                 <TableHead className="px-3 py-2.5 font-semibold text-black/40 text-[11px] uppercase tracking-wider h-auto text-center">จัดการ</TableHead>
               </TableRow>
             </TableHeader>
@@ -236,11 +290,11 @@ export default function SysAdminUsers() {
                   <TableCell className="px-3 py-2">
                     <div className="flex items-center gap-3">
                       <div className="w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold text-[11px] shrink-0">
-                        {user.name.charAt(0)}
+                        {(user.name || user.displayName || '?').charAt(0)}
                       </div>
                       <div>
-                        <p className="font-semibold text-xs text-black/75">{user.name}</p>
-                        <p className="text-[10px] text-black/40">{user.email}</p>
+                        <p className="font-semibold text-xs text-black/75">{user.name || user.displayName || 'ไม่มีชื่อ'}</p>
+                        <p className="text-[10px] text-black/40">{user.email || 'ไม่มีอีเมล'}</p>
                       </div>
                     </div>
                   </TableCell>
@@ -274,25 +328,29 @@ export default function SysAdminUsers() {
                   </TableCell>
 
                   {/* 3. Access Control (Active/Inactive) */}
-                  <TableCell className="px-3 py-2">
+                  <TableCell className="py-2.5">
                     <div className="flex items-center gap-2">
-                      <Switch 
-                        checked={user.status === 'active'}
-                        onCheckedChange={() => toggleStatus(user.id)}
-                        className="data-[state=checked]:bg-[#10b981] focus-visible:ring-0 focus-visible:ring-offset-0 border-transparent scale-[0.8] origin-left"
-                      />
-                      <span className={`text-[10px] font-bold ${user.status === 'active' ? 'text-[#10b981]' : 'text-slate-400'}`}>
-                        {user.status === 'active' ? 'Active' : 'Inactive'}
+                      <div 
+                        className="relative w-9 h-5 rounded-full cursor-pointer transition-colors duration-200"
+                        style={{ backgroundColor: user.status === 'active' ? '#10b981' : 'rgba(0,0,0,0.1)' }}
+                        onClick={() => toggleStatus(user.id)}
+                      >
+                        <motion.div
+                          layout
+                          initial={false}
+                          animate={{ x: user.status === 'active' ? 18 : 2 }}
+                          transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                          className="absolute top-0.5 left-0 w-4 h-4 bg-white rounded-full shadow-sm"
+                        />
+                      </div>
+                      <span className={`text-[10px] font-bold ${user.status === 'active' ? 'text-emerald-600' : 'text-black/30'}`}>
+                        {user.status === 'active' ? 'เปิดใช้งาน' : 'ระงับ'}
                       </span>
                     </div>
                   </TableCell>
 
-                  {/* 4. Last Login */}
-                  <TableCell className="px-3 py-2 text-[11px] text-black/40">
-                    {user.lastLogin}
-                  </TableCell>
 
-                  {/* 5. Actions */}
+                  {/* 4. Actions */}
                   <TableCell className="px-3 py-2 text-center">
                     <div className="flex items-center justify-center gap-1">
                       <Button variant="ghost" size="icon" onClick={() => handleEditUser(user)} className="h-6 w-6 text-black/40 hover:text-blue-600 hover:bg-blue-50 rounded-md outline-none focus-visible:ring-0 transition-colors" title="แก้ไขข้อมูล">
@@ -307,7 +365,7 @@ export default function SysAdminUsers() {
               ))}
               {filteredUsers.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="px-3 py-8 text-center text-black/40 text-xs">
+                  <TableCell colSpan={4} className="px-3 py-8 text-center text-black/40 text-xs">
                     ไม่พบข้อมูลผู้ใช้งาน
                   </TableCell>
                 </TableRow>
@@ -323,162 +381,196 @@ export default function SysAdminUsers() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.25 }}
-          className="flex items-center justify-center gap-2"
+          className="flex items-center justify-center gap-1 mt-4"
         >
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon"
             disabled={currentPage === 1}
-            onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-            className="h-8 rounded-full text-xs font-medium"
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            className="h-8 w-8 rounded-full text-black/40 hover:bg-black/5 disabled:opacity-20"
           >
-            ← ก่อนหน้า
+            <ChevronLeft size={16} />
           </Button>
-          <div className="text-xs font-medium text-black/40 px-2">
-            หน้า {currentPage} / {totalPages}
+
+          <div className="flex items-center gap-1 mx-2">
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => {
+              if (totalPages > 7) {
+                if (page !== 1 && page !== totalPages && Math.abs(page - currentPage) > 2) {
+                  if (page === 2 || page === totalPages - 1) return <span key={page} className="text-xs text-black/20 px-1">...</span>;
+                  return null;
+                }
+              }
+
+              const isActive = currentPage === page;
+              return (
+                <button
+                  key={page}
+                  onClick={() => setCurrentPage(page)}
+                  className={`h-8 min-w-[32px] px-2 rounded-full text-xs font-bold transition-all ${
+                    isActive 
+                      ? 'bg-[#1e1e1e] text-white shadow-md scale-110' 
+                      : 'text-black/40 hover:bg-black/5 hover:text-black/70'
+                  }`}
+                >
+                  {page}
+                </button>
+              );
+            })}
           </div>
+
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon"
             disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-            className="h-8 rounded-full text-xs font-medium"
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            className="h-8 w-8 rounded-full text-black/40 hover:bg-black/5 disabled:opacity-20"
           >
-            ถัดไป →
+            <ChevronRight size={16} />
           </Button>
         </motion.div>
       )}
 
-      {/* ── Add User Dialog (Pop-up) ── */}
-      <Dialog open={isAddOpen} onOpenChange={(open) => {
-        setIsAddOpen(open);
-        if (!open) setEditingUserId(null);
-      }}>
-        <DialogContent className="bg-white/95 backdrop-blur-xl border-white/50 rounded-3xl shadow-2xl sm:max-w-[500px] p-5">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-slate-800">{editingUserId ? 'แก้ไขข้อมูลผู้ใช้งาน' : 'เพิ่มผู้ใช้งานใหม่'}</DialogTitle>
-          </DialogHeader>
-          
-          <form onSubmit={handleAddUser} className="space-y-4 pt-2">
-            <div className="grid grid-cols-12 gap-3">
-              <div className="col-span-4 space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">คำนำหน้า</label>
-                <Select value={newPrefix} onValueChange={setNewPrefix} required>
-                  <SelectTrigger className="w-full h-8 text-xs rounded-xl bg-slate-50/50 border-slate-200 focus:ring-1 focus:ring-slate-300 shadow-none">
-                    <SelectValue placeholder="เลือก" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-white/95 backdrop-blur-xl border-white/50 rounded-xl shadow-lg">
-                    {prefixes.map((px) => (
-                      <SelectItem key={px} value={px} className="text-xs rounded-lg">{px}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              
-              <div className="col-span-4 space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">ชื่อ</label>
-                <Input 
-                  required
-                  placeholder="ชื่อ" 
-                  value={newFirstName}
-                  onChange={(e) => setNewFirstName(e.target.value)}
-                  className="h-8 text-xs rounded-xl bg-slate-50/50 border-slate-200 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none"
-                />
-              </div>
-              
-              <div className="col-span-4 space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">นามสกุล</label>
-                <Input 
-                  required
-                  placeholder="นามสกุล" 
-                  value={newLastName}
-                  onChange={(e) => setNewLastName(e.target.value)}
-                  className="h-8 text-xs rounded-xl bg-slate-50/50 border-slate-200 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none"
-                />
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">บทบาท (Role)</label>
-                <Select value={newRole} onValueChange={setNewRole} required>
-                  <SelectTrigger className="w-full h-8 text-xs rounded-xl bg-slate-50/50 border-slate-200 focus:ring-1 focus:ring-slate-300 shadow-none">
-                    <SelectValue placeholder="เลือกบทบาท" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-white/95 backdrop-blur-xl border-white/50 rounded-xl shadow-lg">
-                    <SelectItem value="student" className="text-xs rounded-lg">นักเรียน</SelectItem>
-                    <SelectItem value="parent" className="text-xs rounded-lg">ผู้ปกครอง</SelectItem>
-                    <SelectItem value="teacher" className="text-xs rounded-lg">ครูผู้สอน</SelectItem>
-                    <SelectItem value="staff" className="text-xs rounded-lg">เจ้าหน้าที่</SelectItem>
-                    <SelectItem value="admin" className="text-xs rounded-lg">ผู้บริหาร</SelectItem>
-                    <SelectItem value="sysadmin" className="text-xs rounded-lg">SysAdmin</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">แผนก</label>
-                <Select value={newDepartment} onValueChange={setNewDepartment} required>
-                  <SelectTrigger className="w-full h-8 text-xs rounded-xl bg-slate-50/50 border-slate-200 focus:ring-1 focus:ring-slate-300 shadow-none">
-                    <SelectValue placeholder="เลือกแผนก" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-white/95 backdrop-blur-xl border-white/50 rounded-xl shadow-lg">
-                    {departments.map((dept) => (
-                      <SelectItem key={dept.id} value={dept.id} className="text-xs rounded-lg">{dept.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">อีเมล</label>
-                <Input 
-                  required
-                  type="email"
-                  placeholder="email@school.ac.th" 
-                  value={newEmail}
-                  onChange={(e) => setNewEmail(e.target.value)}
-                  className="h-8 text-xs rounded-xl bg-slate-50/50 border-slate-200 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">เบอร์โทรศัพท์</label>
-                <Input 
-                  required
-                  type="tel"
-                  placeholder="08X-XXX-XXXX" 
-                  value={newPhone}
-                  onChange={(e) => setNewPhone(e.target.value)}
-                  className="h-8 text-xs rounded-xl bg-slate-50/50 border-slate-200 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none"
-                />
-              </div>
-            </div>
+      {/* ── Add/Edit User Modal ── */}
+      <FormModal
+        open={isAddOpen}
+        onClose={() => {
+          setIsAddOpen(false);
+          setEditingUserId(null);
+        }}
+        title={editingUserId ? 'แก้ไขข้อมูลผู้ใช้งาน' : 'เพิ่มผู้ใช้งานใหม่'}
+        subtitle={editingUserId ? `แก้ไขข้อมูลของ ${newFirstName} ${newLastName}` : 'กรอกข้อมูลพื้นฐานเพื่อสร้างบัญชีผู้ใช้งานใหม่ในระบบ'}
+        icon={<Pencil size={18} />}
+        onSubmit={() => handleAddUser()}
+        submitLabel={editingUserId ? 'บันทึกการแก้ไข' : 'ยืนยันสร้างผู้ใช้'}
+      >
+        <div className="space-y-4 py-2">
+          {/* คำนำหน้า */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">คำนำหน้าหน้า</label>
+            <Select value={newPrefix} onValueChange={setNewPrefix}>
+              <SelectTrigger className="w-full h-10 rounded-xl bg-black/[0.03] border-transparent transition-all text-xs focus:ring-slate-300">
+                <SelectValue placeholder="เลือกคำนำหน้า" />
+              </SelectTrigger>
+              <SelectContent className="bg-white/95 backdrop-blur-xl border-white/50 rounded-xl shadow-lg">
+                {prefixes.map((px) => (
+                  <SelectItem key={px} value={px} className="text-xs rounded-lg">{px}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">รหัสผ่าน</label>
+          {/* ชื่อ */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">ชื่อ <span className="text-red-500">*</span></label>
+            <Input 
+              required
+              placeholder="กรุณากรอกชื่อ" 
+              value={newFirstName}
+              onChange={(e) => setNewFirstName(e.target.value)}
+              className="h-10 rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none text-xs font-medium"
+            />
+          </div>
+
+          {/* นามสกุล */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">นามสกุล <span className="text-red-500">*</span></label>
+            <Input 
+              required
+              placeholder="กรุณากรอกนามสกุล" 
+              value={newLastName}
+              onChange={(e) => setNewLastName(e.target.value)}
+              className="h-10 rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none text-xs font-medium"
+            />
+          </div>
+            
+          {/* บทบาท */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">บทบาท (Role) <span className="text-red-500">*</span></label>
+            <Select value={newRole} onValueChange={setNewRole}>
+              <SelectTrigger className="w-full h-10 rounded-xl bg-black/[0.03] border-transparent transition-all text-xs focus:ring-slate-300">
+                <SelectValue placeholder="เลือกบทบาท" />
+              </SelectTrigger>
+              <SelectContent className="bg-white/95 backdrop-blur-xl border-white/50 rounded-xl shadow-lg">
+                <SelectItem value="student" className="text-xs rounded-lg">นักเรียน</SelectItem>
+                <SelectItem value="parent" className="text-xs rounded-lg">ผู้ปกครอง</SelectItem>
+                <SelectItem value="teacher" className="text-xs rounded-lg">ครูผู้สอน</SelectItem>
+                <SelectItem value="staff" className="text-xs rounded-lg">เจ้าหน้าที่</SelectItem>
+                <SelectItem value="admin" className="text-xs rounded-lg">ผู้บริหาร</SelectItem>
+                <SelectItem value="sysadmin" className="text-xs rounded-lg">SysAdmin</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* แผนก */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">แผนก <span className="text-red-500">*</span></label>
+            <Select value={newDepartment} onValueChange={setNewDepartment}>
+              <SelectTrigger className="w-full h-10 rounded-xl bg-black/[0.03] border-transparent transition-all text-xs focus:ring-slate-300">
+                <SelectValue placeholder="เลือกแผนก" />
+              </SelectTrigger>
+              <SelectContent className="bg-white/95 backdrop-blur-xl border-white/50 rounded-xl shadow-lg">
+                {departments.map((dept) => (
+                  <SelectItem key={dept.id} value={dept.id} className="text-xs rounded-lg">{dept.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+            
+          {/* อีเมล */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">อีเมล <span className="text-red-500">*</span></label>
+            <Input 
+              required
+              type="email"
+              placeholder="กรุณากรอกอีเมล (email@school.ac.th)" 
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              className="h-10 rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none text-xs font-medium"
+            />
+          </div>
+
+          {/* เบอร์โทรศัพท์ */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">เบอร์โทรศัพท์ <span className="text-red-500">*</span></label>
+            <Input 
+              required
+              type="tel"
+              placeholder="กรุณากรอกเบอร์โทรศัพท์ (08X-XXX-XXXX)" 
+              value={newPhone}
+              onChange={(e) => setNewPhone(formatPhone(e.target.value))}
+              maxLength={12}
+              className="h-10 rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none text-xs font-medium"
+            />
+          </div>
+
+          {/* รหัสผ่าน */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+              {editingUserId ? 'รหัสผ่านใหม่ (ไม่บังคับ)' : 'รหัสผ่านครอบครัว'} <span className="text-red-500">{!editingUserId && '*'}</span>
+            </label>
+            <div className="relative">
               <Input 
-                required
-                type="password"
-                placeholder="ตั้งรหัสผ่านเริ่มต้น" 
+                key={showPassword ? 'text' : 'password'}
+                required={!editingUserId}
+                type={showPassword ? 'text' : 'password'}
+                placeholder={editingUserId ? "เว้นว่างไว้หากไม่ต้องการเปลี่ยน" : "กรุณาตั้งรหัสผ่านเริ่มต้น"} 
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                className="h-8 text-xs rounded-xl bg-slate-50/50 border-slate-200 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none"
+                className="h-10 rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none pr-10 text-xs font-medium"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-black/30 hover:text-black/60 transition-colors"
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
             </div>
-            
-            <DialogFooter className="pt-4 gap-2 sm:gap-0">
-              <Button type="button" variant="ghost" onClick={() => setIsAddOpen(false)} className="h-8 text-[11px] rounded-lg hover:bg-slate-100 font-medium">
-                ยกเลิก
-              </Button>
-              <Button type="submit" className="h-8 text-[11px] rounded-lg bg-[#1e1e1e] hover:bg-[#2a2a2a] text-white font-medium">
-                บันทึกข้อมูล
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </div>
+      </FormModal>
 
     </div>
   );

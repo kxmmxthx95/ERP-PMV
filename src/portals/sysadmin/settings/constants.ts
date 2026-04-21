@@ -1,5 +1,5 @@
 import type { AcademicYear, SettingsTab } from './types';
-import { CalendarDays, Settings2, BookOpen, Bell, Shield, Upload, Database, HardDrive } from 'lucide-react';
+import { CalendarDays, Settings2, BookOpen, Bell, Shield, Upload, HardDrive, ShieldCheck } from 'lucide-react';
 
 // ── Initial Academic Years ────────────────────────────────────────────────────
 export const INITIAL_ACADEMIC_YEARS: AcademicYear[] = [
@@ -32,9 +32,9 @@ export const SETTINGS_TABS: SettingsTab[] = [
   { id: 'curriculum',    label: 'หลักสูตร',      icon: BookOpen },
   { id: 'notification',  label: 'การแจ้งเตือน',  icon: Bell },
   { id: 'security',      label: 'ความปลอดภัย',       icon: Shield },
-  { id: 'firestore-rules', label: 'Firestore Rules', icon: Database },
   { id: 'import',        label: 'นำเข้าข้อมูล',    icon: Upload },
   { id: 'backup',        label: 'สำรองข้อมูล',     icon: HardDrive },
+  { id: 'roles',         label: 'สิทธิ์การใช้งาน',  icon: ShieldCheck },
 ];
 
 // ── Tailwind Styles ───────────────────────────────────────────────────────────

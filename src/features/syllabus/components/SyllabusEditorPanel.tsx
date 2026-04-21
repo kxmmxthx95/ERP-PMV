@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   BookOpen, User, Award, Calendar, Edit3, Send, CheckCircle2,
-  ChevronRight, BarChart2, AlertTriangle,
+  ChevronRight, BarChart2, AlertTriangle, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -28,8 +28,8 @@ interface SyllabusEditorPanelProps {
   onUpdate:         (data: Partial<CourseSyllabus>) => void;
   onUpdateWeek:     (week: number, data: any) => void;
   onUpdateAssessment: (a: AssessmentSchema) => void;
-  onSubmit:         () => void;
-  onApprove:        () => void;
+  onSubmit:         () => void | Promise<void>;
+  onApprove:        () => void | Promise<void>;
 }
 
 const glassCard: React.CSSProperties = {
@@ -54,6 +54,8 @@ export default function SyllabusEditorPanel({
   onSubmit,
   onApprove,
 }: SyllabusEditorPanelProps) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
   const [objectivesText, setObjectivesText] = useState(syllabus.objectives.join('\n'));
   const status   = SYLLABUS_STATUS_CONFIG[syllabus.status];
   const dept     = subject ? DEPARTMENT_CONFIG[subject.department] : null;
@@ -69,6 +71,24 @@ export default function SyllabusEditorPanel({
   const handleAssessmentChange = (key: keyof AssessmentSchema, val: number) => {
     const updated = { ...syllabus.assessment, [key]: val };
     onUpdateAssessment(updated);
+  };
+
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    try {
+      await onSubmit();
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    setIsApproving(true);
+    try {
+      await onApprove();
+    } finally {
+      setIsApproving(false);
+    }
   };
 
   return (
@@ -126,21 +146,31 @@ export default function SyllabusEditorPanel({
             {syllabus.status === 'draft' && (
               <Button
                 size="sm"
-                onClick={onSubmit}
-                className="h-7 px-3 text-xs rounded-lg bg-amber-500 hover:bg-amber-600 text-white"
+                onClick={handleSubmit}
+                disabled={isSubmitting}
+                className="h-7 px-3 text-xs rounded-lg bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-60"
               >
-                <Send size={11} className="mr-1" />
-                ส่งตรวจ
+                {isSubmitting ? (
+                  <Loader2 size={11} className="mr-1 animate-spin" />
+                ) : (
+                  <Send size={11} className="mr-1" />
+                )}
+                {isSubmitting ? 'กำลังส่ง...' : 'ส่งตรวจ'}
               </Button>
             )}
             {syllabus.status === 'submitted' && (
               <Button
                 size="sm"
-                onClick={onApprove}
-                className="h-7 px-3 text-xs rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white"
+                onClick={handleApprove}
+                disabled={isApproving}
+                className="h-7 px-3 text-xs rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white disabled:opacity-60"
               >
-                <CheckCircle2 size={11} className="mr-1" />
-                อนุมัติ
+                {isApproving ? (
+                  <Loader2 size={11} className="mr-1 animate-spin" />
+                ) : (
+                  <CheckCircle2 size={11} className="mr-1" />
+                )}
+                {isApproving ? 'กำลังอนุมัติ...' : 'อนุมัติ'}
               </Button>
             )}
           </div>

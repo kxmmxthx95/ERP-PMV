@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { X, BookPlus, Pencil, Trash2 } from 'lucide-react';
+import React, { useEffect, useState, useMemo } from 'react';
+import { BookPlus, Pencil } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -8,10 +8,8 @@ import {
   type Subject, type Department, type SubjectCategory, type SubjectGroupId,
 } from '@/types/curriculum';
 import type { NewSubject } from '@/hooks/useCurriculum';
-import { useSchoolStructure } from '@/hooks/useSchoolStructure';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { ButtonGroup, ButtonGroupSeparator } from '@/components/ui/button-group';
 import {
   Select,
   SelectContent,
@@ -28,23 +26,27 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
+import FormModal from '@/components/ui/FormModal';
 
 const CATEGORIES: SubjectCategory[] = ['core', 'added', 'elective', 'activity'];
 
 const schema = z.object({
-  code:         z.string().min(1, 'กรุณากรอกรหัสวิชา'),
-  codeEn:       z.string().optional(),
-  name:         z.string().min(1, 'กรุณากรอกชื่อวิชา'),
-  nameEn:       z.string().optional(),
-  credits:      z.number({ error: 'หน่วยกิตต้องไม่ติดลบ' }).min(0, 'หน่วยกิตต้องไม่ติดลบ'),
-  hoursPerWeek: z.number({ error: 'ต้องมีอย่างน้อย 1 ชั่วโมง/สัปดาห์' }).min(1, 'ต้องมีอย่างน้อย 1 ชั่วโมง/สัปดาห์'),
-  totalHours:   z.number({ error: 'ต้องไม่ติดลบ' }).min(0, 'ต้องไม่ติดลบ'),
-  department:   z.string().min(1, 'กรุณาเลือกแผนก'),
-  gradeLevel:   z.string().optional(),
+  code: z.string().trim()
+    .min(1, 'กรุณากรอกรหัสวิชา')
+    .max(20, 'รหัสวิชาต้องไม่เกิน 20 ตัวอักษร'),
+  name: z.string().trim()
+    .min(2, 'ชื่อวิชาต้องมีอย่างน้อย 2 ตัวอักษร'),
+  credits: z.number({ message: 'กรุณากรอกหน่วยกิต' }).min(0, 'หน่วยกิตต้องไม่ติดลบ'),
+  hoursPerWeek: z.number({ message: 'กรุณากรอกชั่วโมง/สัปดาห์' }).min(0.5, 'ต้องมีอย่างน้อย 0.5 ชั่วโมง/สัปดาห์'),
+  totalHours: z.number({ message: 'กรุณากรอกรวมชั่วโมง' }).min(0, 'ต้องไม่ติดลบ'),
+  department: z.enum(['early', 'primary', 'secondary'] as const, {
+    message: 'กรุณาเลือกแผนก',
+  }),
+  gradeLevel: z.string().min(1, 'กรุณาเลือกระดับชั้น'),
   subjectGroup: z.string().min(1, 'กรุณาเลือกกลุ่มสาระ'),
-  category:     z.enum(['core', 'added', 'elective', 'activity'] as const),
-  description:  z.string().optional(),
+  category: z.enum(['core', 'added', 'elective', 'activity'] as const, {
+    message: 'กรุณาเลือกหมวดวิชา',
+  }),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -52,7 +54,11 @@ type FormValues = z.infer<typeof schema>;
 interface AddSubjectModalProps {
   open: boolean;
   defaultDepartment: Department;
+  defaultGrade?: string;
+  defaultSubjectGroup?: string;
+  defaultCategory?: SubjectCategory;
   subjectToEdit?: Subject;
+  existingSubjects?: Subject[];
   onClose: () => void;
   onSubmit: (data: NewSubject) => void;
   onUpdate: (id: string, data: NewSubject) => void;
@@ -62,7 +68,11 @@ interface AddSubjectModalProps {
 export default function AddSubjectModal({
   open,
   defaultDepartment,
+  defaultGrade = '',
+  defaultSubjectGroup = '',
+  defaultCategory = 'core',
   subjectToEdit,
+  existingSubjects = [],
   onClose,
   onSubmit,
   onUpdate,
@@ -73,268 +83,315 @@ export default function AddSubjectModal({
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      code: '', codeEn: '', name: '', nameEn: '', credits: 1, hoursPerWeek: 2, totalHours: 40,
-      department: defaultDepartment, gradeLevel: '', subjectGroup: 'other', category: 'core', description: '',
+      code: '', name: '', credits: undefined as any, hoursPerWeek: undefined as any, totalHours: undefined as any,
+      gradeLevel: '', department: 'primary', subjectGroup: '', category: 'core',
     },
   });
+
+  const [, setIsInitialLoading] = useState(false);
 
   useEffect(() => {
     if (isEditMode) {
       form.reset({
         code: subjectToEdit.code,
-        codeEn: (subjectToEdit as any).codeEn ?? '',
         name: subjectToEdit.name,
-        nameEn: subjectToEdit.nameEn ?? '',
         credits: subjectToEdit.credits,
         hoursPerWeek: subjectToEdit.hoursPerWeek,
         totalHours: (subjectToEdit as any).totalHours ?? 40,
-        department: subjectToEdit.department,
-        gradeLevel: (subjectToEdit as any).gradeLevel ?? '',
-        subjectGroup: (subjectToEdit as any).subjectGroup ?? 'other',
-        category: subjectToEdit.category,
-        description: subjectToEdit.description ?? '',
+        gradeLevel: subjectToEdit.gradeLevel || '',
+        department: subjectToEdit.department || 'primary',
+        category: subjectToEdit.category || 'core',
       });
-    } else if (open) {
-      form.reset({
-        code: '', codeEn: '', name: '', nameEn: '', credits: 1, hoursPerWeek: 2, totalHours: 40,
-        department: defaultDepartment, gradeLevel: '', subjectGroup: 'other',
-        category: 'core', description: ''
-      });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subjectToEdit?.id, open]);
-
-  const { departments, getGradesBySection } = useSchoolStructure();
-
-  const deptValue = form.watch('department');
-  const deptCfg = DEPARTMENT_CONFIG[deptValue as Department] ?? { bg: 'rgba(0,0,0,0.05)', color: '#1e1e1e', border: 'rgba(0,0,0,0.1)' };
-  
-  // แปลงค่า early ให้ตรงกับ hook
-  const normalizedDept = deptValue === 'early' ? 'early-childhood' : deptValue;
-  const grades = normalizedDept ? getGradesBySection(normalizedDept as any) : [];
-
-  const handleSubmit = (values: FormValues) => {
-    const data: NewSubject = {
-      code: values.code.trim().toUpperCase(),
-      ...((values.codeEn) ? { codeEn: values.codeEn.trim().toUpperCase() } : {}),
-      name: values.name.trim(),
-      nameEn: values.nameEn?.trim() || undefined,
-      credits: values.credits,
-      hoursPerWeek: values.hoursPerWeek,
-      totalHours: values.totalHours,
-      department: values.department as Department,
-      category: values.category,
-      description: values.description?.trim() || undefined,
-      ...((values.gradeLevel) ? { gradeLevel: values.gradeLevel } : {}),
-      ...((values.subjectGroup) ? { subjectGroup: values.subjectGroup as SubjectGroupId } : {})
-    } as any;
-    if (isEditMode) {
-      onUpdate(subjectToEdit.id, data);
     } else {
-      onSubmit(data);
+      form.reset({
+        code: '',
+        name: '',
+        credits: undefined as any,
+        hoursPerWeek: undefined as any,
+        totalHours: undefined as any,
+        gradeLevel: defaultGrade,
+        department: defaultDepartment,
+        subjectGroup: defaultSubjectGroup,
+        category: defaultCategory,
+      });
     }
-    onClose();
+
+    if (open) {
+      setIsInitialLoading(true);
+      const timer = setTimeout(() => setIsInitialLoading(false), 400);
+      return () => clearTimeout(timer);
+    }
+  }, [subjectToEdit?.id, open, isEditMode, form, defaultDepartment, defaultGrade, defaultSubjectGroup, defaultCategory]);
+
+
+  // ── normalize gradeLevel ──────────────────────────
+  const normalizeGradeLevel = (raw: string): string => {
+    if (!raw) return '';
+    const s = raw.trim();
+    const map: Record<string, string> = {
+      'เตรียมอนุบาล': 'pre-k', 'อนุบาล 1': 'k1', 'อนุบาล 2': 'k2', 'อนุบาล 3': 'k3',
+      'ป.1': 'p1', 'ป.2': 'p2', 'ป.3': 'p3', 'ป.4': 'p4', 'ป.5': 'p5', 'ป.6': 'p6',
+      'ม.1': 'm1', 'ม.2': 'm2', 'ม.3': 'm3', 'ม.4': 'm4', 'ม.5': 'm5', 'ม.6': 'm6',
+    };
+    return map[s] ?? s;
+  };
+
+  // ดึงระดับชั้นตามแผนกที่เลือก
+  const selectedDept = form.watch('department');
+  const grades = useMemo(() => {
+    const config = DEPARTMENT_CONFIG[selectedDept];
+    if (!config) return [];
+    return config.grades.map(g => ({ id: normalizeGradeLevel(g), label: g }));
+  }, [selectedDept]);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const onFormSubmit = async (values: FormValues) => {
+    const newCode = values.code.trim().toUpperCase();
+    const duplicate = existingSubjects.find(
+      s => s.code.toUpperCase() === newCode && s.id !== subjectToEdit?.id
+    );
+    if (duplicate) {
+      form.setError('code', { message: `รหัสวิชา "${newCode}" มีอยู่แล้ว (${duplicate.name})` });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const data: NewSubject = {
+        code: values.code.trim().toUpperCase(),
+        name: values.name.trim(),
+        credits: values.credits,
+        hoursPerWeek: values.hoursPerWeek,
+        totalHours: values.totalHours,
+        department: values.department,
+        gradeLevel: values.gradeLevel,
+        subjectGroup: values.subjectGroup as SubjectGroupId,
+        category: values.category,
+      };
+
+      if (isEditMode && subjectToEdit) {
+        await onUpdate(subjectToEdit.id, data);
+      } else {
+        await onSubmit(data);
+      }
+      onClose();
+    } catch (error) {
+      console.error('Submission error:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <Dialog open={open} onOpenChange={v => !v && onClose()}>
-      <DialogContent
-        showCloseButton={false}
-        className="max-w-md rounded-3xl border-0 p-0 overflow-hidden"
-        style={{
-          background: 'rgba(255,255,255,0.95)',
-          backdropFilter: 'blur(32px)',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.14)',
-        }}
-      >
-        <DialogHeader className="px-5 pt-5 pb-3 border-b border-black/5">
-          <div className="flex items-center justify-between">
-            <DialogTitle className="text-base font-bold text-black/80 flex items-center gap-3">
-              <div
-                className="w-9 h-9 rounded-2xl flex items-center justify-center"
-                style={{
-                  background: `linear-gradient(135deg,${deptCfg.color},${deptCfg.color}aa)`,
-                  boxShadow: `0 0 16px ${deptCfg.color}40`,
-                }}
-              >
-                {isEditMode ? <Pencil size={16} className="text-white" /> : <BookPlus size={18} className="text-white" />}
-              </div>
-              {isEditMode ? 'แก้ไขวิชา' : 'เพิ่มวิชาใหม่'}
-            </DialogTitle>
-            <button onClick={onClose} className="w-7 h-7 rounded-full flex items-center justify-center text-black/40 hover:bg-black/06 transition-colors">
-              <X size={15} />
-            </button>
+    <FormModal
+      open={open}
+      onClose={onClose}
+      title={isEditMode ? 'แก้ไขข้อมูลวิชา' : 'เพิ่มรายวิชาใหม่'}
+      subtitle={isEditMode ? `แก้ไขรายละเอียดวิชา ${subjectToEdit?.code}` : 'กรอกข้อมูลพื้นฐานเพื่อเพิ่มวิชาในคลังหลักสูตร'}
+      icon={isEditMode ? <Pencil size={18} /> : <BookPlus size={18} />}
+      onSubmit={form.handleSubmit(onFormSubmit)}
+      submitLabel={isSubmitting ? 'กำลังบันทึก...' : (isEditMode ? 'บันทึกการแก้ไข' : 'บันทึก')}
+      submitDisabled={isSubmitting}
+      onDelete={isEditMode ? () => onDelete(subjectToEdit!.id) : undefined}
+      deleteLabel="ลบวิชานี้"
+    >
+      <Form {...form}>
+        <div className="space-y-4 py-2">
+          {/* รหัสวิชาไทย */}
+          <FormField control={form.control} name="code" render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                รหัสวิชา <span className="text-red-500">*</span>
+              </FormLabel>
+              <FormControl><Input placeholder="กรุณากรอกรหัสวิชา" {...field} className="uppercase h-10 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium" /></FormControl>
+              <FormMessage className="text-[10px]" />
+            </FormItem>
+          )} />
+
+          {/* ชื่อวิชาไทย */}
+          <FormField control={form.control} name="name" render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                ชื่อรายวิชา <span className="text-red-500">*</span>
+              </FormLabel>
+              <FormControl><Input placeholder="กรุณากรอกชื่อวิชา" {...field} className="h-10 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium" /></FormControl>
+              <FormMessage className="text-[10px]" />
+            </FormItem>
+          )} />
+
+          {/* กลุ่มสาระการเรียนรู้ (ย้ายมาไว้หลังชื่อ EN) */}
+          <FormField control={form.control} name="subjectGroup" render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                กลุ่มสาระการเรียนรู้ <span className="text-red-500">*</span>
+              </FormLabel>
+              <Select onValueChange={field.onChange} value={field.value}>
+                <FormControl>
+                  <SelectTrigger className="w-full h-10 rounded-xl bg-black/[0.03] border-transparent transition-all">
+                    <SelectValue placeholder="เลือกกลุ่มสาระ" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent className="rounded-xl border-white/50 backdrop-blur-xl">
+                  {Object.entries(SUBJECT_GROUP_CONFIG).map(([id, g]) => (
+                    <SelectItem key={id} value={id}>{g.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormMessage className="text-[10px]" />
+            </FormItem>
+          )} />
+
+          {/* หน่วยกิต / ชั่วโมง / รวมชม. (บรรทัดเดียว) */}
+          <div className="grid grid-cols-3 gap-3">
+            <FormField control={form.control} name="credits" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                  หน่วยกิต <span className="text-red-500">*</span>
+                </FormLabel>
+                <FormControl><Input type="number" step="0.5" {...field} value={field.value ?? ''} onChange={e => field.onChange(e.target.value === '' ? undefined : Number(e.target.value))} className="h-10 rounded-xl bg-black/[0.03] border-transparent" /></FormControl>
+                <FormMessage className="text-[10px]" />
+              </FormItem>
+            )} />
+            <FormField control={form.control} name="hoursPerWeek" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                  ชม./สัปดาห์ <span className="text-red-500">*</span>
+                </FormLabel>
+                <FormControl><Input type="number" {...field} value={field.value ?? ''} onChange={e => field.onChange(e.target.value === '' ? undefined : Number(e.target.value))} className="h-10 rounded-xl bg-black/[0.03] border-transparent" /></FormControl>
+                <FormMessage className="text-[10px]" />
+              </FormItem>
+            )} />
+            <FormField control={form.control} name="totalHours" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                  รวม ชม. <span className="text-red-500">*</span>
+                </FormLabel>
+                <FormControl><Input type="number" {...field} value={field.value ?? ''} onChange={e => field.onChange(e.target.value === '' ? undefined : Number(e.target.value))} className="h-10 rounded-xl bg-black/[0.03] border-transparent" /></FormControl>
+                <FormMessage className="text-[10px]" />
+              </FormItem>
+            )} />
           </div>
-        </DialogHeader>
 
-              <Form {...form}>
-                <form onSubmit={form.handleSubmit(handleSubmit)}>
-                  <div className="px-5 py-4 space-y-3 max-h-[75vh] overflow-y-auto">
-                    <div className="grid grid-cols-2 gap-3">
-                      <FormField control={form.control} name="code" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">รหัสวิชา (ไทย)</FormLabel>
-                          <FormControl><Input placeholder="ท11101" {...field} className="uppercase rounded-lg" /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                      <FormField control={form.control} name="codeEn" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">รหัสวิชา (อังกฤษ)</FormLabel>
-                          <FormControl><Input placeholder="TH11101" {...field} className="uppercase rounded-lg" /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <FormField control={form.control} name="name" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">ชื่อวิชา (ไทย)</FormLabel>
-                          <FormControl><Input placeholder="คณิตศาสตร์" {...field} className="rounded-lg" /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                      <FormField control={form.control} name="nameEn" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">ชื่อวิชา (อังกฤษ)</FormLabel>
-                          <FormControl><Input placeholder="Mathematics" {...field} className="rounded-lg" /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                    </div>
-                    <div className="grid grid-cols-3 gap-3">
-                      <FormField control={form.control} name="credits" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">หน่วยกิต</FormLabel>
-                          <FormControl><Input type="number" step="0.5" min="0" {...field} onChange={e => field.onChange(Number(e.target.value))} className="rounded-lg" /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                      <FormField control={form.control} name="hoursPerWeek" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">ชั่วโมง/สัปดาห์</FormLabel>
-                          <FormControl><Input type="number" min="1" {...field} onChange={e => field.onChange(Number(e.target.value))} className="rounded-lg" /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                      <FormField control={form.control} name="totalHours" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">ชั่วโมงเต็ม</FormLabel>
-                          <FormControl><Input type="number" min="0" {...field} onChange={e => field.onChange(Number(e.target.value))} className="rounded-lg" /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <FormField control={form.control} name="department" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">แผนก</FormLabel>
-                          <Select onValueChange={(val) => { field.onChange(val); form.setValue('gradeLevel', ''); }} value={field.value}>
-                            <FormControl>
-                              <SelectTrigger style={{ background: deptCfg.bg, border: `1px solid ${deptCfg.border}`, color: deptCfg.color }} className="w-full rounded-lg">
-                                <SelectValue placeholder="เลือกแผนก" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {departments.map(d => {
-                                const val = d.id === 'early-childhood' ? 'early' : d.id;
-                                return <SelectItem key={d.id} value={val}>{d.label}</SelectItem>;
-                              })}
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                      <FormField control={form.control} name="gradeLevel" render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs">ระดับชั้น</FormLabel>
-                          <Select onValueChange={(v) => field.onChange(v === 'none' ? '' : v)} value={field.value || 'none'} disabled={!deptValue}>
-                            <FormControl><SelectTrigger className="w-full rounded-lg"><SelectValue placeholder="เลือกระดับชั้น" /></SelectTrigger></FormControl>
-                            <SelectContent>
-                              <SelectItem value="none">เลือกระดับชั้น</SelectItem>
-                              {grades.map(g => <SelectItem key={g.id} value={g.id}>{g.label}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                    </div>
-                    <FormField control={form.control} name="subjectGroup" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-xs">กลุ่มสาระการเรียนรู้</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl><SelectTrigger className="w-full rounded-lg"><SelectValue placeholder="เลือกกลุ่มสาระ..." /></SelectTrigger></FormControl>
-                          <SelectContent>
-                            {Object.entries(SUBJECT_GROUP_CONFIG).map(([id, g]) => (
-                              <SelectItem key={id} value={id}>{g.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    <FormField control={form.control} name="category" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-xs">หมวดวิชา</FormLabel>
-                        <FormControl>
-                          <div className="flex gap-2 flex-wrap">
-                            {CATEGORIES.map(cat => {
-                              const active = field.value === cat;
-                              const catCfg = CATEGORY_CONFIG[cat];
-                              return (
-                                <button
-                                  key={cat} type="button" onClick={() => field.onChange(cat)}
-                                  className="text-[11px] font-semibold px-3 py-1.5 rounded-full transition-all duration-150"
-                                  style={{
-                                    background: active ? catCfg.bg : 'rgba(0,0,0,0.04)',
-                                    border: `1px solid ${active ? catCfg.color + '50' : 'transparent'}`,
-                                    color: active ? catCfg.color : 'rgba(0,0,0,0.40)',
-                                  }}
-                                >{catCfg.label}</button>
-                              );
-                            })}
-                          </div>
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    <FormField control={form.control} name="description" render={({ field }) => (
-                      <FormItem>
-                        <FormControl>
-                          <textarea
-                            placeholder="คำอธิบายย่อ..." rows={2}
-                            className="w-full text-sm px-3 py-2 rounded-lg outline-none transition-all resize-none bg-black/5 border border-black/10 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none"
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                  </div>
+          {/* แผนกโรงเรียน (โชว์ก่อนระดับชั้น) */}
+          <FormField control={form.control} name="department" render={({ field }) => (
+            <FormItem className="space-y-2">
+              <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                แผนกโรงเรียน <span className="text-red-500">*</span>
+              </FormLabel>
+              <FormControl>
+                <div className="flex">
+                  <ButtonGroup className="w-full bg-black/[0.03] rounded-xl p-0.5 border-black/5">
+                    <Button
+                      type="button"
+                      variant={field.value === 'early' ? 'default' : 'ghost'}
+                      size="sm"
+                      onClick={() => {
+                        field.onChange('early');
+                        // รีเซ็ตเกรดเมื่อเปลี่ยนแผนก
+                        form.setValue('gradeLevel', '');
+                      }}
+                      className={`flex-1 h-8 text-[11px] font-bold rounded-lg px-4 ${field.value === 'early' ? 'bg-[#1e1e1e] text-white shadow-md' : 'text-black/40 hover:text-black/60'}`}
+                    >
+                      ปฐมวัย
+                    </Button>
+                    <ButtonGroupSeparator />
+                    <Button
+                      type="button"
+                      variant={field.value === 'primary' ? 'default' : 'ghost'}
+                      size="sm"
+                      onClick={() => {
+                        field.onChange('primary');
+                        form.setValue('gradeLevel', '');
+                      }}
+                      className={`flex-1 h-8 text-[11px] font-bold rounded-lg px-4 ${field.value === 'primary' ? 'bg-[#1e1e1e] text-white shadow-md' : 'text-black/40 hover:text-black/60'}`}
+                    >
+                      ประถม
+                    </Button>
+                    <ButtonGroupSeparator />
+                    <Button
+                      type="button"
+                      variant={field.value === 'secondary' ? 'default' : 'ghost'}
+                      size="sm"
+                      onClick={() => {
+                        field.onChange('secondary');
+                        form.setValue('gradeLevel', '');
+                      }}
+                      className={`flex-1 h-8 text-[11px] font-bold rounded-lg px-4 ${field.value === 'secondary' ? 'bg-[#1e1e1e] text-white shadow-md' : 'text-black/40 hover:text-black/60'}`}
+                    >
+                      มัธยม
+                    </Button>
+                  </ButtonGroup>
+                </div>
+              </FormControl>
+              <FormMessage className="text-[10px]" />
+            </FormItem>
+          )} />
 
-                  {/* Footer */}
-                  <div className="flex items-center justify-between px-5 py-3" style={{ borderTop: '1px solid rgba(0,0,0,0.06)' }}>
-                    <div>
-                      {isEditMode && (
-                        <Button type="button" variant="destructive" size="sm" onClick={() => { onDelete(subjectToEdit.id); onClose(); }}>
-                          <Trash2 size={13} className="mr-1.5" /> ลบวิชา
+          {/* ระดับชั้น (ButtonGroup based on selected department) */}
+          <FormField control={form.control} name="gradeLevel" render={({ field }) => (
+            <FormItem className="space-y-2">
+              <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                ระดับชั้นเรียน <span className="text-red-500">*</span>
+              </FormLabel>
+              <FormControl>
+                <div className="flex flex-wrap gap-2">
+                  <ButtonGroup className="w-full bg-black/[0.03] rounded-xl p-0.5 border-black/5 flex-wrap">
+                    {grades.map((g, idx) => (
+                      <React.Fragment key={g.id}>
+                        {idx > 0 && <ButtonGroupSeparator />}
+                        <Button
+                          type="button"
+                          variant={field.value === g.id ? 'default' : 'ghost'}
+                          size="sm"
+                          onClick={() => field.onChange(g.id)}
+                          className={`flex-1 min-w-[50px] h-8 text-[11px] font-bold rounded-lg px-3 ${field.value === g.id ? 'bg-[#1e1e1e] text-white shadow-md' : 'text-black/40 hover:text-black/60'}`}
+                        >
+                          {g.label}
                         </Button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button type="button" variant="ghost" size="sm" onClick={onClose}>ยกเลิก</Button>
-                      <Button
-                        type="submit" size="sm"
-                        className="text-white"
-                        style={{ background: `linear-gradient(135deg,${deptCfg.color},${deptCfg.color}aa)`, boxShadow: `0 0 12px ${deptCfg.color}40` }}
-                      >
-                        {isEditMode ? 'บันทึกการแก้ไข' : 'เพิ่มวิชา'}
-                      </Button>
-                    </div>
-                  </div>
-                </form>
-              </Form>
-      </DialogContent>
-    </Dialog>
+                      </React.Fragment>
+                    ))}
+                  </ButtonGroup>
+                </div>
+              </FormControl>
+              <FormMessage className="text-[10px]" />
+            </FormItem>
+          )} />
+
+          {/* หมวดวิชา (ButtonGroup) */}
+          <FormField control={form.control} name="category" render={({ field }) => (
+            <FormItem className="space-y-2">
+              <FormLabel className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">
+                หมวดวิชา <span className="text-red-500">*</span>
+              </FormLabel>
+              <FormControl>
+                <div className="flex flex-wrap gap-2">
+                  <ButtonGroup className="w-full bg-black/[0.03] rounded-xl p-0.5 border-black/5 flex-wrap">
+                    {CATEGORIES.map((cat, idx) => {
+                      const cfg = CATEGORY_CONFIG[cat];
+                      return (
+                        <React.Fragment key={cat}>
+                          {idx > 0 && <ButtonGroupSeparator />}
+                          <Button
+                            type="button"
+                            variant={field.value === cat ? 'default' : 'ghost'}
+                            size="sm"
+                            onClick={() => field.onChange(cat)}
+                            className={`flex-1 h-8 text-[11px] font-bold rounded-lg px-3 ${field.value === cat ? 'bg-[#1e1e1e] text-white shadow-md' : 'text-black/40 hover:text-black/60'}`}
+                          >
+                            {cfg.label}
+                          </Button>
+                        </React.Fragment>
+                      );
+                    })}
+                  </ButtonGroup>
+                </div>
+              </FormControl>
+              <FormMessage className="text-[10px]" />
+            </FormItem>
+          )} />
+        </div>
+      </Form>
+    </FormModal>
   );
 }

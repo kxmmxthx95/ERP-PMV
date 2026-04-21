@@ -1,4 +1,4 @@
-export type CalendarEventType = 'holiday' | 'exam' | 'activity' | 'deadline';
+export type CalendarEventType = 'holiday' | 'exam' | 'activity' | 'semester-start' | 'semester-end';
 
 export interface CalendarEvent {
   id: string;
@@ -43,10 +43,10 @@ export const EVENT_TYPE_CONFIG: Record<CalendarEventType, {
   },
   exam: {
     label: 'สอบ',
-    color: '#f97316',
-    bg: 'rgba(249,115,22,0.10)',
-    border: 'rgba(249,115,22,0.25)',
-    glow: '#f9731640',
+    color: '#eab308',
+    bg: 'rgba(234,179,8,0.10)',
+    border: 'rgba(234,179,8,0.25)',
+    glow: '#eab30840',
   },
   activity: {
     label: 'กิจกรรม',
@@ -55,8 +55,15 @@ export const EVENT_TYPE_CONFIG: Record<CalendarEventType, {
     border: 'rgba(59,130,246,0.25)',
     glow: '#3b82f640',
   },
-  deadline: {
-    label: 'กำหนดส่ง',
+  'semester-start': {
+    label: 'เปิดเทอม',
+    color: '#10b981',
+    bg: 'rgba(16,185,129,0.10)',
+    border: 'rgba(16,185,129,0.25)',
+    glow: '#10b98140',
+  },
+  'semester-end': {
+    label: 'ปิดเทอม',
     color: '#8b5cf6',
     bg: 'rgba(139,92,246,0.10)',
     border: 'rgba(139,92,246,0.25)',

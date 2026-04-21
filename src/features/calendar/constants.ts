@@ -2,7 +2,7 @@ import type { CalendarEventType } from '@/types/calendar';
 
 export const DAY_NAMES = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'] as const;
 
-export const ALL_TYPES: CalendarEventType[] = ['holiday', 'exam', 'activity', 'deadline'];
+export const ALL_TYPES: CalendarEventType[] = ['holiday', 'exam', 'activity', 'semester-start', 'semester-end'];
 
 export const glassCard: React.CSSProperties = {
   background: 'rgba(255, 255, 255, 0.65)',

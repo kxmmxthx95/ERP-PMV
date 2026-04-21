@@ -8,6 +8,8 @@ import PortalLayout from "@/components/layout/PortalLayout";
 
 // Pages
 import LoginPage from "@/features/auth/LoginPage";
+import SignupPage from "@/features/auth/SignupPage";
+import PendingUsersPage from "@/portals/sysadmin/PendingUsersPage";
 import SysAdminUsers from "@/portals/sysadmin/SysAdminUsers";
 import SysAdminLogs from "@/portals/sysadmin/SysAdminLogs";
 import { SysAdminSettings } from "@/portals/sysadmin/settings";
@@ -26,6 +28,7 @@ export const AppRouter = () => {
     <Routes>
       {/* Public Routes */}
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/signup" element={<SignupPage />} />
       <Route path="/unauthorized" element={<div className="p-10">คุณไม่มีสิทธิ์เข้าถึงหน้านี้</div>} />
 
       {/* 🛡️ SysAdmin Portal — DashboardLayout */}
@@ -33,6 +36,7 @@ export const AppRouter = () => {
         <Route path="/sysadmin" element={<DashboardLayout />}>
           <Route index element={<Navigate to="users" replace />} />
           <Route path="users"    element={<SysAdminUsers />} />
+          <Route path="pending-users" element={<PendingUsersPage />} />
           <Route path="roles"    element={<RolePermissionManager />} />
           <Route path="schools"  element={<div className="p-4">โรงเรียน / สาขา</div>} />
           <Route path="structure" element={<CurriculumManager />} />

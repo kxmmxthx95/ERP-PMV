@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import type { LucideProps } from 'lucide-react';
 import type { ComponentType } from 'react';
+import { auth } from '@/lib/firebase';
+import { signOut } from 'firebase/auth';
 
 const ICON_MAP: Record<string, ComponentType<LucideProps>> = {
   dashboard: LayoutDashboard,
@@ -218,8 +220,13 @@ export default function PortalLayout() {
   const config = (role && ROLE_CONFIG[role]) ? ROLE_CONFIG[role] : DEFAULT_CONFIG;
 
   const handleLogout = async () => {
-    await logout();
-    navigate('/login');
+    try {
+      await signOut(auth); // 1. บังคับลบ Session ของ Firebase ออกจากเบราว์เซอร์
+      if (typeof logout === 'function') await logout(); // 2. ล้าง State ภายในแอปพลิเคชัน
+    } catch (error) {
+      console.error("Logout error:", error);
+    }
+    navigate('/login', { replace: true }); // replace: true เพื่อไม่ให้กดปุ่ม Back กลับมาได้
   };
 
   return (

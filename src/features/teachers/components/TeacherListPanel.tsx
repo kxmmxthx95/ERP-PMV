@@ -1,7 +1,11 @@
 import { useState } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, User, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { ButtonGroup, ButtonGroupSeparator } from '@/components/ui/button-group';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import React from 'react';
 import type { TeacherProfile } from '@/types/teacher';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
@@ -9,7 +13,6 @@ import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 interface TeacherListPanelProps {
   teachers: TeacherProfile[];
   selectedId: string | null;
-  teacherLoadSummary: Record<string, number>; // teacherId → currentHours
   onSelect: (id: string) => void;
   onAdd: () => void;
 }
@@ -28,19 +31,35 @@ const glassCard: React.CSSProperties = {
 export default function TeacherListPanel({
   teachers,
   selectedId,
-  teacherLoadSummary,
   onSelect,
   onAdd,
 }: TeacherListPanelProps) {
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState<DeptFilter>(ALL_DEPT);
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
 
+  // Filter logic using local state
   const filtered = teachers.filter(t => {
     const matchDept = deptFilter === ALL_DEPT || t.department === deptFilter;
     const q = search.toLowerCase();
     const matchSearch = !q || t.name.toLowerCase().includes(q) || t.employeeCode.toLowerCase().includes(q);
     return matchDept && matchSearch;
   });
+
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  const paginated = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  // Handlers
+  const handleFilterChange = (dept: DeptFilter) => {
+    setDeptFilter(dept);
+    setCurrentPage(1);
+  };
+
+  const handleSearchChange = (val: string) => {
+    setSearch(val);
+    setCurrentPage(1);
+  };
 
   return (
     <div className="flex flex-col h-full rounded-2xl overflow-hidden" style={glassCard}>
@@ -53,7 +72,7 @@ export default function TeacherListPanel({
           </div>
           <button
             onClick={onAdd}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white transition-all shadow-sm"
             style={{ background: '#1e1e1e' }}
           >
             <Plus size={13} />
@@ -61,110 +80,94 @@ export default function TeacherListPanel({
           </button>
         </div>
 
-        {/* Search */}
+        {/* Search Input */}
         <div className="relative">
           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30" />
           <Input
             value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="ค้นหาชื่อ / รหัสครู..."
+            onChange={e => handleSearchChange(e.target.value)}
+            placeholder="ค้นหาชื่อ..."
             className="h-8 pl-8 text-xs rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 placeholder:text-black/25"
           />
         </div>
 
-        {/* Dept filter */}
-        <div className="flex gap-1.5 flex-wrap">
-          {([ALL_DEPT, 'early', 'primary', 'secondary'] as DeptFilter[]).map(dept => {
-            const isAll = dept === ALL_DEPT;
-            const cfg = isAll ? null : DEPARTMENT_CONFIG[dept as Department];
-            const isActive = deptFilter === dept;
-            return (
-              <button
-                key={dept}
-                onClick={() => setDeptFilter(dept)}
-                className="px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all border"
-                style={{
-                  background: isActive ? (cfg ? cfg.bg : 'rgba(0,0,0,0.08)') : 'transparent',
-                  color: isActive ? (cfg ? cfg.color : 'rgba(0,0,0,0.70)') : 'rgba(0,0,0,0.40)',
-                  borderColor: isActive ? (cfg ? cfg.border : 'rgba(0,0,0,0.15)') : 'rgba(0,0,0,0.06)',
-                }}
-              >
-                {isAll ? 'ทั้งหมด' : cfg!.label}
-              </button>
-            );
-          })}
+        {/* Dept filter (100% Match with Form Style) */}
+        <div className="flex w-full">
+          <ButtonGroup className="w-full bg-black/[0.03] rounded-xl p-0.5 border-black/5">
+            {([ALL_DEPT, 'early', 'primary', 'secondary'] as DeptFilter[]).map((dept, index, array) => {
+              const isAll = dept === ALL_DEPT;
+              const cfg = isAll ? null : DEPARTMENT_CONFIG[dept as Department];
+              const isActive = deptFilter === dept;
+              return (
+                <React.Fragment key={dept}>
+                  <Button
+                    variant={isActive ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => handleFilterChange(dept)}
+                    className={`flex-1 h-8 text-[11px] font-bold rounded-lg px-2 ${
+                      isActive 
+                        ? 'bg-[#1e1e1e] text-white shadow-md' 
+                        : 'text-black/40 hover:text-black/60'
+                    }`}
+                  >
+                    {isAll ? 'ทั้งหมด' : cfg!.label}
+                  </Button>
+                  {index < array.length - 1 && <ButtonGroupSeparator />}
+                </React.Fragment>
+              );
+            })}
+          </ButtonGroup>
         </div>
       </div>
 
-      {/* List */}
+      {/* List Area */}
       <div className="flex-1 overflow-y-auto">
-        {filtered.length === 0 ? (
+        {paginated.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 text-black/30">
-            <p className="text-xs">ไม่พบครู</p>
+            <p className="text-xs font-medium">ไม่พบรายชื่อครู</p>
           </div>
         ) : (
           <ul className="divide-y divide-black/[0.04]">
-            {filtered.map(teacher => {
+            {paginated.map(teacher => {
               const cfg = DEPARTMENT_CONFIG[teacher.department];
-              const currentHours = teacherLoadSummary[teacher.id] ?? 0;
-              const isOverloaded = currentHours > teacher.maxHoursPerWeek;
               const isSelected = selectedId === teacher.id;
 
               return (
                 <li key={teacher.id}>
                   <button
                     onClick={() => onSelect(teacher.id)}
-                    className="w-full text-left px-4 py-3 transition-colors hover:bg-black/[0.025]"
-                    style={isSelected ? { background: 'rgba(0,0,0,0.04)' } : undefined}
+                    className="w-full text-left px-4 py-3 transition-colors hover:bg-black/[0.015]"
+                    style={isSelected ? { background: 'rgba(0,0,0,0.035)' } : undefined}
                   >
                     <div className="flex items-start gap-3">
-                      {/* Avatar */}
-                      <div
-                        className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-bold shrink-0 mt-0.5"
-                        style={{ background: cfg.bg, color: cfg.color }}
-                      >
-                        {teacher.name.replace('ครู', '').trim().charAt(0)}
-                      </div>
+                      <Avatar className="size-8 rounded-full shrink-0 mt-0.5" style={{ background: cfg.bg }}>
+                        <AvatarImage src={teacher.photoURL} alt={teacher.name} className="rounded-full" />
+                        <AvatarFallback 
+                          className="rounded-full" 
+                          style={{ background: cfg.bg, color: cfg.color }}
+                        >
+                          <User size={16} />
+                        </AvatarFallback>
+                      </Avatar>
 
-                      {/* Info */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-xs font-semibold text-black/80 truncate">{teacher.name}</span>
+                          <span className="text-xs font-bold text-black/80 truncate">{teacher.name}</span>
                           {teacher.status === 'inactive' && (
-                            <span className="text-[10px] text-black/30 bg-black/05 px-1.5 py-0.5 rounded-md">ไม่ active</span>
+                            <span className="text-[9px] text-black/30 bg-black/05 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">OFF</span>
                           )}
                         </div>
-                        <p className="text-[10px] text-black/40 mt-0.5">
-                          <span className="font-mono">{teacher.employeeCode}</span>
-                          {teacher.position && <span className="ml-1.5">· {teacher.position}</span>}
-                        </p>
-                        {/* Load bar */}
-                        <div className="flex items-center gap-2 mt-1.5">
-                          <div className="flex-1 h-1 rounded-full bg-black/[0.07] overflow-hidden max-w-[80px]">
-                            <div
-                              className="h-full rounded-full transition-all"
-                              style={{
-                                width: `${Math.min(100, Math.round(currentHours / teacher.maxHoursPerWeek * 100))}%`,
-                                background: isOverloaded ? '#ef4444' : cfg.color,
-                              }}
-                            />
-                          </div>
-                          <span
-                            className="text-[10px] font-mono"
-                            style={{ color: isOverloaded ? '#ef4444' : 'rgba(0,0,0,0.35)' }}
-                          >
-                            {currentHours}/{teacher.maxHoursPerWeek} คาบ
-                          </span>
-                          {isOverloaded && (
-                            <span className="text-[10px] text-red-500 font-semibold">เกิน!</span>
-                          )}
-                        </div>
+                        {teacher.position && (
+                          <p className="text-[10px] text-black/40 mt-0.5">
+                            {teacher.position}
+                          </p>
+                        )}
+
                       </div>
 
-                      {/* Subject count badge */}
                       <Badge
                         variant="outline"
-                        className="text-[10px] shrink-0 rounded-lg border-black/10 text-black/40 font-mono"
+                        className="text-[10px] shrink-0 rounded-lg border-black/10 text-black/40 font-mono py-0 h-5"
                       >
                         {teacher.teachingSubjectIds.length} วิชา
                       </Badge>
@@ -176,6 +179,58 @@ export default function TeacherListPanel({
           </ul>
         )}
       </div>
+
+      {/* Pagination Footer */}
+      {totalPages > 1 && (
+        <div className="px-3 py-2 bg-black/[0.02] border-t border-black/05 flex items-center justify-center gap-1 backdrop-blur-md mt-auto">
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            className="h-7 w-7 rounded-lg text-black/40 hover:bg-black/5 disabled:opacity-20 transition-all"
+          >
+            <ChevronLeft size={14} />
+          </Button>
+
+          <div className="flex items-center gap-1 mx-1">
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => {
+              // Show limited pages if too many
+              if (totalPages > 5) {
+                if (page !== 1 && page !== totalPages && Math.abs(page - currentPage) > 1) {
+                  if (page === 2 || page === totalPages - 1) return <span key={page} className="text-[10px] text-black/20 px-0.5">...</span>;
+                  return null;
+                }
+              }
+
+              const isActive = currentPage === page;
+              return (
+                <button
+                  key={page}
+                  onClick={() => setCurrentPage(page)}
+                  className={`h-7 min-w-[28px] px-1.5 rounded-lg text-[10px] font-bold transition-all ${
+                    isActive 
+                      ? 'bg-[#1e1e1e] text-white shadow-sm' 
+                      : 'text-black/40 hover:bg-black/5 hover:text-black/70'
+                  }`}
+                >
+                  {page}
+                </button>
+              );
+            })}
+          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            className="h-7 w-7 rounded-lg text-black/40 hover:bg-black/5 disabled:opacity-20 transition-all"
+          >
+            <ChevronRight size={14} />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

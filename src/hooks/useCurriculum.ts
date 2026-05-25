@@ -4,6 +4,10 @@ import {
 } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { db } from '@/lib/firebase';
+import { sessionCache } from '@/lib/sessionCache';
+
+const CACHE_SUBJECTS = 'cache:subjects';
+const CACHE_MAPS     = 'cache:curriculum_maps';
 import {
   DEPARTMENT_CONFIG,
   type Subject, type CurriculumMap, type Department, type CreditSummary,
@@ -15,24 +19,36 @@ export type NewSubject = Omit<Subject, 'id'>;
 export type NewCurriculumMap = Omit<CurriculumMap, 'id'>;
 
 export function useCurriculum() {
-  const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [maps, setMaps] = useState<CurriculumMap[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [subjects, setSubjects] = useState<Subject[]>(
+    () => sessionCache.get<Subject[]>(CACHE_SUBJECTS) ?? []
+  );
+  const [maps, setMaps] = useState<CurriculumMap[]>(
+    () => sessionCache.get<CurriculumMap[]>(CACHE_MAPS) ?? []
+  );
+  const [isLoading, setIsLoading] = useState(
+    () => !sessionCache.get(CACHE_SUBJECTS) || !sessionCache.get(CACHE_MAPS)
+  );
 
-  // ── ดึงข้อมูล Real-time จาก Firebase ──────────────────────────────────────────
+  // ── ดึงข้อมูล Real-time จาก Firebase (ข้ามถ้า cache ยังใช้ได้) ──────────────────
   useEffect(() => {
-    let subjectsLoaded = false;
-    let mapsLoaded = false;
+    const cachedSubjects = sessionCache.get<Subject[]>(CACHE_SUBJECTS);
+    const cachedMaps     = sessionCache.get<CurriculumMap[]>(CACHE_MAPS);
+    if (cachedSubjects && cachedMaps) return;
+
+    let cancelled = false;
+    let subjectsLoaded = !!cachedSubjects;
+    let mapsLoaded     = !!cachedMaps;
 
     const checkLoading = () => {
       if (subjectsLoaded && mapsLoaded) {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
-    const unsubSubjects = onSnapshot(
+    const unsubSubjects = cachedSubjects ? () => {} : onSnapshot(
       collection(db, 'subject_repository'),
       (snap) => {
+        if (cancelled) return;
         const allSubjects: Subject[] = [];
         snap.forEach(doc => {
           const data = doc.data() as { groups: any };
@@ -40,7 +56,6 @@ export function useCurriculum() {
             Object.values(data.groups).forEach((group: any) => {
               if (group.categories) {
                 Object.values(group.categories).forEach((subjectMap: any) => {
-                  // ตอนนี้ subjectMap คือ { [id]: subject }
                   if (typeof subjectMap === 'object' && subjectMap !== null) {
                     Object.values(subjectMap).forEach((s: any) => {
                       if (s && s.id) allSubjects.push(s as Subject);
@@ -52,33 +67,43 @@ export function useCurriculum() {
           }
         });
         setSubjects(allSubjects);
+        sessionCache.set(CACHE_SUBJECTS, allSubjects);
         subjectsLoaded = true;
         checkLoading();
       },
       (err) => {
+        if (cancelled) return;
         console.error('Subjects Repository Permission Denied:', err.message);
         setIsLoading(false);
       }
     );
 
-    const unsubMaps = onSnapshot(
+    const unsubMaps = cachedMaps ? () => {} : onSnapshot(
       collection(db, 'curriculum_maps'),
       (snap) => {
-        setMaps(snap.docs.map(d => ({ id: d.id, ...d.data() } as CurriculumMap)));
+        if (cancelled) return;
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as CurriculumMap));
+        setMaps(data);
+        sessionCache.set(CACHE_MAPS, data);
         mapsLoaded = true;
         checkLoading();
       },
       (err) => {
+        if (cancelled) return;
         console.error('Curriculum Maps Permission Denied:', err.message);
         setIsLoading(false);
       }
     );
 
     return () => {
+      cancelled = true;
       unsubSubjects();
       unsubMaps();
     };
   }, []);
+
+  const invalidateCurriculumCache = () =>
+    sessionCache.invalidate(CACHE_SUBJECTS, CACHE_MAPS);
 
   // ── Subject CRUD (Hierarchical) ──────────────────────────────────────────────
   const addSubject = async (data: NewSubject) => {
@@ -124,6 +149,7 @@ export function useCurriculum() {
         }
       });
 
+      invalidateCurriculumCache();
       console.log('Subject added to repository:', subjectId);
       return subjectId;
     } catch (error) {
@@ -176,6 +202,7 @@ export function useCurriculum() {
       }
       
       await batch.commit();
+      invalidateCurriculumCache();
       console.log('Successfully added', items.length, 'subjects in bulk');
     } catch (error) {
       console.error('Error adding bulk subjects:', error);
@@ -206,6 +233,7 @@ export function useCurriculum() {
       await updateDoc(docRef, {
         [registryPath]: { ...oldSubject, ...data }
       });
+      invalidateCurriculumCache();
     }
   };
 
@@ -262,6 +290,7 @@ export function useCurriculum() {
       });
       await batch.commit();
     }
+    invalidateCurriculumCache();
   };
 
   // ── Curriculum Map CRUD ─────────────────────────────────────────────────────
@@ -278,6 +307,7 @@ export function useCurriculum() {
     if (description) newMap.description = description;
 
     const docRef = await addDoc(collection(db, 'curriculum_maps'), newMap);
+    invalidateCurriculumCache();
     return { id: docRef.id, ...newMap } as CurriculumMap;
   };
 
@@ -316,6 +346,7 @@ export function useCurriculum() {
     // Firestore write
     try {
       await updateDoc(doc(db, 'curriculum_maps', existing.id), { sections });
+      invalidateCurriculumCache();
       toast.success(`${action} "${sub?.name || subjectId}" ใน [${gradeLevel}] เทอม ${semester} เรียบร้อยแล้ว`);
     } catch (error) {
       // Rollback optimistic update
@@ -327,10 +358,12 @@ export function useCurriculum() {
 
   const deleteCurriculumMap = async (id: string) => {
     await deleteDoc(doc(db, 'curriculum_maps', id));
+    invalidateCurriculumCache();
   };
 
   const updateCurriculumMap = async (id: string, data: Partial<CurriculumMap>) => {
     await updateDoc(doc(db, 'curriculum_maps', id), data as any);
+    invalidateCurriculumCache();
   };
 
   // สร้างหลักสูตรใหม่ (สร้าง 1 Doc พร้อมโครงสร้าง แผนก/ชั้น/เทอม ครบครัน)
@@ -366,6 +399,7 @@ export function useCurriculum() {
     if (description) newMap.description = description;
 
     const docRef = await addDoc(collection(db, 'curriculum_maps'), newMap);
+    invalidateCurriculumCache();
     return { id: docRef.id, ...newMap } as CurriculumMap;
   };
 
@@ -438,6 +472,7 @@ export function useCurriculum() {
     }
 
     await batch.commit();
+    invalidateCurriculumCache();
     return { cloned, skipped };
   };
 

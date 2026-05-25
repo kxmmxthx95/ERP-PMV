@@ -2,7 +2,7 @@
 import { useAuthStore } from "@/store/authStore";
 
 export const useAuth = () => {
-  const { user, role, isLoading, logout } = useAuthStore();
+  const { user, userData, role, isLoading, logout } = useAuthStore();
 
   const isAuthorized = (allowedRoles: string[]) => {
     if (!role) return false;
@@ -11,5 +11,5 @@ export const useAuth = () => {
     return allowedRoles.includes(role);
   };
 
-  return { user, role, isLoading, logout, isAuthorized };
+  return { user, userData, role, isLoading, logout, isAuthorized };
 };

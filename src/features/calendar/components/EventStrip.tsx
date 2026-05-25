@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { format } from 'date-fns';
 import { th } from 'date-fns/locale';
-import { Pencil } from 'lucide-react';
+import { Pencil, GripVertical, CalendarX } from 'lucide-react';
 import { EVENT_TYPE_CONFIG, type CalendarEventType, type CalendarEvent } from '@/types/calendar';
 
 interface EventStripProps {
@@ -11,7 +11,6 @@ interface EventStripProps {
   onEditEvent?: (event: CalendarEvent) => void;
 }
 
-// Google Calendar holidays (id starts with "gcal-") are read-only
 const isEditable = (event: CalendarEvent) => !event.id.startsWith('gcal-') && !event.id.startsWith('api-');
 
 export default function EventStrip({ selectedDate, events, activeFilters, onEditEvent }: EventStripProps) {
@@ -24,67 +23,93 @@ export default function EventStrip({ selectedDate, events, activeFilters, onEdit
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: 0.2, ease: 'easeInOut' }}
-          style={{ borderTop: '1px solid rgba(0,0,0,0.06)', overflow: 'hidden' }}
+          transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+          style={{ borderTop: '1px solid rgba(0,0,0,0.05)', overflow: 'hidden' }}
         >
-          <div className="px-6 py-4">
-            <p className="text-xs font-bold text-black/40 mb-3 uppercase tracking-wider">
-              {format(selectedDate, 'd MMMM', { locale: th })} {selectedDate.getFullYear() + 543}
-            </p>
+          <div className="px-5 pt-4 pb-5">
+            {/* Date label */}
+            <div className="flex items-center gap-2.5 mb-4">
+              <div
+                className="w-1 h-5 rounded-full"
+                style={{ background: 'linear-gradient(180deg, #7c3aed, #4f46e5)' }}
+              />
+              <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest font-sukhumvit">
+                {format(selectedDate, 'd MMMM', { locale: th })} พ.ศ. {selectedDate.getFullYear() + 543}
+              </p>
+            </div>
 
             {filtered.length === 0 ? (
-              <p className="text-xs text-black/30 italic">ไม่มีกิจกรรมในวันนี้</p>
+              <div className="flex flex-col items-center gap-2 py-4 text-slate-300">
+                <CalendarX size={24} strokeWidth={1.5} />
+                <p className="text-[11px] font-medium font-sarabun">ไม่มีกิจกรรมในวันนี้</p>
+              </div>
             ) : (
               <div className="space-y-2">
-                {filtered.map(ev => {
+                {filtered.map((ev, i) => {
                   const cfg = EVENT_TYPE_CONFIG[ev.type];
                   const editable = isEditable(ev);
                   return (
-                    <div
+                    <motion.div
                       key={ev.id}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.04 }}
                       draggable={editable}
                       onDragStart={(e: any) => {
                         if (!editable) return;
                         e.dataTransfer.setData('text/plain', ev.id);
                         e.dataTransfer.effectAllowed = 'move';
                       }}
-                      className={`flex items-start gap-3 p-3 rounded-2xl ${editable ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                      style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}
+                      className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-150 ${editable ? 'cursor-grab active:cursor-grabbing hover:shadow-md' : ''}`}
+                      style={{
+                        background: cfg.bg,
+                        border: `1px solid ${cfg.border}`,
+                      }}
                     >
+                      {editable && (
+                        <GripVertical size={13} className="text-slate-300 flex-shrink-0" />
+                      )}
+
                       <span
-                        className="w-2 h-2 rounded-full mt-0.5 flex-shrink-0"
-                        style={{ background: cfg.color, boxShadow: `0 0 6px ${cfg.glow}` }}
+                        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                        style={{
+                          background: cfg.color,
+                          boxShadow: `0 0 8px ${cfg.glow}`,
+                        }}
                       />
+
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs font-semibold text-black/75 truncate">{ev.title}</p>
+                        <p className="text-[12px] font-bold text-slate-700 truncate font-sukhumvit">{ev.title}</p>
                         {ev.description && (
-                          <p className="text-[11px] text-black/40 mt-0.5 line-clamp-2">{ev.description}</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-1 font-sarabun">{ev.description}</p>
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <div className="flex items-center gap-2 flex-shrink-0">
                         <span
-                          className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          className="text-[9px] font-black px-2.5 py-1 rounded-full font-sukhumvit"
                           style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}
                         >
                           {cfg.label}
                         </span>
 
                         {editable && onEditEvent && (
-                          <button
+                          <motion.button
                             onClick={() => onEditEvent(ev)}
-                            className="w-6 h-6 rounded-full flex items-center justify-center transition-all duration-150 hover:scale-110 active:scale-95"
+                            whileHover={{ scale: 1.12 }}
+                            whileTap={{ scale: 0.88 }}
+                            className="w-7 h-7 rounded-full flex items-center justify-center transition-all duration-150"
                             style={{
-                              background: 'rgba(0,0,0,0.06)',
-                              color: 'rgba(0,0,0,0.40)',
+                              background: 'rgba(15,23,42,0.06)',
+                              color: 'rgba(15,23,42,0.40)',
                             }}
                             title="แก้ไขกิจกรรม"
                           >
-                            <Pencil size={11} />
-                          </button>
+                            <Pencil size={10} />
+                          </motion.button>
                         )}
                       </div>
-                    </div>
+                    </motion.div>
                   );
                 })}
               </div>

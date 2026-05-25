@@ -1,11 +1,14 @@
 import { useState, useMemo, useEffect } from 'react';
 import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { sessionCache } from '@/lib/sessionCache';
+
+const CACHE_SYLLABI = 'cache:syllabi';
 import type {
   CourseSyllabus, NewSyllabus, WeeklyPlan, TeachingWeekInfo, AssessmentSchema,
 } from '@/types/syllabus';
 import type { CalendarEvent } from '@/types/calendar';
-import type { AcademicYear } from '@/portals/sysadmin/settings/types';
+import type { AcademicYear } from '@/types/settings';
 
 // ── Teaching Week Calculator ──────────────────────────────────────────────────
 // หัวใจของ feature: คำนวณสัปดาห์สอนจริงจาก calendar
@@ -118,12 +121,17 @@ export function generateWeeklyPlanSlots(
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useSyllabus() {
-  const [syllabi, setSyllabi] = useState<CourseSyllabus[]>([]);
+  const [syllabi, setSyllabi] = useState<CourseSyllabus[]>(
+    () => sessionCache.get<CourseSyllabus[]>(CACHE_SYLLABI) ?? []
+  );
 
-  // ── ดึงข้อมูล Real-time จาก Firebase ──────────────────────────────────────────
+  // ── ดึงข้อมูล Real-time จาก Firebase (ข้ามถ้า cache ยังใช้ได้) ──────────────────
   useEffect(() => {
+    if (sessionCache.get(CACHE_SYLLABI)) return;
     const unsub = onSnapshot(collection(db, 'syllabi'), (snap) => {
-      setSyllabi(snap.docs.map(d => ({ id: d.id, ...d.data() } as CourseSyllabus)));
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as CourseSyllabus));
+      setSyllabi(data);
+      sessionCache.set(CACHE_SYLLABI, data);
     });
     return () => unsub();
   }, []);
@@ -132,12 +140,9 @@ export function useSyllabus() {
 
   const createSyllabus = async (data: NewSyllabus): Promise<CourseSyllabus> => {
     const now = new Date().toISOString().slice(0, 10);
-    const newSyllabusData = {
-      ...data,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const newSyllabusData = { ...data, createdAt: now, updatedAt: now };
     const docRef = await addDoc(collection(db, 'syllabi'), newSyllabusData);
+    sessionCache.invalidate(CACHE_SYLLABI);
     return { id: docRef.id, ...newSyllabusData } as CourseSyllabus;
   };
 
@@ -146,10 +151,12 @@ export function useSyllabus() {
       ...data,
       updatedAt: new Date().toISOString().slice(0, 10)
     });
+    sessionCache.invalidate(CACHE_SYLLABI);
   };
 
   const deleteSyllabus = async (id: string) => {
     await deleteDoc(doc(db, 'syllabi', id));
+    sessionCache.invalidate(CACHE_SYLLABI);
   };
 
   // ── Weekly Plan CRUD ──────────────────────────────────────────────────────────
@@ -164,6 +171,7 @@ export function useSyllabus() {
       weeklyPlan: updatedPlan,
       updatedAt: new Date().toISOString().slice(0, 10)
     });
+    sessionCache.invalidate(CACHE_SYLLABI);
   };
 
   const updateAssessment = async (syllabusId: string, assessment: AssessmentSchema) => {

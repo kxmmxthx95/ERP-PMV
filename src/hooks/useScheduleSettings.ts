@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
 export interface ScheduleSettings {
@@ -47,18 +47,13 @@ export function useScheduleSettings(classId?: string) {
 
   // ── Real-time listener ────────────────────────────────────────────────────
   useEffect(() => {
-    if (!classId) {
-      setSettings(DEFAULT_SETTINGS);
-      setLoading(false);
-      return;
-    }
-
+    const targetId = classId || 'school_wide';
     setLoading(true);
-    const ref = doc(db, 'class_settings', classId);
+
+    const ref = doc(db, 'class_settings', targetId);
     const unsub = onSnapshot(ref, (snap) => {
       if (snap.exists()) {
         const data = snap.data() as Partial<ScheduleSettings> & { breakPeriods?: number[] };
-        // Migration: ข้อมูลเก่าเก็บ lunch ไว้ใน breakPeriods → ย้ายไป lunchPeriods
         const hasLunch = Array.isArray(data.lunchPeriods);
         setSettings({
           periodCount: data.periodCount ?? DEFAULT_SETTINGS.periodCount,
@@ -66,11 +61,32 @@ export function useScheduleSettings(classId?: string) {
           breakPeriods: hasLunch ? (data.breakPeriods ?? []) : [],
           periodTimes: data.periodTimes ?? DEFAULT_SETTINGS.periodTimes,
         });
+        setLoading(false);
+      } else if (classId) {
+        // If class settings missing, try fallback to school_wide (one-time fetch)
+        const schoolRef = doc(db, 'class_settings', 'school_wide');
+        getDoc(schoolRef).then((schoolSnap) => {
+          if (schoolSnap.exists()) {
+            const data = schoolSnap.data() as Partial<ScheduleSettings> & { breakPeriods?: number[] };
+            const hasLunch = Array.isArray(data.lunchPeriods);
+            setSettings({
+              periodCount: data.periodCount ?? DEFAULT_SETTINGS.periodCount,
+              lunchPeriods: hasLunch ? data.lunchPeriods! : (data.breakPeriods ?? DEFAULT_SETTINGS.lunchPeriods),
+              breakPeriods: hasLunch ? (data.breakPeriods ?? []) : [],
+              periodTimes: data.periodTimes ?? DEFAULT_SETTINGS.periodTimes,
+            });
+          } else {
+            setSettings(DEFAULT_SETTINGS);
+          }
+          setLoading(false);
+        }).catch(() => {
+          setSettings(DEFAULT_SETTINGS);
+          setLoading(false);
+        });
       } else {
-        // ยังไม่มี doc → ใช้ค่า default (ยังไม่บันทึกลง Firestore จนกว่า user จะแก้ไข)
         setSettings(DEFAULT_SETTINGS);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return unsub;
@@ -78,10 +94,10 @@ export function useScheduleSettings(classId?: string) {
 
   // ── บันทึกลง Firestore ────────────────────────────────────────────────────
   const persist = async (patch: Partial<ScheduleSettings>) => {
-    if (!classId) return;
+    const targetId = classId || 'school_wide';
     const next = { ...settingsRef.current, ...patch };
     setSettings(next); // optimistic update
-    await setDoc(doc(db, 'class_settings', classId), next, { merge: true });
+    await setDoc(doc(db, 'class_settings', targetId), next, { merge: true });
   };
 
   // ── เพิ่มคาบท้ายสุด ──────────────────────────────────────────────────────
@@ -174,6 +190,16 @@ export function useScheduleSettings(classId?: string) {
     }
   };
 
+  // ── คัดลอกไปยังห้องอื่น ──────────────────────────────────────────────────
+  const copyToClasses = async (targetClassIds: string[]) => {
+    if (targetClassIds.length === 0) return;
+    const current = settingsRef.current;
+    const promises = targetClassIds.map(id => 
+      setDoc(doc(db, 'class_settings', id), current, { merge: true })
+    );
+    await Promise.all(promises);
+  };
+
   // ── helper สำหรับ ScheduleGrid (key number) ───────────────────────────────
   const periodTimesNumeric: Record<number, string> = {};
   for (const [k, v] of Object.entries(settings.periodTimes)) {
@@ -193,5 +219,6 @@ export function useScheduleSettings(classId?: string) {
     toggleLunchPeriod,
     cycleBreakType,
     updateSettings: persist,
+    copyToClasses,
   };
 }

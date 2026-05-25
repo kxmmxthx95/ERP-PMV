@@ -1,13 +1,10 @@
 import { useState } from 'react';
-import { Plus, Search, User, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import { Plus, User, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ButtonGroup, ButtonGroupSeparator } from '@/components/ui/button-group';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import React from 'react';
 import type { TeacherProfile } from '@/types/teacher';
-import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 
 interface TeacherListPanelProps {
@@ -17,8 +14,6 @@ interface TeacherListPanelProps {
   onAdd: () => void;
 }
 
-const ALL_DEPT = 'all' as const;
-type DeptFilter = Department | typeof ALL_DEPT;
 
 const glassCard: React.CSSProperties = {
   background: 'rgba(255,255,255,0.72)',
@@ -34,90 +29,31 @@ export default function TeacherListPanel({
   onSelect,
   onAdd,
 }: TeacherListPanelProps) {
-  const [search, setSearch] = useState('');
-  const [deptFilter, setDeptFilter] = useState<DeptFilter>(ALL_DEPT);
+
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 10;
 
-  // Filter logic using local state
-  const filtered = teachers.filter(t => {
-    const matchDept = deptFilter === ALL_DEPT || t.department === deptFilter;
-    const q = search.toLowerCase();
-    const matchSearch = !q || t.name.toLowerCase().includes(q) || t.employeeCode.toLowerCase().includes(q);
-    return matchDept && matchSearch;
-  });
-
-  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
-  const paginated = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(teachers.length / ITEMS_PER_PAGE);
+  const paginated = teachers.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
   // Handlers
-  const handleFilterChange = (dept: DeptFilter) => {
-    setDeptFilter(dept);
-    setCurrentPage(1);
-  };
-
-  const handleSearchChange = (val: string) => {
-    setSearch(val);
-    setCurrentPage(1);
-  };
 
   return (
     <div className="flex flex-col h-full rounded-2xl overflow-hidden" style={glassCard}>
       {/* Header */}
-      <div className="px-4 pt-4 pb-3 border-b border-black/05 space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-bold text-black/80">รายชื่อครู</p>
-            <p className="text-[11px] text-black/35 mt-0.5">{teachers.filter(t => t.status === 'active').length} คน (active)</p>
-          </div>
-          <button
-            onClick={onAdd}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white transition-all shadow-sm"
-            style={{ background: '#1e1e1e' }}
-          >
-            <Plus size={13} />
-            เพิ่มครู
-          </button>
+      <div className="px-4 pt-4 pb-3 border-b border-black/05 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-bold text-black/80">รายชื่อครู</p>
+          <p className="text-[11px] text-black/35 mt-0.5">{teachers.filter(t => t.status === 'active').length} คน (active)</p>
         </div>
-
-        {/* Search Input */}
-        <div className="relative">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30" />
-          <Input
-            value={search}
-            onChange={e => handleSearchChange(e.target.value)}
-            placeholder="ค้นหาชื่อ..."
-            className="h-8 pl-8 text-xs rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 placeholder:text-black/25"
-          />
-        </div>
-
-        {/* Dept filter (100% Match with Form Style) */}
-        <div className="flex w-full">
-          <ButtonGroup className="w-full bg-black/[0.03] rounded-xl p-0.5 border-black/5">
-            {([ALL_DEPT, 'early', 'primary', 'secondary'] as DeptFilter[]).map((dept, index, array) => {
-              const isAll = dept === ALL_DEPT;
-              const cfg = isAll ? null : DEPARTMENT_CONFIG[dept as Department];
-              const isActive = deptFilter === dept;
-              return (
-                <React.Fragment key={dept}>
-                  <Button
-                    variant={isActive ? 'default' : 'ghost'}
-                    size="sm"
-                    onClick={() => handleFilterChange(dept)}
-                    className={`flex-1 h-8 text-[11px] font-bold rounded-lg px-2 ${
-                      isActive 
-                        ? 'bg-[#1e1e1e] text-white shadow-md' 
-                        : 'text-black/40 hover:text-black/60'
-                    }`}
-                  >
-                    {isAll ? 'ทั้งหมด' : cfg!.label}
-                  </Button>
-                  {index < array.length - 1 && <ButtonGroupSeparator />}
-                </React.Fragment>
-              );
-            })}
-          </ButtonGroup>
-        </div>
+        <button
+          onClick={onAdd}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white transition-all shadow-sm"
+          style={{ background: '#1e1e1e' }}
+        >
+          <Plus size={13} />
+          เพิ่มครู
+        </button>
       </div>
 
       {/* List Area */}

@@ -21,6 +21,8 @@ export interface Student {
   firstNameEn?: string;
   lastNameEn?: string;
   birthDate?: string;           // "YYYY-MM-DD"
+  phone?: string;               // เบอร์โทรศัพท์นักเรียน
+  email?: string;               // อีเมลนักเรียน
   gender: Gender;
   nationality?: string;
   religion?: string;
@@ -28,11 +30,82 @@ export interface Student {
   allergies?: string;
   photoURL?: string;
   address?: string;
+  // Detailed Address
+  address_houseNo?: string;
+  address_moo?: string;
+  address_village?: string;
+  address_street?: string;
+  address_subdistrict?: string;
+  address_district?: string;
+  address_province?: string;
+  address_postalCode?: string;
+  // Personal Details
+  nickname?: string;
+  friends_inSchool1?: string;
+  friends_inSchool2?: string;
+  friends_outside?: string;
+  financial_dailyAllowance?: number;
+  financial_dailySavings?: number;
+  financial_status?: 'enough' | 'not_enough';
+  // Family Details
+  familyCount?: number;
+  familyMembers?: Array<{
+    id: string;
+    prefix?: string;
+    firstName: string;
+    lastName: string;
+    relation: string;
+    age: number;
+    education: string;
+    occupation: string;
+    income: number;
+  }>;
+  // Education Details
+  edu_favoriteSubject?: string;
+  edu_favoriteSubjectReason?: string;
+  edu_leastFavoriteSubject?: string;
+  edu_leastFavoriteSubjectReason?: string;
+  edu_specialTalent?: string;
+  edu_gpaxYear1?: number;
+  edu_gpaxYear2?: number;
+  edu_selfPerception?: 'no_problem' | 'has_problem';
+  edu_problemDetail?: string;
+  edu_problemCause?: string;
+  // Home Visit Details (ตอนที่ 4)
+  visit_familyStatus?: 'warm' | 'unwarm';
+  visit_bothParentsDeceased?: boolean;
+  visit_fatherOrMotherDeceased?: boolean;
+  visit_parentsDivorced?: boolean;
+  visit_notLivingWithParents?: boolean;
+  visit_healthProblem?: boolean;
+  visit_healthProblemDetail?: string;
+  visit_risks?: string[];
+  visit_riskDetail?: string;
+  visit_economicProblem?: boolean;
+  visit_urgentHelpNeeded?: boolean;
+  visit_urgentHelpDetail?: string;
+  visit_housingStatus?: 'own' | 'rent' | 'relative' | 'welfare';
+  visit_housingType?: 'single_floor' | 'two_floors' | 'others';
+  visit_housingTypeDetail?: string;
+  visit_communityEnvironment?: 'safe' | 'unsafe';
+  visit_homeBehavior?: 'good' | 'disobedient';
+  visit_homeResponsibility?: 'has_tasks' | 'no_tasks';
+  visit_partTimeIncome?: boolean;
+  visit_internetAccess?: boolean;
+  visit_learningEquipment?: 'ready' | 'not_ready';
+  // แผนที่บ้าน
+  address_latitude?: number;
+  address_longitude?: number;
+  address_mapImageURL?: string;
   // ข้อมูลผู้ปกครอง
-  guardianName?: string;
+  guardianPrefix?: string;      // "นาย" | "นาง" | "นางสาว"
+  guardianFirstName?: string;
+  guardianLastName?: string;
   guardianPhone?: string;
   guardianRelation?: string;    // "บิดา" | "มารดา" | "ผู้ปกครอง"
   // System
+  authUid?: string;             // Firebase Auth UID (อาจต่างจาก id ถ้า id เป็น Firestore auto ID)
+  userId?: string;              // alias สำหรับ authUid (legacy)
   status: StudentStatus;
   createdAt: string;            // ISO date string
 }

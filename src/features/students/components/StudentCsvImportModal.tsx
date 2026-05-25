@@ -1,13 +1,22 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, FileText, AlertCircle, CheckCircle2, X, ArrowLeft, Loader } from 'lucide-react';
+import { Upload, FileText, AlertCircle, CheckCircle2, X, ArrowLeft, Loader, Settings2 } from 'lucide-react';
 import Papa from 'papaparse';
-import type { NewStudent, Student } from '@/types/student';
+import { collection, onSnapshot, orderBy, query, writeBatch, doc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import type { NewStudent, NewEnrollment } from '@/types/student';
+import type { AcademicYear } from '@/types/settings';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 interface StudentCsvImportModalProps {
   open: boolean;
   onClose: () => void;
-  onImport: (data: NewStudent) => Promise<Student>;
 }
 
 interface CsvRawRow {
@@ -31,6 +40,12 @@ interface ImportResult {
   succeeded: number;
   failed: number;
   errors: Array<{ rowIndex: number; message: string }>;
+}
+
+interface BatchConfig {
+  academicYearId: string;
+  gradeLevel: string;
+  departmentId: string;
 }
 
 const PREFIXES = ['เด็กชาย', 'เด็กหญิง', 'นาย', 'นางสาว'];
@@ -113,7 +128,8 @@ function validateRow(raw: CsvRawRow, rowIndex: number, existingCodes: Set<string
         bloodType: undefined,
         allergies: '',
         address: '',
-        guardianName: '',
+        guardianFirstName: '',
+        guardianLastName: '',
         guardianPhone: '',
         guardianRelation: 'บิดา',
       }
@@ -138,13 +154,35 @@ function downloadSampleCsv() {
   URL.revokeObjectURL(link.href);
 }
 
-export default function StudentCsvImportModal({ open, onClose, onImport }: StudentCsvImportModalProps) {
-  const [step, setStep] = useState<'upload' | 'preview'>('upload');
+export default function StudentCsvImportModal({ open, onClose }: StudentCsvImportModalProps) {
+  const [step, setStep] = useState<'upload' | 'config' | 'preview' | 'result'>('upload');
   const [parsedRows, setParsedRows] = useState<CsvParsedRow[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importProgress, setImportProgress] = useState(0);
+
+  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
+  const [config, setConfig] = useState<BatchConfig>({
+    academicYearId: '',
+    gradeLevel: '',
+    departmentId: 'secondary',
+  });
+
+  // ดึงข้อมูลปีการศึกษา
+  useEffect(() => {
+    if (!open) return;
+    const q = query(collection(db, 'academic_years'), orderBy('year', 'desc'));
+    const unsubscribe = onSnapshot(q, (snap) => {
+      const years = snap.docs.map(d => ({ id: d.id, ...d.data() } as AcademicYear));
+      setAcademicYears(years);
+      if (years.length > 0 && !config.academicYearId) {
+        setConfig(prev => ({ ...prev, academicYearId: years[0].year }));
+      }
+    });
+    return () => unsubscribe();
+  }, [open]);
 
   const resetModal = () => {
     setStep('upload');
@@ -152,6 +190,7 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
     setParseError(null);
     setIsImporting(false);
     setImportResult(null);
+    setImportProgress(0);
   };
 
   const handleClose = () => {
@@ -180,11 +219,11 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
         }
 
         // Second pass: validate rows
-        const parsed = rows.map((row, i) => validateRow(row, i + 2, existingCodes)); // +2 because row 1 is header, display is 1-indexed
+        const parsed = rows.map((row, i) => validateRow(row, i + 2, existingCodes));
 
         setParsedRows(parsed);
         setParseError(null);
-        setStep('preview');
+        setStep('config');
       },
       error: (err) => {
         setParseError(`อ่านไฟล์ CSV ไม่สำเร็จ: ${err.message}`);
@@ -211,22 +250,66 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
   };
 
   const handleImport = async () => {
+    if (!config.academicYearId || !config.gradeLevel || !config.departmentId) {
+      setParseError('กรุณากรอกข้อมูลการตั้งค่าให้ครบถ้วน');
+      return;
+    }
+
     setIsImporting(true);
     const validRows = parsedRows.filter(r => r.isValid && r.data);
     let succeeded = 0;
     const errors: ImportResult['errors'] = [];
 
-    for (const row of validRows) {
-      try {
-        await onImport(row.data!);
-        succeeded++;
-      } catch (e) {
-        errors.push({ rowIndex: row.rowIndex, message: (e as Error).message });
-      }
-    }
+    try {
+      const batch = writeBatch(db);
 
-    setImportResult({ succeeded, failed: errors.length, errors });
-    setIsImporting(false);
+      for (let i = 0; i < validRows.length; i++) {
+        const row = validRows[i];
+        try {
+          // สร้าง student document
+          const studentsRef = collection(db, 'students');
+          const studentDocRef = doc(studentsRef);
+
+          batch.set(studentDocRef, {
+            ...row.data!,
+            createdAt: new Date().toISOString().slice(0, 10),
+          });
+
+          // สร้าง enrollment document
+          const enrollmentsRef = collection(db, 'enrollments');
+          const enrollmentDocRef = doc(enrollmentsRef);
+
+          const enrollmentData: NewEnrollment = {
+            studentId: studentDocRef.id,
+            classId: '', // ยังไม่ได้กำหนด
+            className: '',
+            gradeLevel: config.gradeLevel,
+            departmentId: config.departmentId as any,
+            academicYearId: config.academicYearId,
+            semester: 1,
+            status: 'studying',
+          };
+
+          batch.set(enrollmentDocRef, {
+            ...enrollmentData,
+            enrolledAt: new Date().toISOString().slice(0, 10),
+          });
+
+          succeeded++;
+          setImportProgress(Math.round(((i + 1) / validRows.length) * 100));
+        } catch (e) {
+          errors.push({ rowIndex: row.rowIndex, message: (e as Error).message });
+        }
+      }
+
+      await batch.commit();
+      setStep('result');
+      setImportResult({ succeeded, failed: errors.length, errors });
+    } catch (e) {
+      setParseError(`เกิดข้อผิดพลาดในการนำเข้า: ${(e as Error).message}`);
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const validCount = parsedRows.filter(r => r.isValid).length;
@@ -263,7 +346,10 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
                   <div>
                     <h3 className="text-sm font-bold text-black/80">นำเข้านักเรียนจาก CSV</h3>
                     <p className="text-[10px] text-black/40 mt-0.5">
-                      {step === 'upload' ? 'อัปโหลดไฟล์ CSV' : 'ตรวจสอบข้อมูล'}
+                      {step === 'upload' && 'อัปโหลดไฟล์ CSV'}
+                      {step === 'config' && 'ตั้งค่าการนำเข้า'}
+                      {step === 'preview' && 'ตรวจสอบข้อมูล'}
+                      {step === 'result' && 'ผลการนำเข้า'}
                     </p>
                   </div>
                 </div>
@@ -277,6 +363,104 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
 
               {/* Content */}
               <div className="px-6 py-4 max-h-[60vh] overflow-y-auto">
+                {step === 'config' && (
+                  <div className="space-y-5">
+                    {/* Config Panel Header */}
+                    <div className="flex items-center gap-2">
+                      <Settings2 size={16} className="text-blue-600" />
+                      <h4 className="text-xs font-bold text-black/70">ตั้งค่าการนำเข้า</h4>
+                    </div>
+
+                    {/* Config Fields */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Academic Year */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] font-bold text-black/70">ปีการศึกษา</label>
+                        <Select value={config.academicYearId} onValueChange={(val) => setConfig(prev => ({ ...prev, academicYearId: val }))}>
+                          <SelectTrigger className="h-8 text-[11px]">
+                            <SelectValue placeholder="เลือกปีการศึกษา" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {academicYears.map(year => (
+                              <SelectItem key={year.id} value={year.year} className="text-[11px]">
+                                ปีการศึกษา {year.year}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Department */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] font-bold text-black/70">แผนก</label>
+                        <Select value={config.departmentId} onValueChange={(val) => setConfig(prev => ({ ...prev, departmentId: val }))}>
+                          <SelectTrigger className="h-8 text-[11px]">
+                            <SelectValue placeholder="เลือกแผนก" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="early" className="text-[11px]">ปฐมวัย</SelectItem>
+                            <SelectItem value="primary" className="text-[11px]">ประถมศึกษา</SelectItem>
+                            <SelectItem value="secondary" className="text-[11px]">มัธยมศึกษา</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Grade Level */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] font-bold text-black/70">ระดับชั้น</label>
+                        <Select value={config.gradeLevel} onValueChange={(val) => setConfig(prev => ({ ...prev, gradeLevel: val }))}>
+                          <SelectTrigger className="h-8 text-[11px]">
+                            <SelectValue placeholder="เลือกระดับชั้น" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {config.departmentId === 'early' && (
+                              <>
+                                <SelectItem value="อ.1" className="text-[11px]">อ.1</SelectItem>
+                                <SelectItem value="อ.2" className="text-[11px]">อ.2</SelectItem>
+                                <SelectItem value="อ.3" className="text-[11px]">อ.3</SelectItem>
+                              </>
+                            )}
+                            {config.departmentId === 'primary' && (
+                              <>
+                                <SelectItem value="ป.1" className="text-[11px]">ป.1</SelectItem>
+                                <SelectItem value="ป.2" className="text-[11px]">ป.2</SelectItem>
+                                <SelectItem value="ป.3" className="text-[11px]">ป.3</SelectItem>
+                                <SelectItem value="ป.4" className="text-[11px]">ป.4</SelectItem>
+                                <SelectItem value="ป.5" className="text-[11px]">ป.5</SelectItem>
+                                <SelectItem value="ป.6" className="text-[11px]">ป.6</SelectItem>
+                              </>
+                            )}
+                            {config.departmentId === 'secondary' && (
+                              <>
+                                <SelectItem value="ม.1" className="text-[11px]">ม.1</SelectItem>
+                                <SelectItem value="ม.2" className="text-[11px]">ม.2</SelectItem>
+                                <SelectItem value="ม.3" className="text-[11px]">ม.3</SelectItem>
+                                <SelectItem value="ม.4" className="text-[11px]">ม.4</SelectItem>
+                                <SelectItem value="ม.5" className="text-[11px]">ม.5</SelectItem>
+                                <SelectItem value="ม.6" className="text-[11px]">ม.6</SelectItem>
+                              </>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {/* Info Box */}
+                    <div className="p-3 rounded-lg bg-blue-50/50 border border-blue-100">
+                      <p className="text-[10px] text-blue-800">
+                        <span className="font-bold">ข้อมูล:</span> นักเรียนจะถูกลงทะเบียนใหม่โดยสร้าง Enrollment ในปีการศึกษา แผนก และระดับชั้นที่เลือก
+                      </p>
+                    </div>
+
+                    {/* Preview Summary */}
+                    <div className="p-3 rounded-lg bg-amber-50/50 border border-amber-100">
+                      <p className="text-[11px] text-amber-800">
+                        <span className="font-bold">พร้อมนำเข้า:</span> {parsedRows.filter(r => r.isValid).length} แถว
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {step === 'upload' && (
                   <div className="space-y-4">
                     {/* Drop Zone */}
@@ -332,8 +516,16 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
 
                 {step === 'preview' && (
                   <div className="space-y-4">
-                    {/* Summary */}
+                    {/* Config Summary */}
                     <div className="p-3 rounded-lg bg-blue-50/50 border border-blue-100">
+                      <p className="text-[10px] text-black/70">
+                        <span className="font-bold">ตั้งค่า:</span> ปีการศึกษา {config.academicYearId} ·
+                        {config.departmentId === 'early' && ' ปฐมวัย'}{config.departmentId === 'primary' && ' ประถมศึกษา'}{config.departmentId === 'secondary' && ' มัธยมศึกษา'} · {config.gradeLevel}
+                      </p>
+                    </div>
+
+                    {/* Summary */}
+                    <div className="p-3 rounded-lg bg-green-50/50 border border-green-100">
                       <p className="text-[11px] text-black/70">
                         <span className="font-bold">{validCount}</span> แถวพร้อมนำเข้า
                         {invalidCount > 0 && (
@@ -347,7 +539,7 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
                     {/* Note */}
                     <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
                       <p className="text-[10px] text-amber-800">
-                        <span className="font-bold">หมายเหตุ:</span> ข้อมูลแผนกและระดับชั้นจะไม่ถูกบันทึกในขั้นตอนนี้ กรุณาลงทะเบียนห้องเรียนในภายหลัง
+                        <span className="font-bold">หมายเหตุ:</span> ระบบจะสร้างเรกคอร์ด Enrollment ให้โดยอัตโนมัติ สามารถเพิ่มการลงทะเบียนห้องเรียนได้ในภายหลัง
                       </p>
                     </div>
 
@@ -414,12 +606,12 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
                   </div>
                 )}
 
-                {importResult && (
+                {step === 'result' && importResult && (
                   <div className="space-y-4">
                     <div className="text-center py-6">
                       <CheckCircle2 size={48} className="mx-auto mb-4 text-green-500" />
                       <h4 className="text-sm font-bold text-black/80">นำเข้าสำเร็จ</h4>
-                      <p className="text-2xl font-bold text-green-600 mt-2">{importResult.succeeded}</p>
+                      <p className="text-3xl font-bold text-green-600 mt-2">{importResult.succeeded}</p>
                       <p className="text-[11px] text-black/60">นักเรียนถูกเพิ่มเข้าระบบ</p>
                     </div>
 
@@ -428,7 +620,7 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
                         <p className="text-[11px] font-bold text-red-700 mb-2">
                           ล้มเหลว: {importResult.failed} รายการ
                         </p>
-                        <ul className="space-y-1">
+                        <ul className="space-y-1 max-h-[200px] overflow-y-auto">
                           {importResult.errors.map((err, i) => (
                             <li key={i} className="text-[10px] text-red-600">
                               แถวที่ {err.rowIndex}: {err.message}
@@ -441,19 +633,37 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
                 )}
               </div>
 
+              {/* Progress Bar (Importing) */}
+              {isImporting && (
+                <div className="px-6 py-3 border-t border-black/[0.04]">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-[10px] font-bold text-black/70">กำลังนำเข้า...</p>
+                    <p className="text-[10px] font-bold text-blue-600">{importProgress}%</p>
+                  </div>
+                  <div className="w-full h-2 bg-black/[0.05] rounded-full overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${importProgress}%` }}
+                      transition={{ duration: 0.3 }}
+                      className="h-full bg-blue-500 rounded-full"
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Footer */}
               <div className="border-t border-black/[0.04] px-6 py-3 flex items-center justify-between gap-2">
-                {step === 'upload' && <div />}
-                {step === 'preview' && (
+                {(step === 'upload') && <div />}
+                {(step === 'config' || step === 'preview') && (
                   <button
-                    onClick={() => setStep('upload')}
+                    onClick={() => setStep(step === 'preview' ? 'config' : 'upload')}
                     className="flex items-center gap-1.5 text-[11px] font-bold text-black/60 hover:text-black/80 transition-colors"
                   >
                     <ArrowLeft size={12} />
                     ย้อนกลับ
                   </button>
                 )}
-                {importResult && <div />}
+                {step === 'result' && <div />}
 
                 <div className="flex items-center gap-2">
                   {step === 'upload' && (
@@ -462,6 +672,20 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
                       className="h-8 px-4 rounded-lg text-[11px] font-bold text-black/60 hover:bg-black/5 transition-colors"
                     >
                       ปิด
+                    </button>
+                  )}
+
+                  {step === 'config' && (
+                    <button
+                      onClick={() => setStep('preview')}
+                      disabled={!config.academicYearId || !config.gradeLevel || !config.departmentId}
+                      className={`h-8 px-6 rounded-lg text-[11px] font-bold text-white transition-all ${
+                        !config.academicYearId || !config.gradeLevel || !config.departmentId
+                          ? 'bg-blue-400/60 cursor-not-allowed'
+                          : 'bg-blue-500 hover:bg-blue-600'
+                      }`}
+                    >
+                      ถัดไป
                     </button>
                   )}
 
@@ -480,7 +704,7 @@ export default function StudentCsvImportModal({ open, onClose, onImport }: Stude
                     </button>
                   )}
 
-                  {importResult && (
+                  {step === 'result' && (
                     <button
                       onClick={handleClose}
                       className="h-8 px-6 rounded-lg text-[11px] font-bold text-white bg-blue-500 hover:bg-blue-600 transition-colors"

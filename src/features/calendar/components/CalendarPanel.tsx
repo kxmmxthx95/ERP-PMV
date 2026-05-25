@@ -5,10 +5,8 @@ import {
 } from 'date-fns';
 import type { CalendarEvent, CalendarEventType } from '@/types/calendar';
 import { glassCard, cardAnim } from '../constants';
-import { toDateStr } from '../utils';
 import CalendarMonthNav from './CalendarMonthNav';
 import CalendarDayGrid from './CalendarDayGrid';
-import EventStrip from './EventStrip';
 
 interface CalendarPanelProps {
   currentMonth: Date;
@@ -17,7 +15,6 @@ interface CalendarPanelProps {
   getEventsForDate: (dateStr: string) => CalendarEvent[];
   onChangeMonth: (month: Date) => void;
   onSelectDate: (day: Date) => void;
-  onEditEvent?: (event: CalendarEvent) => void;
   onAddEventForDate?: (day: Date) => void;
   onMoveEvent?: (eventId: string, newDate: Date) => void;
 }
@@ -44,20 +41,15 @@ export default function CalendarPanel({
   getEventsForDate,
   onChangeMonth,
   onSelectDate,
-  onEditEvent,
   onAddEventForDate,
   onMoveEvent,
 }: CalendarPanelProps) {
   const days = buildMonthGrid(currentMonth);
 
-  const selectedEvents = selectedDate && !isNaN(selectedDate.getTime())
-    ? getEventsForDate(toDateStr(selectedDate))
-    : [];
-
   return (
     <motion.div
       variants={cardAnim}
-      className="xl:col-span-2 rounded-3xl overflow-hidden"
+      className="rounded-[2rem] overflow-hidden"
       style={glassCard}
     >
       <CalendarMonthNav
@@ -75,13 +67,6 @@ export default function CalendarPanel({
         onSelectDate={onSelectDate}
         onAddEventForDate={onAddEventForDate}
         onMoveEvent={onMoveEvent}
-      />
-
-      <EventStrip
-        selectedDate={selectedDate}
-        events={selectedEvents}
-        activeFilters={activeFilters}
-        onEditEvent={onEditEvent}
       />
     </motion.div>
   );

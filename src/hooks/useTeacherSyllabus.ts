@@ -8,7 +8,7 @@
  */
 import { useState, useMemo } from 'react';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
-import { useTeacherManager } from '@/hooks/useTeacherManager';
+import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import {

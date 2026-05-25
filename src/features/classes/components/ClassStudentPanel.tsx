@@ -1,284 +1,450 @@
-import { useState, useMemo } from 'react';
+import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Users, UserPlus, Search, Pencil, UserMinus, MapPin } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { useStudentManager } from '@/hooks/useStudentManager';
-import ClassAddStudentModal from './ClassAddStudentModal';
+import {
+  ArrowLeft,
+  Star,
+  Users,
+  GraduationCap,
+  BookOpen,
+  BarChart3,
+} from 'lucide-react';
+import { PieChart as RechartsPieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { collection, query, where, onSnapshot, getDocs, doc, writeBatch } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import type { ClassRoom } from '@/types/class';
-import type { Department } from '@/types/curriculum';
-import { DEPARTMENT_CONFIG } from '@/types/curriculum';
+
+import ClassTeacherTab from './ClassTeacherTab';
+import ClassCourseTab from './ClassCourseTab';
 import { toast } from 'sonner';
 
 interface ClassStudentPanelProps {
   classRoom: ClassRoom;
   onBack: () => void;
-  onEditClass: () => void;
 }
 
-const glassCard: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.72)',
-  backdropFilter: 'blur(24px) saturate(150%)',
-  border: '1px solid rgba(255,255,255,0.90)',
-  boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
-};
+export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPanelProps) {
+  const [activeTab, setActiveTab] = useState<'roster' | 'advisors' | 'courses' | 'analytics'>('roster');
+  const [viewMode] = useState<'list' | 'grid'>('list');
+  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
+  const [classStudents, setClassStudents] = useState<any[]>([]);
 
-export default function ClassStudentPanel({ classRoom, onBack, onEditClass }: ClassStudentPanelProps) {
-  const { students, enrollments, updateEnrollment } = useStudentManager(classRoom.academicYearId);
-  const [addStudentOpen, setAddStudentOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
 
-  const cfg = DEPARTMENT_CONFIG[classRoom.departmentId as Department] ?? {
-    bg: '#f5f5f5', color: '#555', label: 'ไม่ระบุ',
-  };
 
-  // หานักเรียนที่อยู่ในห้องนี้
-  const classEnrollments = useMemo(() =>
-    enrollments.filter(
-      e => e.classId === classRoom.id &&
-        e.academicYearId === classRoom.academicYearId &&
-        e.semester === classRoom.semester,
-    ),
-    [enrollments, classRoom],
-  );
+  // 🚀 ดึงข้อมูลนักเรียนโดยตรงจาก Classroom ID เพื่อความแม่นยำสูงสุด
+  React.useEffect(() => {
+    // 1. ดึงจากฟิลด์ classroomId ใน Student Document (Primary)
+    const q = query(
+      collection(db, 'students'),
+      where('classroomId', '==', classRoom.id)
+    );
 
-  const classStudents = useMemo(() => {
-    const ids = new Set(classEnrollments.map(e => e.studentId));
-    return students
-      .filter(s => ids.has(s.id))
-      .filter(s => {
-        if (!searchTerm.trim()) return true;
-        const q = searchTerm.toLowerCase();
-        const fullName = `${s.prefix}${s.firstName} ${s.lastName}`.toLowerCase();
-        return fullName.includes(q) || s.studentCode.includes(q);
-      })
-      .sort((a, b) => a.studentCode.localeCompare(b.studentCode));
-  }, [students, classEnrollments, searchTerm]);
+    const unsub = onSnapshot(q, async (snap) => {
+      let students = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  const handleRemoveStudent = async (studentId: string, studentName: string) => {
-    const enrollment = classEnrollments.find(e => e.studentId === studentId);
-    if (!enrollment) return;
-    if (!window.confirm(`ย้าย ${studentName} ออกจากห้อง ${classRoom.className}?`)) return;
+      // 2. Fallback: ถ้าไม่พบ ให้ลองหาจากคอลเลกชัน Enrollments (Secondary)
+      if (students.length === 0) {
+        const enq = query(collection(db, 'enrollments'), where('classId', '==', classRoom.id));
+        const enSnap = await getDocs(enq);
+        const studentIds = enSnap.docs.map(d => d.data().studentId);
+
+        if (studentIds.length > 0) {
+          // ดึงข้อมูลนักเรียนตาม IDs ที่ได้จาก Enrollment
+          const stq = query(collection(db, 'students'), where('__name__', 'in', studentIds));
+          const stSnap = await getDocs(stq);
+          students = stSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        }
+      }
+
+      setClassStudents(students.sort((a: any, b: any) =>
+        (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true })
+      ));
+    });
+
+    return () => unsub();
+  }, [classRoom.id]);
+
+
+
+
+
+
+  // Mock attendance stats based on student count for now, until real attendance module is ready
+  const attendanceStats = [
+    { name: 'มาเรียน (Present)', value: 85, color: '#4ade80' },
+    { name: 'สาย (Late)', value: 10, color: '#facc15' },
+    { name: 'ขาด/ลา (Absent)', value: 5, color: '#f87171' },
+  ];
+
+  const isLoading = false; // Hooks are real-time, no explicit loading needed here as lists will just be empty initially
+
+  const togglePresident = async (studentId: string, currentStatus: boolean) => {
     try {
-      await updateEnrollment(enrollment.id, { classId: '', className: '' });
-      toast.success(`ย้าย ${studentName} ออกจากห้องแล้ว`);
-    } catch {
-      toast.error('เกิดข้อผิดพลาด');
+      const batch = writeBatch(db);
+
+      // 1. Reset all students in this class to not be president
+      classStudents.forEach(s => {
+        if (s.isPresident) {
+          batch.update(doc(db, 'students', s.id), { isPresident: false });
+        }
+      });
+
+      // 2. Set the new one if we're not just unsetting
+      if (!currentStatus) {
+        batch.update(doc(db, 'students', studentId), { isPresident: true });
+        const st = classStudents.find(s => s.id === studentId);
+        toast.success(`ตั้ง ${st?.firstName} ${st?.lastName} เป็นหัวหน้าห้องแล้ว`);
+      } else {
+        toast.success(`ยกเลิกตำแหน่งหัวหน้าห้องแล้ว`);
+      }
+
+      await batch.commit();
+    } catch (err) {
+      console.error('Error toggling president:', err);
+      toast.error('ไม่สามารถบันทึกข้อมูลได้');
     }
   };
 
-  const containerAnim = {
-    hidden: { opacity: 0 },
-    show: { opacity: 1, transition: { staggerChildren: 0.04 } },
-  };
-  const rowAnim = {
-    hidden: { opacity: 0, y: 8 },
-    show: { opacity: 1, y: 0 },
-  };
+  // Render Content แยกตามแต่ละ Tab
+  const renderTabContent = () => {
+    if (isLoading) {
+      return (
+        <div className="flex flex-col items-center justify-center h-64 text-black/40 gap-3">
+          <div className="w-6 h-6 border-2 border-black/20 border-t-black/60 rounded-full animate-spin" />
+          <p className="text-sm font-medium">กำลังโหลดข้อมูลห้องเรียน...</p>
+        </div>
+      );
+    }
 
-  return (
-    <div className="space-y-5 text-black">
-      {/* ── Header ── */}
-      <motion.div
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between gap-4"
-      >
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onBack}
-            className="h-9 w-9 rounded-xl hover:bg-black/5 text-black/50 hover:text-black/80 transition-colors"
-          >
-            <ArrowLeft size={18} />
-          </Button>
+    switch (activeTab) {
+      // Tab 1: รายชื่อนักเรียน และเลือกหัวหน้าห้อง
+      case 'roster': {
+        const totalCount = classStudents.length;
+        const maleCount = classStudents.filter(s => s.gender === 'male' || ['เด็กชาย', 'นาย', 'ด.ช.'].includes(s.prefix)).length;
+        const femaleCount = classStudents.filter(s => s.gender === 'female' || ['เด็กหญิง', 'นางสาว', 'นาง', 'ด.ญ.'].includes(s.prefix)).length;
+        
+        const theme = 
+          classRoom.departmentId === 'secondary' ? { gradient: 'from-indigo-600 to-purple-700', label: 'Secondary' } :
+          classRoom.departmentId === 'primary' ? { gradient: 'from-blue-500 to-cyan-500', label: 'Primary' } :
+          { gradient: 'from-rose-500 to-orange-500', label: 'Early' };
 
-          {/* Class badge + info */}
-          <div className="flex items-center gap-3">
-            <div
-              className="w-11 h-11 rounded-2xl flex items-center justify-center text-lg font-extrabold shrink-0"
-              style={{ background: cfg.bg, color: cfg.color }}
-            >
-              {classRoom.className.split('/')[0].slice(-1)}
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold text-black/85 tracking-tight">
-                  ห้อง {classRoom.className}
-                </h1>
-                <span
-                  className="px-2 py-0.5 rounded-md text-[10px] font-bold"
-                  style={{ background: cfg.bg, color: cfg.color }}
-                >
-                  {cfg.label}
-                </span>
+        return (
+          <div className="space-y-8">
+            {/* ── Apple Music Style Header ── */}
+            <div className="flex flex-col lg:flex-row gap-8 items-end mb-8">
+              {/* 1. Class Hero Card (Album Cover) */}
+              <div className="flex flex-col gap-3 shrink-0">
+                <div className={`w-48 h-48 lg:w-56 lg:h-56 rounded-xl bg-gradient-to-br ${theme.gradient} relative overflow-hidden shadow-lg shadow-black/5 group`}>
+                  <div className="absolute inset-0 bg-black/10 opacity-40" />
+                  <div className="absolute top-4 right-4 text-white/90 font-bold text-sm tracking-tight drop-shadow-sm">
+                    {classRoom.gradeLevel}
+                  </div>
+                  <div className="absolute bottom-4 left-4">
+                    <h2 className="text-white text-xl font-bold tracking-tight leading-none drop-shadow-sm">
+                      {theme.label}
+                    </h2>
+                  </div>
+                  <div className="absolute -bottom-12 -right-12 w-48 h-48 bg-white/20 rounded-full blur-3xl" />
+                </div>
               </div>
-              <p className="text-xs text-black/40 mt-0.5 flex items-center gap-2">
-                <Users size={11} className="inline" />
-                {classStudents.length} / {classRoom.maxStudents} คน
-                {classRoom.room && (
-                  <>
-                    <MapPin size={11} className="inline ml-1" />
-                    {classRoom.room}
-                  </>
-                )}
-                <span className="text-black/25">·</span>
-                ปี {classRoom.academicYearId} ภาคเรียนที่ {classRoom.semester}
-              </p>
+
+              {/* 2. Summary Widget (Album Metadata) */}
+              <div className="flex-1 w-full pb-2">
+                <div className="flex flex-col gap-5">
+                  <div className="w-full flex items-start flex-col justify-center">
+                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-1.5">นักเรียนทั้งหมด</p>
+                    <p className="text-3xl font-black text-slate-800 leading-none tracking-tight">{totalCount} <span className="text-[13px] font-bold text-slate-400 ml-1">คน</span></p>
+                  </div>
+                  
+                  <div className="w-full flex items-start flex-col justify-center">
+                    <p className="text-[11px] font-black text-blue-400 uppercase tracking-widest mb-1.5">นักเรียนชาย</p>
+                    <p className="text-3xl font-black text-blue-600 leading-none tracking-tight">{maleCount} <span className="text-[13px] font-bold text-blue-400 ml-1">คน</span></p>
+                  </div>
+                  
+                  <div className="w-full flex items-start flex-col justify-center">
+                    <p className="text-[11px] font-black text-pink-400 uppercase tracking-widest mb-1.5">นักเรียนหญิง</p>
+                    <p className="text-3xl font-black text-pink-600 leading-none tracking-tight">{femaleCount} <span className="text-[13px] font-bold text-pink-400 ml-1">คน</span></p>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onEditClass}
-            className="h-8 gap-1.5 text-xs font-medium text-black/50 hover:text-black/80 hover:bg-black/5 rounded-xl"
-          >
-            <Pencil size={13} />
-            แก้ไขห้อง
-          </Button>
-          <Button
-            onClick={() => setAddStudentOpen(true)}
-            className="h-8 gap-1.5 px-3 text-xs font-semibold text-white rounded-xl bg-[#1e1e1e] hover:bg-[#2a2a2a] border-0"
-            style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
-          >
-            <UserPlus size={13} />
-            จัดรายชื่อนักเรียน
-          </Button>
-        </div>
-      </motion.div>
-
-      {/* ── Search ── */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.05 }}
-        className="relative max-w-sm"
-      >
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30" />
-        <Input
-          value={searchTerm}
-          onChange={e => setSearchTerm(e.target.value)}
-          placeholder="ค้นหาชื่อ หรือรหัสนักเรียน..."
-          className="pl-8 h-9 text-[11px] rounded-xl bg-white/60 border-white/80 focus-visible:ring-1 focus-visible:ring-slate-300 backdrop-blur"
-        />
-      </motion.div>
-
-      {/* ── Student List ── */}
-      {classStudents.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          className="flex flex-col items-center justify-center h-52 gap-2 text-black/25 bg-white/40 rounded-2xl border border-black/5"
-        >
-          <Users size={32} strokeWidth={1.5} className="opacity-30" />
-          <p className="text-sm font-medium">ยังไม่มีนักเรียนในห้องนี้</p>
-          <p className="text-xs text-black/20">กด "จัดรายชื่อนักเรียน" เพื่อเพิ่ม</p>
-        </motion.div>
-      ) : (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="rounded-3xl overflow-hidden"
-          style={glassCard}
-        >
-          {/* Table header */}
-          <div
-            className="grid items-center px-4 py-2.5 border-b border-black/[0.04]"
-            style={{ gridTemplateColumns: '3rem 1fr 8rem 7rem 4rem', background: 'rgba(0,0,0,0.02)' }}
-          >
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider">#</span>
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider">ชื่อ-นามสกุล</span>
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider">รหัสนักเรียน</span>
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider">สถานะ</span>
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider text-center">จัดการ</span>
-          </div>
-
-          <AnimatePresence>
-            <motion.div
-              variants={containerAnim}
-              initial="hidden"
-              animate="show"
-              className="divide-y divide-black/[0.03]"
-            >
-              {classStudents.map((s, idx) => (
-                <motion.div
-                  key={s.id}
-                  variants={rowAnim}
-                  className="grid items-center px-4 py-2.5 hover:bg-black/[0.015] transition-colors"
-                  style={{ gridTemplateColumns: '3rem 1fr 8rem 7rem 4rem' }}
-                >
-                  {/* Index */}
-                  <span className="text-[11px] text-black/30 font-medium">{idx + 1}</span>
-
-                  {/* Name */}
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div
-                      className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
-                      style={{ background: cfg.bg, color: cfg.color }}
-                    >
-                      {s.firstName.charAt(0)}
+            {viewMode === 'list' ? (
+              <div className="bg-transparent overflow-x-auto pb-8">
+                <table className="w-full text-left text-sm border-separate border-spacing-0 min-w-[600px]">
+                  <thead>
+                    <tr className="border-b border-black/[0.08] text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                      <th className="py-3 px-4 font-semibold w-[45%]">ชื่อ-นามสกุล</th>
+                      <th className="py-3 px-4 font-semibold w-[20%] border-l border-black/[0.08]">รหัสนักเรียน</th>
+                      <th className="py-3 px-4 font-semibold w-[15%] border-l border-black/[0.08]">เพศ</th>
+                      <th className="py-3 px-4 font-semibold w-[10%] border-l border-black/[0.08] text-center">เลขที่</th>
+                      <th className="py-3 px-4 font-semibold w-[10%] text-center"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {classStudents.map((student, index) => {
+                      const isSelected = selectedStudentId === student.id;
+                      
+                      return (
+                      <tr 
+                        key={student.id} 
+                        onClick={() => setSelectedStudentId(student.id)}
+                        className={`transition-colors group cursor-pointer ${
+                          isSelected ? 'bg-blue-600' : 'hover:bg-black/[0.02]'
+                        }`}
+                      >
+                        <td className={`py-3 px-4 first:rounded-l-2xl transition-colors ${!isSelected && 'border-b border-black/[0.04]'}`}>
+                          <div className="flex items-center gap-3">
+                            {/* Avatar */}
+                            {student.photoURL ? (
+                              <img src={student.photoURL} alt={student.firstName} className="w-10 h-10 rounded-lg object-cover shadow-sm border border-black/5" />
+                            ) : (
+                              <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold border border-black/5 ${
+                                isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'
+                              }`}>
+                                {student.firstName.charAt(0)}
+                              </div>
+                            )}
+                            <div className="flex flex-col">
+                              <span className={`font-semibold text-[13px] ${isSelected ? 'text-white' : 'text-slate-800'}`}>
+                                {student.prefix}{student.firstName} {student.lastName}
+                                {(student as any).isPresident && <Star size={12} className={`inline ml-1.5 mb-0.5 ${isSelected ? 'fill-white text-white' : 'fill-yellow-400 text-yellow-400'}`} />}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className={`py-3 px-4 font-medium text-[12px] transition-colors ${isSelected ? 'text-white/80' : 'text-slate-500 border-b border-black/[0.04]'}`}>
+                          {student.studentCode || '-'}
+                        </td>
+                        <td className={`py-3 px-4 font-medium text-[12px] transition-colors ${isSelected ? 'text-white/80' : 'text-slate-500 border-b border-black/[0.04]'}`}>
+                          {student.gender === 'male' || ['เด็กชาย', 'นาย', 'ด.ช.'].includes(student.prefix) ? 'ชาย' : 'หญิง'}
+                        </td>
+                        <td className={`py-3 px-4 font-medium text-[12px] text-center transition-colors ${isSelected ? 'text-white/80' : 'text-slate-500 border-b border-black/[0.04]'}`}>
+                          {index + 1}
+                        </td>
+                        <td className={`py-3 px-4 text-center last:rounded-r-2xl transition-colors ${!isSelected && 'border-b border-black/[0.04]'}`}>
+                          <button
+                            className={`p-1.5 rounded-full transition-all ${
+                              isSelected ? 'hover:bg-white/20 text-white' : 'hover:bg-black/5 text-slate-400'
+                            }`}
+                            title={(student as any).isPresident ? "ยกเลิกหัวหน้าห้อง" : "ตั้งเป็นหัวหน้าห้อง"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              togglePresident(student.id, !!(student as any).isPresident);
+                            }}
+                          >
+                            <Star 
+                              size={18} 
+                              className={
+                                isSelected 
+                                  ? "text-white" 
+                                  : (student as any).isPresident 
+                                    ? "text-yellow-400 fill-yellow-400" 
+                                    : ""
+                              } 
+                            />
+                          </button>
+                        </td>
+                      </tr>
+                    )})}
+                    {classStudents.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="py-12 text-center text-slate-400 font-medium text-sm">
+                          ไม่พบรายชื่อนักเรียนในห้องนี้
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                {classStudents.map((student, index) => (
+                  <motion.div
+                    key={student.id}
+                    layout
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="group relative bg-white rounded-[2.5rem] p-6 border border-black/5 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden text-center"
+                  >
+                    {/* Index Badge */}
+                    <div className="absolute top-4 left-4 w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-[12px] font-black text-slate-300">
+                      {index + 1}
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold text-black/75 truncate">
-                        {s.prefix}{s.firstName} {s.lastName}
+
+                    {/* President Star */}
+                    <button
+                      onClick={() => togglePresident(student.id, !!(student as any).isPresident)}
+                      className="absolute top-4 right-4 p-2 rounded-full hover:bg-yellow-50 transition-colors z-10"
+                    >
+                      <Star
+                        size={20}
+                        className={(student as any).isPresident ? "fill-yellow-400 text-yellow-400 drop-shadow-sm" : "text-slate-100 group-hover:text-slate-200"}
+                      />
+                    </button>
+
+                    {/* Avatar Container */}
+                    <div className="w-20 h-20 mx-auto rounded-[2rem] overflow-hidden bg-slate-50 shadow-inner mb-4 relative ring-4 ring-black/[0.02]">
+                      <img
+                        src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${student.id}&backgroundColor=f8fafc`}
+                        alt="student"
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <h4 className="text-[14px] font-bold text-slate-900 truncate leading-tight">
+                        {student.prefix}{student.firstName}
+                      </h4>
+                      <h4 className="text-[14px] font-bold text-slate-900 truncate leading-tight">
+                        {student.lastName}
+                      </h4>
+                      <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mt-2">
+                        {student.studentCode || 'NO CODE'}
                       </p>
                     </div>
+                  </motion.div>
+                ))}
+                {classStudents.length === 0 && (
+                  <div className="col-span-full py-20 text-center text-slate-300 font-bold italic border-2 border-dashed border-slate-100 rounded-[3rem]">
+                    ไม่พบรายชื่อนักเรียนในห้องนี้
                   </div>
-
-                  {/* Student code */}
-                  <span className="text-[11px] text-black/45 font-medium">{s.studentCode}</span>
-
-                  {/* Status */}
-                  <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md w-fit ${
-                    s.status === 'active'
-                      ? 'bg-emerald-50 text-emerald-600'
-                      : 'bg-slate-100 text-slate-400'
-                  }`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${s.status === 'active' ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                    {s.status === 'active' ? 'กำลังศึกษา' : 'ไม่ใช้งาน'}
-                  </span>
-
-                  {/* Remove */}
-                  <div className="flex justify-center">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleRemoveStudent(s.id, `${s.prefix}${s.firstName} ${s.lastName}`)}
-                      className="h-7 w-7 text-black/30 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
-                      title="ย้ายออกจากห้อง"
-                    >
-                      <UserMinus size={13} />
-                    </Button>
-                  </div>
-                </motion.div>
-              ))}
-            </motion.div>
-          </AnimatePresence>
-
-          {/* Footer */}
-          <div className="px-4 py-2.5 border-t border-black/[0.04] flex items-center justify-between" style={{ background: 'rgba(0,0,0,0.015)' }}>
-            <span className="text-[10px] text-black/30 font-medium">
-              แสดง {classStudents.length} รายชื่อ
-              {searchTerm && ` (กรองจาก ${classEnrollments.length} คนทั้งหมด)`}
-            </span>
-            <span className="text-[10px] text-black/30">
-              ความจุ: {classRoom.studentCount}/{classRoom.maxStudents} คน
-            </span>
+                )}
+              </div>
+            )}
           </div>
-        </motion.div>
+        );
+      }
+
+      // Tab 2: ครูประจำชั้น (Advisors)
+      case 'advisors':
+        return (
+          <ClassTeacherTab
+            classRoom={classRoom}
+            cfg={{
+              bg: 'rgba(59,130,246,0.08)',
+              color: '#3b82f6',
+              label: 'ครูประจำชั้น'
+            }}
+          />
+        );
+
+      // Tab 3: รายวิชาที่เปิดสอน
+      case 'courses':
+        return (
+          <ClassCourseTab
+            classRoom={classRoom}
+            cfg={{
+              bg: 'rgba(59,130,246,0.08)',
+              color: '#3b82f6',
+              label: 'วิชาเรียน'
+            }}
+          />
+        );
+
+      // Tab 4: สถิติการเข้าเรียน (Glassmorphism + Recharts)
+      case 'analytics':
+        return (
+          <div className="flex flex-col items-center justify-center py-6">
+            <div className="w-full max-w-2xl bg-white/40 backdrop-blur-xl border border-white/60 p-8 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.06)]">
+              <h3 className="text-center text-lg font-bold text-black/80 mb-8">อัตราการเข้าเรียนเฉลี่ยของห้องนี้</h3>
+              <div className="h-[320px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <RechartsPieChart>
+                    <Pie
+                      data={attendanceStats}
+                      cx="50%" cy="50%"
+                      innerRadius={90} outerRadius={125}
+                      paddingAngle={4}
+                      dataKey="value"
+                      stroke="none"
+                      cornerRadius={6}
+                    >
+                      {attendanceStats.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.1)', padding: '12px' }}
+                      itemStyle={{ color: '#000', fontWeight: 'bold' }}
+                    />
+                    <Legend verticalAlign="bottom" height={40} iconType="circle" wrapperStyle={{ fontSize: '14px', fontWeight: 500 }} />
+                  </RechartsPieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        );
+    }
+  };
+
+  const tabs = [
+    { id: 'roster', label: 'รายชื่อนักเรียน', icon: Users },
+    { id: 'advisors', label: 'ครูประจำชั้น', icon: GraduationCap },
+    { id: 'courses', label: 'วิชาเรียน', icon: BookOpen },
+    { id: 'analytics', label: 'สถิติข้อมูล', icon: BarChart3 },
+  ] as const;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="space-y-6"
+    >
+      {/* ── Header Portal: Navigation Tabs (Same as Curriculum Design) ── */}
+      {typeof document !== 'undefined' && document.getElementById('header-portal-center') && createPortal(
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex items-center h-9 border border-black/[0.07] p-1 rounded-full bg-white/50 backdrop-blur-md pointer-events-auto"
+        >
+          {tabs.map((tab) => {
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center justify-center h-full px-5 rounded-full text-[10.5px] font-black transition-all whitespace-nowrap ${active
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-black/35 hover:text-black/60 hover:bg-black/[0.02]'
+                  }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </motion.div>,
+        document.getElementById('header-portal-center')!
       )}
 
-      {/* ── Modal ── */}
-      <ClassAddStudentModal
-        open={addStudentOpen}
-        onClose={() => setAddStudentOpen(false)}
-        targetClass={classRoom}
-      />
-    </div>
+      {/* ── Header Portal: Right Actions (Back Button) ── */}
+      {typeof document !== 'undefined' && document.getElementById('header-portal-right-actions') && createPortal(
+        <button
+          onClick={onBack}
+          className="w-9 h-9 rounded-full flex items-center justify-center text-slate-700 hover:bg-white/40 transition-colors"
+          style={{
+            background: 'rgba(255,255,255,0.35)',
+            backdropFilter: 'blur(20px) saturate(180%)',
+            border: '1px solid rgba(255,255,255,0.55)',
+          }}
+          title="ย้อนกลับ"
+        >
+          <ArrowLeft size={16} />
+        </button>,
+        document.getElementById('header-portal-right-actions')!
+      )}
+
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={activeTab}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.15 }}
+        >
+          {renderTabContent()}
+        </motion.div>
+      </AnimatePresence>
+    </motion.div>
   );
 }

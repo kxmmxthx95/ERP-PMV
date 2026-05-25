@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, X, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, X, CheckCircle2, BookOpen, User, Home } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
@@ -62,13 +62,28 @@ export default function ScheduleSlotModal({
   const [internalClassId, setInternalClassId] = useState('');
   const [conflictResult, setConflictResult] = useState<ConflictResult | null>(null);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  // ถ้า classId prop ว่าง ให้ใช้ internalClassId ที่ user เลือก
+  // Modal internal classroom filtering
+  const [modalFilterDept, setModalFilterDept] = useState<'all' | 'early' | 'primary' | 'secondary'>('all');
+  const [modalFilterGrade, setModalFilterGrade] = useState<string>('all');
+
+  const filteredModalClasses = useMemo(() => {
+    return classes.filter(c => {
+      const deptMatch = modalFilterDept === 'all' || c.department === modalFilterDept;
+      const gradeMatch = modalFilterGrade === 'all' || c.gradeLevel === modalFilterGrade;
+      return deptMatch && gradeMatch;
+    }).sort((a, b) => a.label.localeCompare(b.label, 'th', { numeric: true }));
+  }, [classes, modalFilterDept, modalFilterGrade]);
+
+  const availableModalGrades = useMemo(() => {
+    const src = modalFilterDept === 'all' ? classes : classes.filter(c => c.department === modalFilterDept);
+    return [...new Set(src.map(c => c.gradeLevel))].sort();
+  }, [classes, modalFilterDept]);
+
   const effectiveClassId = classId || internalClassId;
-
   const { periodTimes, lunchPeriods, breakPeriods } = useScheduleSettings(effectiveClassId);
 
-  // reset เมื่อ modal เปิด
   useEffect(() => {
     if (open) {
       setSubjectId(editingEntry?.subjectId ?? prefilledSubjectId ?? '');
@@ -77,172 +92,256 @@ export default function ScheduleSlotModal({
       setInternalClassId('');
       setConflictResult(null);
       setSaved(false);
+      setSaving(false);
     }
   }, [open, editingEntry, prefilledSubjectId, prefilledTeacherId]);
 
   const selectedSubject = subjects.find(s => s.id === subjectId);
   const selectedTeacher = teachers.find(t => t.id === teacherId);
 
-  // กรองครูเฉพาะที่ได้รับมอบหมายวิชานี้ (teachingSubjectIds)
-  // ถ้าครูไม่มี teachingSubjectIds (ข้อมูลเก่า) จะแสดงทุกคน
   const eligibleTeachers = subjectId
     ? teachers.filter(t =>
-      !t.teachingSubjectIds ||
-      t.teachingSubjectIds.length === 0 ||
-      t.teachingSubjectIds.includes(subjectId),
-    )
+        !t.teachingSubjectIds ||
+        t.teachingSubjectIds.length === 0 ||
+        t.teachingSubjectIds.includes(subjectId),
+      )
     : teachers;
 
   const isValid = subjectId && teacherId && day && period && effectiveClassId;
-
-  const handleSave = async () => {
-    if (!isValid || !day || !period) return;
-
-    const data: Omit<ScheduleEntry, 'id'> = {
-      classId: effectiveClassId,
-      subjectId,
-      subjectName: selectedSubject?.name ?? '',
-      subjectCode: selectedSubject?.code ?? '',
-      teacherId,
-      teacherName: selectedTeacher?.name ?? '',
-      day,
-      period,
-      room: room.trim() || undefined,
-      year,
-      semester,
-    };
-
-    const result = editingEntry
-      ? onUpdate(editingEntry.id, data)
-      : onSave(data);
-
-    // Handle both synchronous and asynchronous results
-    const conflictResult = result instanceof Promise ? await result : result;
-
-    setConflictResult(conflictResult);
-    if (!conflictResult.hasConflict) {
-      setSaved(true);
-      setTimeout(onClose, 800);
-    }
-  };
 
   if (!day || !period) return null;
 
   const isRest = lunchPeriods.includes(period) || breakPeriods.includes(period);
   const isLunch = lunchPeriods.includes(period);
+  const periodTime = periodTimes[period];
+
+  const handleSave = async () => {
+    if (!isValid || !day || !period) return;
+    setSaving(true);
+    setConflictResult(null);
+
+    const data: any = {
+      classId: effectiveClassId,
+      subjectId,
+      subjectName: selectedSubject?.name ?? '',
+      subjectCode: selectedSubject?.code ?? '',
+      subjectGroup: selectedSubject?.subjectGroup ?? '',
+      teacherId,
+      teacherName: selectedTeacher?.name ?? '',
+      day,
+      period,
+      year,
+      semester,
+    };
+
+    if (room.trim()) {
+      data.room = room.trim();
+    }
+
+    const result = editingEntry
+      ? onUpdate(editingEntry.id, data)
+      : onSave(data);
+
+    const resolved = result instanceof Promise ? await result : result;
+    setSaving(false);
+    setConflictResult(resolved);
+    if (!resolved.hasConflict) {
+      setSaved(true);
+      setTimeout(onClose, 700);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={v => !v && onClose()}>
       <DialogContent
-        className="max-w-md rounded-3xl border border-slate-200 p-0 overflow-hidden bg-white"
+        className="max-w-[420px] rounded-3xl border-0 p-0 overflow-hidden"
         style={{
-          boxShadow: '0 24px 64px rgba(0,0,0,0.10)',
+          background: 'rgba(255,255,255,0.97)',
+          backdropFilter: 'blur(24px)',
+          boxShadow: '0 32px 80px rgba(0,0,0,0.12), 0 4px 16px rgba(0,0,0,0.06)',
         }}
       >
-        <DialogHeader className="px-6 pt-6 pb-4 border-b border-slate-100">
-          <div className="flex items-center justify-between">
-            <DialogTitle className="text-base font-bold text-slate-800">
-              {editingEntry ? 'แก้ไขคาบเรียน' : 'เพิ่มคาบเรียน'}
-            </DialogTitle>
+        {/* Header */}
+        <DialogHeader className="px-6 pt-6 pb-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                style={{ background: 'rgba(99,102,241,0.10)', border: '1px solid rgba(99,102,241,0.20)' }}
+              >
+                <BookOpen size={16} className="text-indigo-600" />
+              </div>
+              <div>
+                <DialogTitle className="text-[15px] font-black text-black/85">
+                  {editingEntry ? 'แก้ไขคาบเรียน' : 'เพิ่มคาบเรียน'}
+                </DialogTitle>
+                <p className="text-[11px] text-black/40 mt-0.5 font-medium">
+                  {DAY_LABELS[day]}
+                  {period && ` · คาบ ${period}`}
+                  {periodTime && ` · ${periodTime}`}
+                  {effectiveClassId && ` · ${classes.find(c => c.id === effectiveClassId)?.label || effectiveClassId}`}
+                </p>
+              </div>
+            </div>
             <button
               onClick={onClose}
-              className="w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+              className="w-7 h-7 rounded-xl flex items-center justify-center text-black/30 hover:bg-black/[0.05] hover:text-black/55 transition-colors mt-0.5"
             >
-              <X size={15} />
+              <X size={14} />
             </button>
           </div>
-          <p className="text-xs text-slate-400 mt-1">
-            {DAY_LABELS[day]} · คาบ {period} ({periodTimes[period] || 'ยังไม่กำหนดเวลา'}){effectiveClassId ? ` · ห้อง ${effectiveClassId}` : ''}
-          </p>
         </DialogHeader>
 
         <div className="px-6 py-5 space-y-4">
           {isRest && (
-            <div className="p-3 rounded-xl bg-amber-50 border border-amber-100 text-xs text-amber-700">
+            <div
+              className="flex items-center gap-2 p-3 rounded-2xl text-xs font-medium"
+              style={{ background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', color: '#92400e' }}
+            >
+              <AlertTriangle size={13} />
               คาบที่ {period} เป็น{isLunch ? 'คาบพักกลางวัน' : 'คาบพักเบรก'} ไม่สามารถวางวิชาได้
             </div>
           )}
 
-          {/* Class selector — แสดงเมื่อไม่มี classId (เช่น drag จาก teacher panel) */}
+          {/* Class selector with filtering */}
           {!classId && (
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-slate-600">ห้องเรียน</Label>
-              <Select value={internalClassId} onValueChange={setInternalClassId}>
-                <SelectTrigger className="w-full h-10 text-xs rounded-xl bg-white border-slate-200 focus:ring-1 focus:ring-slate-400">
-                  <SelectValue placeholder="เลือกห้องเรียน..." />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl max-h-60">
-                  {classes.map(c => (
-                    <SelectItem key={c.id} value={c.id} className="text-xs font-semibold">
-                      {c.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <FieldGroup icon={<Home size={13} />} label="ห้องเรียน">
+              <div className="space-y-2.5">
+                {/* Internal Filters for Classrooms */}
+                <div className="flex flex-col gap-2 p-2.5 rounded-2xl bg-black/[0.03] border border-black/[0.05]">
+                  {/* Dept Filter */}
+                  <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+                    {['all', 'early', 'primary', 'secondary'].map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => {
+                          setModalFilterDept(d as any);
+                          setModalFilterGrade('all');
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                          modalFilterDept === d
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'bg-white/50 text-black/40 hover:bg-white hover:text-black/60'
+                        }`}
+                      >
+                        {d === 'all' ? 'ทั้งหมด' : d === 'early' ? 'อนุบาล' : d === 'primary' ? 'ประถม' : 'มัธยม'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Grade Filter */}
+                  {modalFilterDept !== 'all' && (
+                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pt-1 border-t border-black/[0.03]">
+                      <button
+                        type="button"
+                        onClick={() => setModalFilterGrade('all')}
+                        className={`px-2 py-0.5 rounded-md text-[9px] font-bold transition-all ${
+                          modalFilterGrade === 'all'
+                            ? 'text-indigo-600'
+                            : 'text-black/30 hover:text-black/50'
+                        }`}
+                      >
+                        ทุกระดับ
+                      </button>
+                      {availableModalGrades.map((g) => (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => setModalFilterGrade(g)}
+                          className={`px-2 py-0.5 rounded-md text-[9px] font-bold transition-all whitespace-nowrap ${
+                            modalFilterGrade === g
+                              ? 'text-indigo-600'
+                              : 'text-black/30 hover:text-black/50'
+                          }`}
+                        >
+                          {g}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <Select value={internalClassId} onValueChange={setInternalClassId}>
+                  <SelectTrigger className="w-full h-10 text-xs rounded-2xl bg-white border-slate-200 focus:ring-1 focus:ring-indigo-300">
+                    <SelectValue placeholder={filteredModalClasses.length > 0 ? "เลือกห้องเรียน..." : "ไม่พบห้องเรียนที่ตรงเงื่อนไข"} />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl max-h-60">
+                    {filteredModalClasses.map(c => (
+                      <SelectItem key={c.id} value={c.id} className="text-xs font-semibold">
+                        {c.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </FieldGroup>
           )}
 
           {/* Subject */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-slate-600">วิชา</Label>
-            <Select value={subjectId} onValueChange={setSubjectId} disabled={isLunch}>
-              <SelectTrigger className="w-full h-10 text-xs rounded-xl bg-white border-slate-200 focus:ring-1 focus:ring-slate-400">
+          <FieldGroup icon={<BookOpen size={13} />} label="วิชา">
+            <Select value={subjectId} onValueChange={(v) => { setSubjectId(v); setTeacherId(''); }} disabled={isRest}>
+              <SelectTrigger className="w-full h-10 text-xs rounded-2xl bg-white border-slate-200 focus:ring-1 focus:ring-indigo-300">
                 <SelectValue placeholder="เลือกวิชา..." />
               </SelectTrigger>
-              <SelectContent className="rounded-xl max-h-60">
+              <SelectContent className="rounded-2xl max-h-60">
                 {subjects.map(s => (
                   <SelectItem key={s.id} value={s.id} className="text-xs">
-                    <span className="font-mono text-slate-400 mr-1.5">{s.code}</span>
+                    <span className="font-mono text-slate-400 mr-1.5 text-[10px]">{s.code}</span>
                     {s.name}
-                    <span className="ml-1.5 text-slate-400">({s.credits} นก.)</span>
+                    <span className="ml-1.5 text-slate-400 text-[10px]">{s.credits} นก.</span>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </FieldGroup>
 
           {/* Teacher */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-slate-600">ครูผู้สอน</Label>
-            <Select value={teacherId} onValueChange={setTeacherId} disabled={isLunch}>
-              <SelectTrigger className="w-full h-10 text-xs rounded-xl bg-white border-slate-200 focus:ring-1 focus:ring-slate-400">
-                <SelectValue placeholder="เลือกครู..." />
+          <FieldGroup icon={<User size={13} />} label="ครูผู้สอน">
+            <Select value={teacherId} onValueChange={setTeacherId} disabled={isRest || !subjectId}>
+              <SelectTrigger className="w-full h-10 text-xs rounded-2xl bg-white border-slate-200 focus:ring-1 focus:ring-indigo-300">
+                <SelectValue placeholder={subjectId ? 'เลือกครู...' : 'เลือกวิชาก่อน'} />
               </SelectTrigger>
-              <SelectContent className="rounded-xl max-h-52">
+              <SelectContent className="rounded-2xl max-h-52">
                 {eligibleTeachers.map(t => (
                   <SelectItem key={t.id} value={t.id} className="text-xs">{t.name}</SelectItem>
                 ))}
+                {eligibleTeachers.length === 0 && (
+                  <div className="px-3 py-4 text-center text-xs text-slate-400">
+                    ไม่มีครูที่รับผิดชอบวิชานี้
+                  </div>
+                )}
               </SelectContent>
             </Select>
-          </div>
+          </FieldGroup>
 
-          {/* Room (optional) */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-slate-600">ห้องเรียน <span className="font-normal text-slate-400">(ไม่บังคับ)</span></Label>
+          {/* Room */}
+          <FieldGroup icon={<Home size={13} />} label="ห้องเรียน (ไม่บังคับ)">
             <Input
               value={room}
               onChange={e => setRoom(e.target.value)}
-              placeholder="เช่น ห้อง 201, ห้องวิทย์..."
-              disabled={isLunch}
-              className="w-full h-10 text-xs rounded-xl bg-white border-slate-200 focus-visible:ring-1 focus-visible:ring-slate-400 placeholder:text-slate-300"
+              placeholder="เช่น ห้อง 201, ห้องวิทยาศาสตร์..."
+              disabled={isRest}
+              className="w-full h-10 text-xs rounded-2xl bg-white border-slate-200 focus-visible:ring-1 focus-visible:ring-indigo-300 placeholder:text-slate-300"
             />
-          </div>
+          </FieldGroup>
 
-          {/* Conflict warnings */}
+          {/* Conflict */}
           <AnimatePresence>
             {conflictResult?.hasConflict && (
               <motion.div
-                initial={{ opacity: 0, y: -6 }}
+                initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                className="rounded-xl border border-red-200 bg-red-50 p-3 space-y-2"
+                exit={{ opacity: 0, y: -4 }}
+                className="rounded-2xl p-3 space-y-1.5"
+                style={{ background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.18)' }}
               >
                 <div className="flex items-center gap-1.5 text-red-600">
-                  <AlertTriangle size={14} />
+                  <AlertTriangle size={13} />
                   <span className="text-xs font-bold">พบปัญหาตารางซ้อนทับ</span>
                 </div>
                 {conflictResult.conflicts.map((c, i) => (
-                  <p key={i} className="text-[11px] text-red-500 pl-5">{c.message}</p>
+                  <p key={i} className="text-[11px] text-red-500 pl-5 leading-relaxed">{c.message}</p>
                 ))}
               </motion.div>
             )}
@@ -252,26 +351,30 @@ export default function ScheduleSlotModal({
           <AnimatePresence>
             {saved && (
               <motion.div
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 flex items-center gap-2 text-emerald-600"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="rounded-2xl p-3 flex items-center gap-2"
+                style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.20)' }}
               >
-                <CheckCircle2 size={14} />
-                <span className="text-xs font-semibold">บันทึกสำเร็จ</span>
+                <CheckCircle2 size={14} className="text-emerald-500" />
+                <span className="text-xs font-bold text-emerald-600">บันทึกสำเร็จ</span>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
         {/* Footer */}
-        <div className="px-6 pb-6 flex items-center justify-between gap-2">
+        <div
+          className="px-6 pb-6 pt-2 flex items-center justify-between gap-2 border-t"
+          style={{ borderColor: 'rgba(0,0,0,0.05)' }}
+        >
           <div>
             {editingEntry && onDelete && (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => { onDelete(editingEntry.id); onClose(); }}
-                className="text-red-500 hover:text-red-600 hover:bg-red-50 text-xs h-8 rounded-lg"
+                className="text-red-500 hover:text-red-600 hover:bg-red-50 text-xs h-8 rounded-xl px-3"
               >
                 ลบคาบนี้
               </Button>
@@ -282,21 +385,37 @@ export default function ScheduleSlotModal({
               variant="outline"
               size="sm"
               onClick={onClose}
-              className="text-xs h-8 rounded-lg border-slate-200 text-slate-600 hover:bg-slate-50"
+              className="text-xs h-8 rounded-xl border-slate-200 text-slate-600 hover:bg-slate-50 px-4"
             >
               ยกเลิก
             </Button>
             <Button
               size="sm"
               onClick={handleSave}
-              disabled={!isValid || isRest || saved}
-              className="text-xs h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-white disabled:opacity-40"
+              disabled={!isValid || isRest || saved || saving}
+              className="text-xs h-8 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-40 px-4 shadow-sm shadow-indigo-200/60"
             >
-              {editingEntry ? 'บันทึกการแก้ไข' : 'เพิ่มลงตาราง'}
+              {saving ? 'กำลังบันทึก...' : saved ? 'บันทึกแล้ว' : editingEntry ? 'บันทึก' : 'เพิ่มลงตาราง'}
             </Button>
           </div>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function FieldGroup({ icon, label, children }: {
+  icon: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <span className="text-black/30">{icon}</span>
+        <Label className="text-[11px] font-bold text-black/50">{label}</Label>
+      </div>
+      {children}
+    </div>
   );
 }

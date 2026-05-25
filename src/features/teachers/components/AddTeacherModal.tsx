@@ -1,31 +1,23 @@
 import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Search, UserCheck, UserPlus, Pencil } from 'lucide-react';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Search, UserCheck, Layout, Upload, Loader2 } from 'lucide-react';
+import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '@/lib/firebase';
 import { useNamePrefix } from '@/hooks/useNamePrefix';
 import type { TeacherProfile, NewTeacherProfile } from '@/types/teacher';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 import { toast } from 'sonner';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 import FormModal from '@/components/ui/FormModal';
-import { ButtonGroup, ButtonGroupSeparator } from '@/components/ui/button-group';
-import React from 'react';
-
-interface UserSearchResult {
-  id: string;
-  name: string;
-  email: string;
-  phone?: string;
-  role: string;
-  department?: string;
-}
 
 interface AddTeacherModalProps {
   open: boolean;
@@ -37,86 +29,125 @@ interface AddTeacherModalProps {
   onDelete?: (id: string) => void;
 }
 
-const POSITIONS = [
-  'ครูบรรจุ',
-  'ครูอัตราจ้าง',
-  'ครูพิเศษ',
-  'อื่นๆ',
-];
+interface UserSearchResult {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  role: string;
+  department?: string;
+  photoURL?: string;
+}
 
 const DEFAULT_FORM: NewTeacherProfile = {
   name: '',
-  employeeCode: '',
   email: '',
   phone: '',
   department: 'primary',
   position: 'ครูบรรจุ',
   teachingSubjectIds: [],
-  maxHoursPerWeek: 20,
   status: 'active',
 };
+
+const POSITIONS = ['ครูบรรจุ', 'ครูอัตราจ้าง', 'ครูพิเศษ'];
 
 export default function AddTeacherModal({
   open,
   editingTeacher,
-  existingTeachers = [],
   onClose,
   onSubmit,
   onUpdate,
-  onDelete,
 }: AddTeacherModalProps) {
+  const [activeTab, setActiveTab] = useState<'profile' | 'search'>('profile');
   const [form, setForm] = useState<NewTeacherProfile>(DEFAULT_FORM);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<UserSearchResult[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
-  // ตรวจสอบความซ้ำซ้อน
-  const duplicateTeacher = !editingTeacher && form.email 
-    ? existingTeachers.find(t => t.email?.toLowerCase() === form.email?.toLowerCase())
-    : null;
-
-  // ส่วนจัดการชื่อแยกส่วน
   const { prefixes, formatFullName, extractNameParts } = useNamePrefix('teacher');
   const [prefix, setPrefix] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
 
-  const isOther = form.position !== 'ครูบรรจุ' &&
-    form.position !== 'ครูอัตราจ้าง' &&
-    form.position !== 'ครูพิเศษ' &&
-    form.position !== '';
-
   useEffect(() => {
-    if (open) {
-      if (editingTeacher) {
-        setForm({
-          name: editingTeacher.name || '',
-          employeeCode: editingTeacher.employeeCode || '',
-          email: editingTeacher.email || '',
-          phone: editingTeacher.phone || '',
-          department: editingTeacher.department || 'primary',
-          position: editingTeacher.position || 'ครูประจำการ',
-          teachingSubjectIds: editingTeacher.teachingSubjectIds || [],
-          maxHoursPerWeek: editingTeacher.maxHoursPerWeek || 20,
-          status: editingTeacher.status || 'active',
-        });
-        const parts = extractNameParts(editingTeacher.name);
-        setPrefix(parts.prefix);
-        setFirstName(parts.firstName);
-        setLastName(parts.lastName);
-      } else {
-        setForm(DEFAULT_FORM);
-        setSearchTerm('');
-        setSearchResults([]);
-        setSelectedUserId(null);
-        setPrefix('');
-        setFirstName('');
-        setLastName('');
+    const loadData = async () => {
+      if (open) {
+        if (editingTeacher) {
+          // 1. Initial set from teacher record
+          setForm({
+            name: editingTeacher.name || '',
+            email: editingTeacher.email || '',
+            phone: editingTeacher.phone || '',
+            department: editingTeacher.department || 'primary',
+            position: editingTeacher.position || 'ครูบรรจุ',
+            teachingSubjectIds: editingTeacher.teachingSubjectIds || [],
+            status: editingTeacher.status || 'active',
+            photoURL: editingTeacher.photoURL,
+            userId: editingTeacher.userId,
+          });
+
+          // 2. If has userId, try to sync latest photo from 'users' feature
+          if (editingTeacher.userId) {
+            setSelectedUserId(editingTeacher.userId);
+            try {
+              const userSnap = await getDoc(doc(db, 'users', editingTeacher.userId));
+              if (userSnap.exists()) {
+                const userData = userSnap.data();
+                if (userData.photoURL) {
+                  setForm(prev => ({ ...prev, photoURL: userData.photoURL }));
+                }
+              }
+            } catch (err) {
+              console.error('Error syncing user photo:', err);
+            }
+          }
+
+          const parts = extractNameParts(editingTeacher.name);
+          setPrefix(parts.prefix);
+          setFirstName(parts.firstName);
+          setLastName(parts.lastName);
+        } else {
+          setForm(DEFAULT_FORM);
+          setPrefix('');
+          setFirstName('');
+          setLastName('');
+          setSearchTerm('');
+          setSearchResults([]);
+          setSelectedUserId(null);
+          setActiveTab('profile');
+        }
       }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    };
+
+    loadData();
   }, [open, editingTeacher]);
+
+  const handleUploadImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('กรุณาเลือกไฟล์รูปภาพเท่านั้น');
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const fileName = `teacher_photos/${Date.now()}_${file.name}`;
+      const storageRef = ref(storage, fileName);
+      await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(storageRef);
+      setForm(prev => ({ ...prev, photoURL: url }));
+      toast.success('อัปโหลดรูปภาพสำเร็จ');
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error('เกิดข้อผิดพลาดในการอัปโหลด');
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleSearchUsers = async (val: string) => {
     setSearchTerm(val);
@@ -158,36 +189,27 @@ export default function AddTeacherModal({
       email: user.email,
       phone: user.phone || '',
       department: (user.department as Department) || prev.department,
+      photoURL: user.photoURL,
     }));
     setSelectedUserId(user.id);
-    setSearchResults([]);
-    setSearchTerm('');
-    toast.success('ดึงข้อมูลผู้ใช้งานสำหเร็จ');
+    setActiveTab('profile');
+    toast.success('ดึงข้อมูลสำเร็จ');
   };
-
-  const set = <K extends keyof NewTeacherProfile>(key: K, value: NewTeacherProfile[K]) => {
-    if (key === 'email' || key === 'name') {
-      setSelectedUserId(null);
-    }
-    setForm(prev => ({ ...prev, [key]: value }));
-  };
-
-  const isValid = prefix && firstName.trim() && lastName.trim() && form.department;
 
   const handleSubmit = async () => {
-    if (!isValid) return;
+    if (!prefix || !firstName.trim() || !lastName.trim()) {
+      toast.error('กรุณากรอกข้อมูลที่จำเป็นให้ครบถ้วน');
+      return;
+    }
     setIsSubmitting(true);
 
     try {
       const fullName = formatFullName(prefix, firstName.trim(), lastName.trim());
-      const employeeCode = form.employeeCode || `T-${Date.now().toString().slice(-6)}`;
-
       const finalForm = {
         ...form,
         name: fullName,
         email: form.email?.trim().toLowerCase() || '',
-        employeeCode,
-        userId: selectedUserId // ผูก UID ของระบบผู้ใช้งานไว้ (ถ้ามี)
+        userId: selectedUserId || undefined
       };
 
       if (editingTeacher && onUpdate) {
@@ -196,235 +218,250 @@ export default function AddTeacherModal({
         onSubmit(finalForm);
       }
 
-      toast.success(editingTeacher ? 'อัปเดตข้อมูลสำเร็จ' : 'เพิ่มข้อมูลครูสำเร็จ');
       onClose();
     } catch (error: any) {
-      console.error(error);
       toast.error('เกิดข้อผิดพลาด: ' + error.message);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleDelete = () => {
-    if (editingTeacher && onDelete) {
-      onDelete(editingTeacher.id);
-      onClose();
-    }
-  };
+  const Label = ({ children, required }: { children: React.ReactNode, required?: boolean }) => (
+    <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1 font-sarabun mb-1.5 block">
+      {children} {required && <span className="text-red-400">*</span>}
+    </label>
+  );
 
   return (
     <FormModal
       open={open}
       onClose={onClose}
       title={editingTeacher ? 'แก้ไขข้อมูลครู' : 'เพิ่มครูใหม่'}
-      icon={editingTeacher ? <Pencil size={18} /> : <UserPlus size={18} />}
+      subtitle={editingTeacher ? 'ปรับปรุงข้อมูลพื้นฐานและสังกัดของบุคลากร' : 'เพิ่มข้อมูลบุคลากรใหม่เข้าสู่ระบบบริหารจัดการ'}
       onSubmit={handleSubmit}
-      submitLabel={isSubmitting ? 'กำลังบันทึก...' : (editingTeacher ? 'บันทึกการแก้ไข' : 'บันทึก')}
-      submitDisabled={!isValid || isSubmitting || !!duplicateTeacher}
-      onDelete={editingTeacher ? handleDelete : undefined}
-      deleteLabel="ลบข้อมูลครู"
-      maxWidth="md"
+      submitLabel={isSubmitting ? 'กำลังบันทึก...' : editingTeacher ? 'บันทึกการแก้ไข' : 'สร้างข้อมูลครู'}
+      submitDisabled={isSubmitting}
+      icon={<Layout size={18} />}
     >
-      <div className="space-y-4 py-2">
-        {/* Compact Search - No Label */}
+      <div className="flex flex-col gap-5 py-2 font-sarabun">
+        {/* Tabs Control - Minimal Style */}
         {!editingTeacher && (
-          <div className="relative mb-2">
-            <div className="relative">
-              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30" />
-              <Input
-                value={searchTerm}
-                onChange={e => handleSearchUsers(e.target.value)}
-                placeholder="ค้นหาชื่อหรืออีเมลเพื่อดึงข้อมูลจากระบบ..."
-                className="h-10 pl-9 pr-3 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-200 transition-all"
-              />
-            </div>
-
-            {/* Search Results Dropdown */}
-            {searchResults.length > 0 && (
-              <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-white shadow-2xl rounded-2xl border border-black/5 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                {searchResults.map(u => {
-                  const isAlreadyTeacher = existingTeachers.some(t => t.email?.toLowerCase() === u.email?.toLowerCase());
-                  return (
-                    <button
-                      key={u.id}
-                      disabled={isAlreadyTeacher}
-                      onClick={() => selectUser(u)}
-                      className={`w-full px-4 py-2.5 flex items-center justify-between hover:bg-slate-50 transition-colors text-left border-b border-black/5 last:border-0 ${isAlreadyTeacher ? 'opacity-60 cursor-not-allowed' : ''}`}
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <p className="text-[11px] font-bold text-black/80">{u.name}</p>
-                          {isAlreadyTeacher && (
-                            <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-600 text-[8px] font-bold uppercase tracking-wider">บันทึกแล้ว</span>
-                          )}
-                        </div>
-                        <p className="text-[9px] text-black/40">{u.email} · {u.role}</p>
-                      </div>
-                      {isAlreadyTeacher ? (
-                        <div className="w-5 h-5 rounded-full bg-emerald-50 flex items-center justify-center">
-                          <UserCheck size={12} className="text-emerald-500" />
-                        </div>
-                      ) : (
-                        <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center">
-                          <UserPlus size={12} className="text-blue-500" />
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Duplicate Warning */}
-        {duplicateTeacher && (
-          <motion.div 
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="p-3 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-3"
-          >
-            <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm shrink-0">
-              <UserCheck size={16} className="text-amber-500" />
-            </div>
-            <div>
-              <p className="text-[11px] font-bold text-amber-900">บันทึกข้อมูลครูท่านนี้ไว้แล้ว</p>
-              <p className="text-[9px] text-amber-700/70 mt-0.5">อีเมล {duplicateTeacher.email} มียูสเซอร์ที่ใช้งานในตำแหน่งครู/เจ้าหน้าที่อยู่แล้ว</p>
-            </div>
-          </motion.div>
-        )}
-
-        {/* Name Section - Stacked vertically */}
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label className="text-[11px] font-semibold text-black/50 ml-1">คำนำหน้า <span className="text-red-400">*</span></Label>
-            <Select value={prefix} onValueChange={setPrefix}>
-              <SelectTrigger className="w-full h-10 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus:ring-1 focus:ring-slate-300">
-                <SelectValue placeholder="เลือกคำนำหน้า" />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl">
-                {prefixes.map(p => (
-                  <SelectItem key={p} value={p} className="text-[11px]">{p}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-[11px] font-semibold text-black/50 ml-1">ชื่อ <span className="text-red-400">*</span></Label>
-            <Input
-              value={firstName}
-              onChange={e => setFirstName(e.target.value)}
-              placeholder="กรอกชื่อ"
-              className="h-10 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 placeholder:text-black/20"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-[11px] font-semibold text-black/50 ml-1">นามสกุล <span className="text-red-400">*</span></Label>
-            <Input
-              value={lastName}
-              onChange={e => setLastName(e.target.value)}
-              placeholder="กรอกนามสกุล"
-              className="h-10 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 placeholder:text-black/20"
-            />
-          </div>
-        </div>
-
-        {/* Contact Section - Stacked vertically */}
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label className="text-[11px] font-semibold text-black/50 ml-1">เบอร์โทรศัพท์</Label>
-            <Input
-              value={form.phone ?? ''}
-              onChange={e => set('phone', e.target.value)}
-              placeholder="081-000-0000"
-              className="h-10 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-[11px] font-semibold text-black/50 ml-1">อีเมลติดต่อ</Label>
-            <Input
-              value={form.email ?? ''}
-              onChange={e => set('email', e.target.value)}
-              type="email"
-              placeholder="teacher@school.ac.th"
-              className="h-10 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
-            />
-          </div>
-        </div>
-
-        {/* Photo URL */}
-        <div className="space-y-1.5">
-          <Label className="text-[11px] font-semibold text-black/50 ml-1">URL รูปถ่าย (ระบุลิงก์)</Label>
-          <Input
-            value={form.photoURL ?? ''}
-            onChange={e => set('photoURL', e.target.value)}
-            placeholder="https://example.com/photo.jpg"
-            className="h-10 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
-          />
-        </div>
-
-        {/* Position Type */}
-        <div className="space-y-1.5">
-          <Label className="text-[11px] font-semibold text-black/50 ml-1">ประเภทตำแหน่ง</Label>
-          <div className="flex flex-col gap-2">
-            <Select
-              value={isOther ? 'อื่นๆ' : (form.position || 'ครูบรรจุ')}
-              onValueChange={v => v === 'อื่นๆ' ? set('position', 'โปรดระบุ') : set('position', v)}
+          <div className="flex p-1 bg-black/[0.03] rounded-xl w-full mb-2">
+            <button
+              onClick={() => setActiveTab('profile')}
+              className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all ${activeTab === 'profile'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-600'
+                }`}
             >
-              <SelectTrigger className="h-10 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus:ring-1 focus:ring-slate-300 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl">
-                {POSITIONS.map(p => (
-                  <SelectItem key={p} value={p} className="text-[11px]">{p}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {/* Other position input */}
-            {(isOther || form.position === 'โปรดระบุ') && (
-              <Input
-                value={form.position === 'โปรดระบุ' ? '' : form.position}
-                onChange={e => set('position', e.target.value)}
-                placeholder="ระบุชื่อตำแหน่งอื่นๆ..."
-                className="h-10 text-[11px] rounded-xl bg-amber-50/40 border-amber-200/40 focus-visible:ring-1 focus-visible:ring-amber-300 animate-in fade-in slide-in-from-top-1"
-              />
-            )}
+              กรอกข้อมูลใหม่
+            </button>
+            <button
+              onClick={() => setActiveTab('search')}
+              className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all ${activeTab === 'search'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-600'
+                }`}
+            >
+              ค้นหาจากรายชื่อในระบบ
+            </button>
           </div>
-        </div>
+        )}
 
-        {/* Department - Button Group Style (100% Match with AddSubjectModal) */}
-        <div className="space-y-2">
-          <Label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">ระดับ/กลุ่มสาระ <span className="text-red-400">*</span></Label>
-          <div className="flex">
-            <ButtonGroup className="w-full bg-black/[0.03] rounded-xl p-0.5 border-black/5">
-              {(Object.entries(DEPARTMENT_CONFIG) as [Department, typeof DEPARTMENT_CONFIG[Department]][]).map(([key, cfg], index, array) => {
-                const isActive = form.department === key;
-                return (
-                  <React.Fragment key={key}>
-                    <Button
+        <AnimatePresence mode="wait">
+          {activeTab === 'profile' ? (
+            <motion.div
+              key="profile"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-4"
+            >
+              {/* Photo Preview (Small & Subtle) */}
+              {(form.photoURL || firstName) && (
+                <div className="flex justify-center mb-2">
+                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-600/10 border border-slate-100 flex items-center justify-center overflow-hidden shadow-sm">
+                    {form.photoURL ? (
+                      <img src={form.photoURL} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-3xl font-black text-indigo-500/30">{firstName ? firstName.charAt(0) : '+'}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Form Fields - Strictly Vertical */}
+              <div>
+                <Label required>คำนำหน้า</Label>
+                <Select value={prefix} onValueChange={setPrefix}>
+                  <SelectTrigger className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm">
+                    <SelectValue placeholder="เลือกคำนำหน้าชื่อ" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl border-white/50 backdrop-blur-xl">
+                    {prefixes.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label required>ชื่อ</Label>
+                <Input
+                  placeholder="ระบุชื่อ (เช่น สมชาย)"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
+                />
+              </div>
+
+              <div>
+                <Label required>นามสกุล</Label>
+                <Input
+                  placeholder="ระบุนามสกุล (เช่น ใจดี)"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
+                />
+              </div>
+
+              <div>
+                <Label>เบอร์โทรศัพท์</Label>
+                <Input
+                  placeholder="เช่น 0901234567"
+                  value={form.phone || ''}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
+                />
+              </div>
+
+              <div>
+                <Label>อีเมล</Label>
+                <Input
+                  type="email"
+                  placeholder="ระบุอีเมลผู้ใช้งาน"
+                  value={form.email || ''}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
+                />
+              </div>
+
+              <div>
+                <Label>ตำแหน่ง</Label>
+                <Select
+                  value={form.position}
+                  onValueChange={(val) => setForm({ ...form, position: val })}
+                >
+                  <SelectTrigger className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm">
+                    <SelectValue placeholder="ระบุตำแหน่งบุคลากร" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl border-white/50 backdrop-blur-xl">
+                    {POSITIONS.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>ฝ่าย / สังกัด</Label>
+                <div className="flex p-1 bg-black/[0.03] rounded-xl h-11">
+                  {(['early', 'primary', 'secondary'] as const).map((dept) => (
+                    <button
+                      key={dept}
                       type="button"
-                      variant={isActive ? 'default' : 'ghost'}
-                      size="sm"
-                      onClick={() => set('department', key)}
-                      className={`flex-1 h-8 text-[11px] font-bold rounded-lg px-4 ${isActive
-                          ? 'bg-[#1e1e1e] text-white shadow-md'
-                          : 'text-black/40 hover:text-black/60'
+                      onClick={() => setForm({ ...form, department: dept })}
+                      className={`flex-1 rounded-lg text-[10px] font-bold transition-all ${form.department === dept
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-600'
                         }`}
                     >
-                      {cfg.label}
-                    </Button>
-                    {index < array.length - 1 && <ButtonGroupSeparator />}
-                  </React.Fragment>
-                );
-              })}
-            </ButtonGroup>
-          </div>
-        </div>
+                      {DEPARTMENT_CONFIG[dept].label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <Label>URL รูปถ่าย</Label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Input
+                      placeholder="วางลิงก์รูปภาพ (ถ้ามี)"
+                      value={form.photoURL || ''}
+                      onChange={(e) => setForm({ ...form, photoURL: e.target.value })}
+                      className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
+                    />
+                  </div>
+                  <label className="shrink-0 cursor-pointer h-11 w-11 rounded-xl bg-black/[0.03] hover:bg-black/[0.06] flex items-center justify-center transition-all group">
+                    {isUploading ? (
+                      <Loader2 size={18} className="text-slate-400 animate-spin" />
+                    ) : (
+                      <Upload size={18} className="text-slate-400 group-hover:text-blue-600" />
+                    )}
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept="image/*"
+                      onChange={handleUploadImage}
+                      disabled={isUploading}
+                    />
+                  </label>
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="search"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-4"
+            >
+              <div>
+                <Label>ค้นหารายชื่อจากระบบ</Label>
+                <div className="relative">
+                  <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    placeholder="ระบุชื่อหรืออีเมลเพื่อค้นหา..."
+                    value={searchTerm}
+                    onChange={(e) => handleSearchUsers(e.target.value)}
+                    className="h-12 rounded-xl bg-black/[0.03] border-transparent pl-10 focus:ring-slate-300 transition-all font-medium text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2 max-h-[350px] overflow-y-auto scrollbar-hide pr-1">
+                {searchResults.map((user) => (
+                  <button
+                    key={user.id}
+                    onClick={() => selectUser(user)}
+                    className="w-full p-4 rounded-xl bg-black/[0.02] border border-transparent hover:bg-white hover:border-slate-200 hover:shadow-sm transition-all text-left flex items-center gap-4 group"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all overflow-hidden shadow-sm border border-black/[0.03]">
+                      {user.photoURL ? (
+                        <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <UserCheck size={18} />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-800 truncate">{user.name}</p>
+                      <p className="text-[11px] font-medium text-slate-400 truncate tracking-tight">{user.email}</p>
+                    </div>
+                  </button>
+                ))}
+                {searchResults.length === 0 && searchTerm.length >= 2 && (
+                  <div className="py-12 text-center">
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">ไม่พบข้อมูลผู้ใช้งาน</p>
+                  </div>
+                )}
+                {searchTerm.length < 2 && (
+                  <div className="py-12 text-center opacity-20">
+                    <Search size={32} className="mx-auto mb-2" />
+                    <p className="text-[10px] font-black uppercase tracking-widest">พิมพ์เพื่อเริ่มต้นค้นหา</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </FormModal>
   );

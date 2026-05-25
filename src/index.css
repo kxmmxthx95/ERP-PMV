@@ -8,6 +8,7 @@
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter Variable", "Sukhumvit Set", "Sarabun", sans-serif;
+    --font-sukhumvit: "Sukhumvit Set", "SF Pro Display", sans-serif;
     --font-sarabun: 'Sarabun', sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
@@ -131,3 +132,42 @@
     overscroll-behavior: none;
     }
 }
+
+@layer utilities {
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .custom-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  sup {
+    font-size: 0.65em;
+    vertical-align: super;
+    line-height: 0;
+  }
+  sub {
+    font-size: 0.65em;
+    vertical-align: sub;
+    line-height: 0;
+  }
+
+  .latex-inline {
+    @apply px-1.5 py-0.5 mx-0.5 rounded-md bg-indigo-50 text-indigo-700 font-mono text-[12px] shadow-sm border border-indigo-100/50;
+    vertical-align: middle;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+

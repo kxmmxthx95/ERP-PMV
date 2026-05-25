@@ -1,0 +1,168 @@
+// src/hooks/useQuestionSetBank.ts
+// Manages question_sets collection (metadata only — no question content).
+// Questions live in subcollection: question_sets/{setId}/questions/
+import { useEffect, useMemo, useState } from 'react';
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  updateDoc,
+} from 'firebase/firestore';
+import { toast } from 'sonner';
+import { db } from '@/lib/firebase';
+import { useAuth } from '@/hooks/useAuth';
+import type { SubjectGroupId } from '@/types/curriculum';
+import type { NewQuestionSet, QuestionSet } from '@/types/questionBank';
+
+export const QUESTION_SETS_COL = 'question_sets';
+
+export interface QuestionSetFilters {
+  search?: string;
+  subjectGroup?: SubjectGroupId | 'all';
+  subSubjectGroup?: string | 'all';
+  department?: string | 'all';
+  gradeLevel?: string | 'all';
+}
+
+export function useQuestionSetBank() {
+  const { user } = useAuth();
+  const [questionSets, setQuestionSets] = useState<QuestionSet[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Subscribe to question_sets collection (metadata only — lightweight)
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, QUESTION_SETS_COL),
+      (snap) => {
+        const rows = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as QuestionSet))
+          .sort((a, b) => b.createdAt - a.createdAt);
+        setQuestionSets(rows);
+        setIsLoading(false);
+      },
+      (err) => {
+        console.error('[useQuestionSetBank]', err.message);
+        setIsLoading(false);
+      },
+    );
+    return () => unsub();
+  }, []);
+
+  // ── CRUD ─────────────────────────────────────────────────────────────────────
+
+  const addQuestionSet = async (data: NewQuestionSet) => {
+    const now = Date.now();
+    const payload: Omit<QuestionSet, 'id'> = {
+      ...data,
+      questionCount: 0,
+      isPublished: data.isPublished ?? false,
+      createdBy: user?.uid ?? 'unknown',
+      createdByName: user?.displayName ?? user?.email ?? '',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const sanitized = Object.fromEntries(
+      Object.entries(payload).filter(([, v]) => v !== undefined),
+    );
+
+    try {
+      const ref = await addDoc(collection(db, QUESTION_SETS_COL), sanitized as never);
+      toast.success('สร้างชุดข้อสอบเรียบร้อยแล้ว');
+      return ref.id;
+    } catch (e) {
+      console.error('[addQuestionSet]', e);
+      toast.error('ไม่สามารถสร้างชุดข้อสอบได้');
+      throw e;
+    }
+  };
+
+  const updateQuestionSet = async (id: string, patch: Partial<QuestionSet>) => {
+    const sanitized = Object.fromEntries(
+      Object.entries(patch).filter(([, v]) => v !== undefined),
+    );
+    try {
+      await updateDoc(doc(db, QUESTION_SETS_COL, id), {
+        ...sanitized,
+        updatedAt: Date.now(),
+      } as never);
+      toast.success('บันทึกชุดข้อสอบเรียบร้อยแล้ว');
+    } catch (e) {
+      console.error('[updateQuestionSet]', e);
+      toast.error('ไม่สามารถบันทึกชุดข้อสอบได้');
+      throw e;
+    }
+  };
+
+  const deleteQuestionSet = async (id: string) => {
+    // Note: subcollection questions are NOT auto-deleted by Firestore client SDK.
+    // For production, use a Cloud Function trigger to cascade-delete.
+    // Here we delete the parent doc — orphan subcollection docs will be cleaned up later.
+    try {
+      await deleteDoc(doc(db, QUESTION_SETS_COL, id));
+      toast.success('ลบชุดข้อสอบเรียบร้อยแล้ว');
+    } catch (e) {
+      console.error('[deleteQuestionSet]', e);
+      toast.error('ไม่สามารถลบชุดข้อสอบได้');
+      throw e;
+    }
+  };
+
+  // ── Derived ──────────────────────────────────────────────────────────────────
+
+  const filterQuestionSets = (filters: QuestionSetFilters) => {
+    return questionSets.filter((set) => {
+      if (
+        filters.subjectGroup &&
+        filters.subjectGroup !== 'all' &&
+        set.subjectGroup !== filters.subjectGroup
+      ) return false;
+
+      if (
+        filters.subSubjectGroup &&
+        filters.subSubjectGroup !== 'all' &&
+        set.subSubjectGroup !== filters.subSubjectGroup
+      ) return false;
+
+      if (
+        filters.department &&
+        filters.department !== 'all' &&
+        set.department !== filters.department
+      ) return false;
+
+      if (
+        filters.gradeLevel &&
+        filters.gradeLevel !== 'all' &&
+        set.gradeLevel !== filters.gradeLevel
+      ) return false;
+
+      if (filters.search) {
+        const s = filters.search.toLowerCase();
+        const inTitle = set.title.toLowerCase().includes(s);
+        const inDesc = (set.description ?? '').toLowerCase().includes(s);
+        if (!inTitle && !inDesc) return false;
+      }
+      return true;
+    });
+  };
+
+  const stats = useMemo(() => {
+    const total = questionSets.length;
+    const published = questionSets.filter((s) => s.isPublished).length;
+    const draft = total - published;
+    const totalQuestions = questionSets.reduce((sum, s) => sum + (s.questionCount ?? 0), 0);
+    return { total, published, draft, totalQuestions };
+  }, [questionSets]);
+
+  return {
+    isLoading,
+    questionSets,
+    stats,
+    addQuestionSet,
+    updateQuestionSet,
+    deleteQuestionSet,
+    filterQuestionSets,
+  };
+}

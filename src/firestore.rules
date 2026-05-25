@@ -2,126 +2,162 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── 1. Helper Functions (Global) ───────────────────────────────────────────
-    
+    // ── Helper Functions ──────────────────────────────────────────────────────
     function isAuth() {
       return request.auth != null;
     }
-    
-    function isGodMode() {
-      return isAuth() && request.auth.token.email == 'sysadmin@pmv.com';
+
+    function getUserData() {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(path) ? get(path).data : null;
     }
 
-    function getRole() {
-      return request.auth.token.role;
+    function hasRole(role) {
+      let data = getUserData();
+      return isAuth() && data != null && data.role == role;
     }
 
-    function hasRole(r) {
-      return isGodMode() || (isAuth() && getRole() == r);
+    function isSuperAdmin() {
+      return isAuth() && (request.auth.token.email == 'sysadmin@pmv.com' || hasRole('sysadmin'));
     }
 
-    function hasAnyRole(roles) {
-      return isGodMode() || (isAuth() && getRole() in roles);
+    function canManage() {
+      return isSuperAdmin() || hasRole('admin') || hasRole('teacher');
     }
 
-    function isSysAdmin() { return hasRole('sysadmin'); }
-    function isAdmin() { return hasAnyRole(['admin', 'sysadmin']); }
-    function isStaff() { return hasAnyRole(['staff', 'admin', 'sysadmin']); }
-    function isTeacher() { return hasAnyRole(['teacher', 'admin', 'sysadmin']); }
-
-    function isOwner(uid) {
-      return isAuth() && (request.auth.uid == uid || isGodMode());
-    }
-
-    // ── 2. Security Rules (Collections) ────────────────────────────────────────
-
+    // ── Global Rule ──────────────────────────────────────────────────────────
     match /{document=**} {
-      allow read, write: if isGodMode();
+      allow read: if isAuth();
+      allow write: if canManage();
     }
 
+    // ── Users: อนุญาตให้แก้โปรไฟล์ตัวเองได้ ──────────────────────────────────
     match /users/{userId} {
-      allow read: if isAuth();
-      allow create: if isAdmin();
-      allow update: if isOwner(userId) || isAdmin();
-      allow delete: if isSysAdmin();
+      allow update: if isAuth() && userId == request.auth.uid
+        && !('role' in request.resource.data.diff(resource.data).affectedKeys())
+        && !('isActive' in request.resource.data.diff(resource.data).affectedKeys());
     }
 
-    match /registration_requests/{requestId} {
-      allow read: if isAdmin() || isOwner(requestId);
-      allow create: if isAuth() && request.auth.uid == requestId;
-      allow update, delete: if isAdmin();
+    // ── Leave Requests: อนุญาตให้ยื่นคำขอลาได้เอง ──────────────────────────────
+    match /leave_requests/{docId} {
+      allow create: if isAuth() && request.resource.data.requesterId == request.auth.uid;
+      allow update: if isAuth() && (
+        canManage() 
+        || (resource.data.requesterId == request.auth.uid && resource.data.status == 'pending')
+      );
+      allow delete: if isAuth() && (
+        isSuperAdmin() 
+        || (resource.data.requesterId == request.auth.uid && resource.data.status == 'pending')
+      );
     }
 
+    // ── PMV Voice (Student Feedback) ────────────────────────────────────────
+    match /student_feedback/{feedbackId} {
+      // นักเรียนส่ง feedback ได้เอง (2 โหมด)
+      allow create: if isAuth() && (
+        (
+          request.resource.data.mode == 'identified' &&
+          request.resource.data.studentId == request.auth.uid &&
+          request.resource.data.status == 'new'
+        ) ||
+        (
+          request.resource.data.mode == 'anonymous' &&
+          !('studentId' in request.resource.data) &&
+          request.resource.data.status == 'new'
+        )
+      );
+
+      // ผู้ดูแลอัปเดตสถานะได้
+      allow update: if isAuth() && canManage();
+      allow delete: if isAuth() && isSuperAdmin();
+    }
+
+    // เก็บ limit สำหรับ anonymous (วันละ 1 ครั้ง) — ไม่เก็บ field studentId
+    match /feedback_anonymous_limits/{limitId} {
+      allow create: if isAuth()
+        && limitId.matches('^' + request.auth.uid + '_.*$')
+        && !exists(/databases/$(database)/documents/feedback_anonymous_limits/$(limitId));
+      allow update, delete: if false;
+    }
+
+    // ── Staff Attendance ─────────────────────────────────────────────────────
+    match /staff_attendance/{docId} {
+      allow create: if isAuth() && (hasRole('staff') || hasRole('teacher'))
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuth() && (
+        (resource.data.userId == request.auth.uid && (hasRole('staff') || hasRole('teacher')))
+        || hasRole('admin') || isSuperAdmin()
+      );
+    }
+
+    // ── Staff Attendance (New Shape: date -> entries/{userId}) ──────────────
+    match /staff_attendance_by_date/{dateId} {
+      // allow creating/updating per-day envelope document
+      allow create, update: if isAuth() && (
+        hasRole('admin') || isSuperAdmin()
+        || (
+          (hasRole('staff') || hasRole('teacher'))
+          && request.resource.data.date == dateId
+        )
+      );
+    }
+
+    match /staff_attendance_by_date/{dateId}/entries/{userId} {
+      allow create, update: if isAuth() && (
+        hasRole('admin') || isSuperAdmin()
+        || (
+          (hasRole('staff') || hasRole('teacher'))
+          && userId == request.auth.uid
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.date == dateId
+        )
+      );
+    }
+
+    // ── Students ─────────────────────────────────────────────────────────────
     match /students/{studentId} {
-      allow read: if isTeacher() || isStaff() || isOwner(resource.data.uid) ||
-        (getRole() == 'parent' && request.auth.uid in resource.data.parentUIDs);
-      allow create: if isAdmin();
-      allow update: if isAdmin() || isTeacher();
-      allow delete: if isSysAdmin();
+      allow write: if isAuth() && studentId == request.auth.uid;
     }
 
-    match /classes/{classId} {
-      allow read: if isAuth();
-      allow write: if isAdmin();
+    // ── Exam Attempts (sub-collection ใต้ exam_rooms) ───────────────────────
+    match /exam_rooms/{roomId}/attempts/{attemptId} {
+      // นักเรียนอ่านเฉพาะ attempt ของตัวเองได้
+      allow read: if isAuth() && (canManage() || resource.data.studentId == request.auth.uid);
+      allow list: if isAuth() && (canManage() || request.query.limit <= 100); // query จะถูกกรองด้วย where studentId ต่อไป
+
+      // นักเรียนสร้าง attempt ของตัวเองได้
+      allow create: if isAuth()
+        && request.resource.data.studentId == request.auth.uid
+        && request.resource.data.status == 'in_progress'
+        && request.resource.data.score == null
+        && request.resource.data.submittedAt == null;
+
+      // นักเรียนอัปเดตได้เฉพาะ attempt ของตัวเอง (autosave + submit)
+      // ห้ามแก้ score/round/startedAt/studentId — เฉพาะ answers, suspiciousActivities, status, submittedAt, lastSavedAt
+      allow update: if isAuth()
+        && resource.data.studentId == request.auth.uid
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.round == resource.data.round
+        && request.resource.data.startedAt == resource.data.startedAt
+        && request.resource.data.score == resource.data.score
+        && resource.data.status == 'in_progress'
+        && (request.resource.data.status == 'in_progress' || request.resource.data.status == 'submitted')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'answers',
+          'suspiciousActivities',
+          'status',
+          'submittedAt',
+          'lastSavedAt'
+        ]);
+
+      // การลบให้เฉพาะผู้ดูแล
+      allow delete: if hasRole('admin') || isSuperAdmin();
     }
 
-    match /grades/{gradeId} {
-      allow read: if isTeacher() || isStaff() || isOwner(resource.data.studentId) ||
-        (getRole() == 'parent' && request.auth.uid in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parentUIDs);
-      allow create: if isTeacher();
-      allow update: if isTeacher() && (resource.data.teacherId == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
-    }
-
-    match /schedules/{scheduleId} {
-      allow read: if isAuth();
-      allow write: if isAdmin();
-    }
-
-    match /attendance/{attendanceId} {
-      allow read: if isTeacher() || isStaff() || isOwner(resource.data.studentId) ||
-        (getRole() == 'parent' && request.auth.uid in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parentUIDs);
-      allow create: if isTeacher();
-      allow update: if isTeacher() && (resource.data.recordedBy == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
-    }
-
-    match /notifications/{notifId} {
-      allow read: if isAuth() && (getRole() in resource.data.targetRoles || request.auth.uid in resource.data.targetUIDs || isAdmin());
-      allow create: if isTeacher() || isStaff();
-      allow update: if isAdmin() || resource.data.createdBy == request.auth.uid;
-      allow delete: if isAdmin();
-    }
-
-    match /academic_years/{yearId} {
-      allow read: if isAuth();
-      allow write: if isSysAdmin();
-    }
-
-    match /systemConfig/{configId} {
-      allow read: if isAuth();
-      allow write: if isSysAdmin();
-    }
-
-    match /subjects/{subjectId} {
-      allow read: if isAuth();
-      allow write: if isAdmin();
-    }
-
-    match /curriculum_maps/{mapId} {
-      allow read: if isAuth();
-      allow write: if isAdmin();
-    }
-
-    match /calendar_events/{eventId} {
-      allow read: if isAuth();
-      allow create, update: if isTeacher() || isStaff();
-      allow delete: if isAdmin();
-    }
-
+    // ── Logs: allow all authenticated users to append usage logs ────────────
     match /logs/{logId} {
-      allow read: if isSysAdmin();
       allow create: if isAuth();
+      allow update, delete: if hasRole('admin') || isSuperAdmin();
     }
   }
 }

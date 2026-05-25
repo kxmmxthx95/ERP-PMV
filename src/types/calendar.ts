@@ -1,4 +1,4 @@
-export type CalendarEventType = 'holiday' | 'exam' | 'activity' | 'semester-start' | 'semester-end';
+export type CalendarEventType = 'holiday' | 'exam' | 'activity' | 'meeting' | 'semester-start' | 'semester-end';
 
 export interface CalendarEvent {
   id: string;
@@ -54,6 +54,13 @@ export const EVENT_TYPE_CONFIG: Record<CalendarEventType, {
     bg: 'rgba(59,130,246,0.10)',
     border: 'rgba(59,130,246,0.25)',
     glow: '#3b82f640',
+  },
+  meeting: {
+    label: 'ประชุม',
+    color: '#06b6d4',
+    bg: 'rgba(6,182,212,0.10)',
+    border: 'rgba(6,182,212,0.25)',
+    glow: '#06b6d440',
   },
   'semester-start': {
     label: 'เปิดเทอม',

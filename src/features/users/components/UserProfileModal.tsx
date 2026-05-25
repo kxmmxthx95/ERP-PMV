@@ -150,13 +150,22 @@ export default function UserProfileModal({ isOpen, onClose }: UserProfileModalPr
 
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1">ยืนยันรหัสผ่านใหม่</label>
-                    <Input 
-                      type={showPwd ? 'text' : 'password'}
-                      placeholder="กรอกรหัสผ่านอีกครั้ง"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      className="h-11 rounded-2xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none text-xs font-medium"
-                    />
+                    <div className="relative">
+                      <Input 
+                        type={showPwd ? 'text' : 'password'}
+                        placeholder="กรอกรหัสผ่านอีกครั้ง"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        className="h-11 rounded-2xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none pr-10 text-xs font-medium"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPwd(!showPwd)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-black/20 hover:text-black/40 transition-colors"
+                      >
+                        {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
                   </div>
 
                   <Button 

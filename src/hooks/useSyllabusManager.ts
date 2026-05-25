@@ -10,7 +10,7 @@
 import { useState, useMemo } from 'react';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useCurriculum } from '@/hooks/useCurriculum';
-import { useTeacherManager } from '@/hooks/useTeacherManager';
+import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import {
   useSyllabus,

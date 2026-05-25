@@ -1,53 +1,267 @@
-// src/App.tsx
-import { useEffect } from 'react';
-import { BrowserRouter } from 'react-router-dom';
-import { Toaster } from 'sonner';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { lazy, Suspense, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useAuth } from '@/hooks/useAuth';
 import { authService } from '@/features/auth/authService';
-import { useAuthStore } from '@/store/authStore';
-import { AppRouter } from '@/router/AppRouter';
+import { PermissionGate } from '@/components/PermissionGate';
+import { Toaster } from '@/components/ui/sonner';
 
-const queryClient = new QueryClient();
+// ── Layouts ──
+const PortalLayout = lazy(() => import('./components/layouts/PortalLayout'));
 
-function App() {
-  const isLoading = useAuthStore((state) => state.isLoading);
+// ── Auth Pages ──
+const LoginPage = lazy(() => import('@/features/auth/LoginPage'));
 
-  useEffect(() => {
-    // เริ่มต้นระบบติดตามสถานะการ Login และ Role
-    const unsubscribe = authService.listenToAuthChanges();
-    return () => unsubscribe(); 
-  }, []);
+// ── Home ──
+const HomePage = lazy(() => import('@/features/home/HomePage'));
 
+// ── Feature Pages ──
+const UsersPage = lazy(() => import('@/features/users/UsersPage'));
+const LogsPage = lazy(() => import('@/features/logs/LogsPage'));
+const AcademicCalendar = lazy(() => import('@/features/calendar/AcademicCalendar'));
+const CurriculumManager = lazy(() => import('@/features/curriculum/CurriculumManager'));
+const ScheduleEditor = lazy(() => import('@/features/schedule/ScheduleEditor'));
+const TeacherManager = lazy(() => import('@/features/teachers/TeacherManager'));
+const ClassManager = lazy(() => import('@/features/classes/ClassManager'));
+const StudentManager = lazy(() => import('@/features/students/StudentManager'));
+const RolePermissionManager = lazy(() => import('@/features/roles/RolePermissionManager'));
+const SettingsPage = lazy(() => import('@/features/settings/SettingsPage'));
+const CourseMigrationTool = lazy(() => import('@/features/settings/CourseMigrationTool'));
+const TeachingManager = lazy(() => import('@/features/teaching/TeachingManager'));
+const ExamManager = lazy(() => import('@/features/exam/ExamManager'));
+const StudentExamPage = lazy(() => import('@/features/exam/StudentExamPage'));
+const QuestionBankManager = lazy(() => import('@/features/questionBank/QuestionBankManager'));
+const StaffAttendancePage = lazy(() => import('@/features/attendance/StaffAttendancePage'));
+const AttendanceCenterPage = lazy(() => import('@/features/attendance/AttendanceCenterPage'));
+const ProfilePage = lazy(() => import('@/features/profile/ProfilePage'));
+const LeaveManagementPage = lazy(() => import('@/features/leave/LeaveManagementPage'));
+const LeaveReportPage = lazy(() => import('@/features/leave/LeaveReportPage'));
+const LessonPlanManager = lazy(() => import('@/features/lessonPlan/LessonPlanManager'));
+const DutySchedulePage = lazy(() => import('@/features/duty/DutySchedulePage'));
+const ExecutiveReportPage = lazy(() => import('@/features/reports/ExecutiveReportPage'));
+const ReportControlCenter = lazy(() => import('@/features/reports/ReportControlCenter'));
+const AnnouncementsPage = lazy(() => import('@/features/announcements/AnnouncementsPage'));
+const FeedbackPage = lazy(() => import('@/features/feedback/FeedbackPage'));
+const GradeBookPage = lazy(() => import('@/features/grades/GradeBookPage'));
+const LineConnectPage = lazy(() => import('@/features/profile/LineConnectPage'));
+const MorningRollCallPage = lazy(() => import('@/features/attendance/MorningRollCallPage'));
+
+
+/** แสดง component การเข้าเรียน (ของนักเรียน) */
+function AttendanceRouter() {
+  return <AttendanceCenterPage />;
+}
+
+/**
+ * Component สำหรับตรวจสอบสถานะการ Login
+ */
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: 'linear-gradient(135deg, #fce7f3, #fda4af)' }}
+      >
+        <div className="w-8 h-8 border-3 border-pink-300 border-t-pink-600 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function RouteLoader() {
   return (
-    <QueryClientProvider client={queryClient}>
-      {isLoading ? (
-        <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center gap-4 text-white font-sans">
-          <div className="w-12 h-12 border-4 border-sky-500/20 border-t-sky-500 rounded-full animate-spin" />
-          <p className="text-slate-400 animate-pulse text-sm tracking-widest uppercase">Piyamit System Loading...</p>
-        </div>
-      ) : (
-        <div className="min-h-screen bg-[#0f172a] font-sans antialiased selection:bg-sky-500/30">
-          <BrowserRouter>
-            <Toaster
-              theme="dark"
-              position="top-center"
-              expand={false}
-              richColors
-              closeButton
-              toastOptions={{
-                style: {
-                  background: 'rgba(30, 41, 59, 0.7)',
-                  backdropFilter: 'blur(12px)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                }
-              }}
-            />
-            <AppRouter />
-          </BrowserRouter>
-        </div>
-      )}
-    </QueryClientProvider>
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="w-8 h-8 border-3 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
+    </div>
   );
 }
 
-export default App;
+
+export default function App() {
+  useEffect(() => {
+    const unsubscribe = authService.listenToAuthChanges();
+    return () => unsubscribe();
+  }, []);
+
+  return (
+    <Router>
+<Suspense fallback={<RouteLoader />}>
+        <Routes>
+          {/* Public */}
+          <Route path="/login"  element={<LoginPage />} />
+          <Route path="/signup" element={<LoginPage />} />
+          <Route path="/line/connect" element={<LineConnectPage />} />
+
+          {/* ── Portal Pages (Nested under PortalLayout) ── */}
+          <Route
+            path="/portal"
+            element={
+              <ProtectedRoute>
+                <PortalLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<HomePage />} />
+
+            {/* ── ทุก route ด้านล่างถูกป้องกันด้วย PermissionGate ──
+                featureKey ต้องตรงกับ FEATURE_LIST ใน src/types/rolePermission.ts
+                สิทธิ์บริหารจาก /portal/roles — ไม่ต้องแตะ Firebase Rules ──────── */}
+
+            <Route path="users" element={
+              <PermissionGate featureKey="users">
+                <UsersPage />
+              </PermissionGate>
+            } />
+            <Route path="logs" element={
+              <PermissionGate featureKey="logs">
+                <LogsPage />
+              </PermissionGate>
+            } />
+            <Route path="roles" element={
+              <PermissionGate featureKey="roles">
+                <RolePermissionManager />
+              </PermissionGate>
+            } />
+            <Route path="calendar" element={
+              <PermissionGate featureKey="calendar">
+                <AcademicCalendar />
+              </PermissionGate>
+            } />
+            <Route path="curriculum" element={
+              <PermissionGate featureKey="curriculum">
+                <CurriculumManager />
+              </PermissionGate>
+            } />
+            <Route path="schedule" element={
+              <PermissionGate featureKey="schedule">
+                <ScheduleEditor />
+              </PermissionGate>
+            } />
+            <Route path="teachers" element={
+              <PermissionGate featureKey="teachers">
+                <TeacherManager />
+              </PermissionGate>
+            } />
+            <Route path="lesson-plan" element={
+              <PermissionGate featureKey="lessonPlan">
+                <LessonPlanManager />
+              </PermissionGate>
+            } />
+            <Route path="classes" element={
+              <PermissionGate featureKey="classes">
+                <ClassManager />
+              </PermissionGate>
+            } />
+            <Route path="students" element={
+              <PermissionGate featureKey="students">
+                <StudentManager />
+              </PermissionGate>
+            } />
+            <Route path="profile" element={
+              <PermissionGate featureKey="widget_studentProfile">
+                <ProfilePage />
+              </PermissionGate>
+            } />
+            <Route path="teaching" element={
+              <PermissionGate featureKey="teaching">
+                <TeachingManager />
+              </PermissionGate>
+            } />
+            <Route path="exams" element={
+              <PermissionGate featureKey="exams">
+                <ExamManager />
+              </PermissionGate>
+            } />
+            <Route path="question-bank" element={
+              <PermissionGate featureKey="questionBank">
+                <QuestionBankManager />
+              </PermissionGate>
+            } />
+            <Route path="grades" element={
+              <PermissionGate featureKey="grades">
+                <GradeBookPage />
+              </PermissionGate>
+            } />
+            <Route path="attendance" element={
+              <PermissionGate featureKey="attendance">
+                <AttendanceRouter />
+              </PermissionGate>
+            } />
+            <Route path="staff-attendance" element={
+              <PermissionGate featureKey="staffAttendance">
+                <StaffAttendancePage />
+              </PermissionGate>
+            } />
+            <Route path="morning-rollcall" element={
+              <PermissionGate featureKey="morningRollCall">
+                <MorningRollCallPage />
+              </PermissionGate>
+            } />
+            <Route path="leave" element={
+              <PermissionGate featureKey="leave">
+                <LeaveManagementPage />
+              </PermissionGate>
+            } />
+            <Route path="leave/report" element={
+              <PermissionGate featureKey="leave">
+                <LeaveReportPage />
+              </PermissionGate>
+            } />
+            <Route path="duty-schedule" element={
+              <PermissionGate featureKey="dutySchedule">
+                <DutySchedulePage />
+              </PermissionGate>
+            } />
+            <Route path="reports" element={
+              <PermissionGate featureKey="reports">
+                <ExecutiveReportPage />
+              </PermissionGate>
+            } />
+            <Route path="report-control" element={
+              <PermissionGate featureKey="reports" require="edit">
+                <ReportControlCenter />
+              </PermissionGate>
+            } />
+            <Route path="announcements" element={
+              <PermissionGate featureKey="announcements">
+                <AnnouncementsPage />
+              </PermissionGate>
+            } />
+            <Route path="feedback" element={
+              <PermissionGate featureKey="feedback">
+                <FeedbackPage />
+              </PermissionGate>
+            } />
+            {/* settings — sysadmin เท่านั้น require='full' */}
+            <Route path="settings" element={
+              <PermissionGate featureKey="settings" require="full">
+                <SettingsPage />
+              </PermissionGate>
+            } />
+            
+            <Route path="migrate" element={
+              <PermissionGate featureKey="settings" require="full">
+                <CourseMigrationTool />
+              </PermissionGate>
+            } />
+          </Route>
+
+          {/* Student exam room (standalone — no portal layout) */}
+          <Route path="/exam/:roomId" element={<StudentExamPage />} />
+
+          {/* Legacy redirects */}
+          <Route path="/" element={<Navigate to="/portal" replace />} />
+          <Route path="*" element={<Navigate to="/portal" replace />} />
+        </Routes>
+      </Suspense>
+      <Toaster position="bottom-center" />
+    </Router>
+  );
+}

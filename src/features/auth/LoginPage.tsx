@@ -1,338 +1,312 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { AtSign, Key, ChevronRight, User, Eye, EyeOff } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, GraduationCap } from 'lucide-react';
 import { authService } from '@/features/auth/authService';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '@/lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import ChangePasswordModal from './components/ChangePasswordModal';
 
+function getErrorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === 'string' ? code : '';
+  }
+  return '';
+}
+
+function getSafeRedirectPath(raw: string | null): string {
+  if (!raw) return '/';
+  if (!raw.startsWith('/')) return '/';
+  if (raw.startsWith('//')) return '/';
+  return raw;
+}
+
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState(localStorage.getItem('remembered_email') || '');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('student');
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(!!localStorage.getItem('remembered_email'));
-  const { user, role: authRole } = useAuth();
+  const [focusedField, setFocusedField] = useState<'email' | 'password' | null>(null);
+  const [hasError, setHasError] = useState(false);
+
+  const { user } = useAuth();
   const [showChangeModal, setShowChangeModal] = useState(false);
-  const [isCheckingPassword, setIsCheckingPassword] = useState(false);
-  const hasToastedWarning = useRef(false);
+  const hasCheckedPassword = useRef(false);
+  const redirectPath = getSafeRedirectPath(new URLSearchParams(location.search).get('redirect'));
 
-  // สร้าง State สำหรับดึงวันเวลาปัจจุบัน และอัปเดตแบบ Real-time
-  const [currentTime, setCurrentTime] = useState(new Date());
-
+  // จัดการ Redirect หลัง Login
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const shortMonth = currentTime.toLocaleString('en-US', { month: 'short' });
-  const fullYear = currentTime.getFullYear();
-  const dayName = currentTime.toLocaleString('en-US', { weekday: 'long' });
-  const dateNum = currentTime.getDate().toString().padStart(2, '0');
-  const fullMonthYear = currentTime.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-  const timeString = currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-
-  // จัดการการนำไปหน้า Dashboard หรือบังคับเปลี่ยนรหัสผ่าน
-  useEffect(() => {
-    if (user && !isCheckingPassword && !showChangeModal) {
+    if (user && !hasCheckedPassword.current && !showChangeModal) {
       const checkPasswordStatus = async () => {
-        setIsCheckingPassword(true);
+        hasCheckedPassword.current = true;
         try {
-          const userDoc = await getDoc(doc(db, 'users', user.uid));
-
-          // แจ้งเตือนถ้า role ที่เลือกไม่ตรงกับ role จริงจาก custom claims
-          if (authRole && authRole !== role && !hasToastedWarning.current) {
-            const ROLE_LABELS: Record<string, string> = {
-              student: 'นักเรียน', parent: 'ผู้ปกครอง', teacher: 'ครูผู้สอน',
-              staff: 'เจ้าหน้าที่', admin: 'ผู้บริหาร', sysadmin: 'ผู้ดูแลระบบสูงสุด',
-            };
-            toast.warning(`Role ไม่ตรงกัน — คุณเลือก "${ROLE_LABELS[role] ?? role}" แต่บัญชีนี้เป็น "${ROLE_LABELS[authRole] ?? authRole}" ระบบจะพาไปยังหน้าที่ถูกต้องให้`, { duration: 6000 });
-            hasToastedWarning.current = true;
-          }
-
+          const lookupUid = authService.getFirestoreUid(user.uid);
+          const userDoc = await getDoc(doc(db, 'users', lookupUid));
           if (userDoc.exists() && userDoc.data().mustChangePassword) {
             setShowChangeModal(true);
+            setIsLoading(false);
           } else {
-            const targetRole = authRole || role;
-            navigate(`/${targetRole}`);
+            navigate(redirectPath);
+            setIsLoading(false);
           }
-        } catch (error) {
-          console.error("Error checking password status:", error);
-          const targetRole = authRole || role;
-          navigate(`/${targetRole}`);
-        } finally {
-          setIsCheckingPassword(false);
+        } catch {
+          navigate(redirectPath);
+          setIsLoading(false);
         }
       };
-      
       checkPasswordStatus();
     }
-  }, [user, authRole, navigate, role, isCheckingPassword, showChangeModal]);
+  }, [navigate, redirectPath, showChangeModal, user]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setHasError(false);
     try {
-      // [DEV MODE] บันทึก Role ที่เลือกจาก Dropdown ไว้ใช้ทดสอบ
-      if (import.meta.env.DEV) {
-        localStorage.setItem('dev_role', role);
-      }
-
-      // บันทึกหรือลบอีเมลที่จดจำไว้ใน Local Storage
       if (rememberMe) {
         localStorage.setItem('remembered_email', email);
       } else {
         localStorage.removeItem('remembered_email');
       }
-
       await authService.login(email, password);
-      toast.success('เข้าสู่ระบบสำเร็จ');
-      // ไม่ต้องเรียก navigate ที่นี่ ปล่อยให้ useEffect ด้านบนเป็นตัวจัดการเมื่อ state พร้อม
-    } catch (error: any) {
-      const msg = error.message === 'ไม่พบชื่อผู้ใช้งานหรือรหัสประจำตัวนี้ในระบบ' 
-        ? error.message 
-        : 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
-      toast.error(msg);
-      console.error(error);
+      toast.success('เข้าสู่ระบบสำเร็จ 🎉');
+    } catch (error: unknown) {
+      setHasError(true);
+      const errorCode = getErrorCode(error);
+      if (errorCode === 'auth/user-not-found') {
+        toast.error('ไม่มีผู้ใช้งานนี้ในระบบ');
+      } else if (errorCode === 'auth/wrong-password') {
+        toast.error('รหัสผ่านผิด');
+      } else if (errorCode === 'auth/invalid-credential' || errorCode === 'auth/invalid-email') {
+        toast.error('อีเมลหรือรหัสผ่านไม่ถูกต้อง');
+      } else {
+        toast.error('เกิดข้อผิดพลาดในการเข้าสู่ระบบ');
+      }
       setIsLoading(false);
     }
   };
 
   return (
-    <div
-      className="relative min-h-screen flex items-center justify-center p-4 overflow-hidden bg-cover bg-center"
-      style={{
-        backgroundImage: "linear-gradient(to bottom right, #fbcfe8, #fda4af, #fecdd3)"
-      }}
-    >
-      <div className="absolute inset-0 bg-white/10 backdrop-blur-[2px]" />
+    <div className="relative min-h-screen w-full overflow-hidden flex items-center justify-center">
+      {/* ── Background Image with Blur ── */}
+      <div
+        className="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat scale-105"
+        style={{
+          backgroundImage: 'url(https://nutty-yellow-w6lw8f8pkd.edgeone.app/BG.jpg)',
+          filter: 'blur(10px) brightness(0.95)',
+        }}
+      />
+      <div className="absolute inset-0 z-0 bg-white/20" />
+      {/* ── Ambient blobs ── */}
+      <div className="pointer-events-none absolute inset-0 z-0">
+        <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] rounded-full bg-blue-100/30 blur-[120px]" />
+        <div className="absolute bottom-[0%] right-[-5%] w-[400px] h-[400px] rounded-full bg-sky-50/40 blur-[100px]" />
+      </div>
 
-      {/* Main Container - Grid Layout */}
-      <div className="relative z-10 w-full max-w-2xl grid grid-cols-1 lg:grid-cols-5 gap-3 items-start">
-
-        {/* LEFT SIDE - Login & References Cards */}
-        <div className="flex flex-col gap-3 col-span-1 lg:col-span-3">
-          {/* Login Card */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className="w-full bg-white/30 backdrop-blur-xl border border-white/40 rounded-[1.25rem] p-4 shadow-[0_8px_32px_0_rgba(255,192,203,0.3)]"
-          >
-            {/* Header Section */}
-            <div className="flex justify-between items-baseline mb-4">
-              <h1 className="text-xl font-semibold text-slate-800 tracking-tight">
-                Log in
-              </h1>
-              <Button
-                variant="link"
-                className="text-xs font-medium text-slate-600 hover:text-slate-800 transition-colors px-0"
-                onClick={() => navigate('/signup')}
-              >
-                Sign up
-              </Button>
+      {/* ── Main card ── */}
+      <motion.div
+        initial={{ opacity: 0, y: 32, scale: 0.96 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.55, ease: [0.23, 1, 0.32, 1] }}
+        className="relative z-10 w-full max-w-sm mx-4"
+      >
+        {/* Glass card */}
+        <div
+          className="rounded-[3.5rem] p-8 shadow-2xl"
+          style={{
+            background: 'rgba(255,255,255,0.45)',
+            backdropFilter: 'blur(28px) saturate(200%)',
+            WebkitBackdropFilter: 'blur(28px) saturate(200%)',
+            border: '1px solid rgba(255,255,255,0.70)',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.10), 0 4px 20px rgba(0,0,0,0.06)',
+          }}
+        >
+          {/* ── Logo / Brand ── */}
+          <div className="flex flex-col items-center mb-8">
+            <div
+              className="w-14 h-14 rounded-2xl flex items-center justify-center mb-3 shadow-lg"
+              style={{
+                background: 'linear-gradient(135deg, #f9a8d4, #fb7185)',
+                boxShadow: '0 8px 24px rgba(251,113,133,0.45)',
+              }}
+            >
+              <GraduationCap size={28} className="text-white" />
             </div>
+            <h1 className="text-xl font-bold text-slate-800 tracking-tight">PIYAMIT SCHOOL</h1>
+            <p className="text-xs text-slate-500 mt-0.5">ระบบบริหารจัดการสถานศึกษา</p>
+          </div>
 
-            <form onSubmit={handleLogin} className="space-y-2">
-              {/* Role Dropdown - Pill Shape */}
-              <div className="relative">
-                <div className="absolute inset-y-0 left-1 pl-2 flex items-center pointer-events-none text-slate-600 z-10">
-                  <User className="w-3 h-3" />
-                </div>
-                <Select value={role} onValueChange={setRole}>
-                  <SelectTrigger className="w-full h-auto pl-8 pr-3 py-1.5 bg-white/60 border border-white/50 rounded-full text-slate-800 text-xs font-medium focus:ring-2 focus:ring-white/80 transition-all shadow-none">
-                    <SelectValue placeholder="เลือกบทบาท (Role)" />
-                  </SelectTrigger>
-                  <SelectContent className="rounded-xl border-white/50 bg-white/80 backdrop-blur-xl">
-                    <SelectItem value="student" className="rounded-lg cursor-pointer text-xs">นักเรียน (Student)</SelectItem>
-                    <SelectItem value="parent" className="rounded-lg cursor-pointer text-xs">ผู้ปกครอง (Parent)</SelectItem>
-                    <SelectItem value="teacher" className="rounded-lg cursor-pointer text-xs">คุณครู (Teacher)</SelectItem>
-                    <SelectItem value="staff" className="rounded-lg cursor-pointer text-xs">บุคลากร (Staff)</SelectItem>
-                    <SelectItem value="admin" className="rounded-lg cursor-pointer text-xs">ผู้บริหาร (Admin)</SelectItem>
-                    <SelectItem value="sysadmin" className="rounded-lg cursor-pointer text-xs">ผู้ดูแลระบบสูงสุด (SysAdmin)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+          {/* ── Form ── */}
+          <form onSubmit={handleLogin} className="space-y-4">
 
-              {/* Email Input - Pill Shape */}
-              <div className="relative">
-                <div className="absolute inset-y-0 left-1 pl-2 flex items-center pointer-events-none text-slate-600 z-10">
-                  <AtSign className="w-3 h-3" />
-                </div>
-                <Input
-                  type="text"
+            {/* Email field */}
+            <div className="space-y-1.5">
+              <div
+                className="relative flex items-center rounded-2xl transition-all duration-200"
+                style={{
+                  background: focusedField === 'email' ? 'rgba(255,255,255,0.85)' : (hasError ? 'rgba(254,226,226,0.6)' : 'rgba(255,255,255,0.55)'),
+                  border: focusedField === 'email' ? '1.5px solid rgba(59,130,246,0.6)' : (hasError ? '1.5px solid rgba(239,68,68,0.6)' : '1.5px solid rgba(255,255,255,0.6)'),
+                  boxShadow: focusedField === 'email' ? '0 0 0 3px rgba(59,130,246,0.15)' : (hasError ? '0 0 0 3px rgba(239,68,68,0.15)' : 'none'),
+                }}
+              >
+                <Mail size={15} className={`absolute left-3.5 flex-shrink-0 ${hasError ? 'text-red-400' : 'text-slate-400'}`} />
+                <input
+                  type="email"
                   required
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full h-auto pl-8 pr-3 py-1.5 bg-white/60 border border-white/50 rounded-full text-slate-800 text-xs font-medium focus-visible:ring-2 focus-visible:ring-white/80 transition-all placeholder:text-slate-500 shadow-none"
-                  placeholder="email or username"
+                  onChange={e => { setEmail(e.target.value); setHasError(false); }}
+                  onFocus={() => setFocusedField('email')}
+                  onBlur={() => setFocusedField(null)}
+                  placeholder="กรุณากรอกอีเมล์เพื่อเข้าสู่ระบบ"
+                  className="w-full bg-transparent pl-9 pr-4 py-2 text-sm text-slate-800 placeholder:text-slate-400 outline-none font-sarabun"
                 />
               </div>
+            </div>
 
-              {/* Password Input - Pill Shape */}
-              <div className="relative">
-                <div className="absolute inset-y-0 left-1 pl-2 flex items-center pointer-events-none text-slate-600 z-10">
-                  <Key className="w-3 h-3" />
-                </div>
-                <Input
-                  type={showPassword ? "text" : "password"}
+            {/* Password field */}
+            <div className="space-y-1.5">
+              <div
+                className="relative flex items-center rounded-2xl transition-all duration-200"
+                style={{
+                  background: focusedField === 'password' ? 'rgba(255,255,255,0.85)' : (hasError ? 'rgba(254,226,226,0.6)' : 'rgba(255,255,255,0.55)'),
+                  border: focusedField === 'password' ? '1.5px solid rgba(59,130,246,0.6)' : (hasError ? '1.5px solid rgba(239,68,68,0.6)' : '1.5px solid rgba(255,255,255,0.6)'),
+                  boxShadow: focusedField === 'password' ? '0 0 0 3px rgba(59,130,246,0.15)' : (hasError ? '0 0 0 3px rgba(239,68,68,0.15)' : 'none'),
+                }}
+              >
+                <Lock size={15} className={`absolute left-3.5 flex-shrink-0 ${hasError ? 'text-red-400' : 'text-slate-400'}`} />
+                <input
+                  type={showPassword ? 'text' : 'password'}
                   required
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full h-auto pl-8 pr-8 py-1.5 bg-white/60 border border-white/50 rounded-full text-slate-800 text-xs font-medium focus-visible:ring-2 focus-visible:ring-white/80 transition-all placeholder:text-slate-500 shadow-none"
-                  placeholder="password"
+                  onChange={e => { setPassword(e.target.value); setHasError(false); }}
+                  onFocus={() => setFocusedField('password')}
+                  onBlur={() => setFocusedField(null)}
+                  placeholder="รหัสผ่าน"
+                  className="w-full bg-transparent pl-9 pr-11 py-2 text-sm text-slate-800 placeholder:text-slate-400 outline-none font-sarabun"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-1 flex items-center pr-2 text-slate-600 hover:text-slate-800 transition-colors"
+                  className="absolute right-3.5 text-slate-400 hover:text-slate-600 transition-colors"
                 >
-                  {showPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.div
+                      key={showPassword ? 'off' : 'on'}
+                      initial={{ opacity: 0, rotate: -15 }}
+                      animate={{ opacity: 1, rotate: 0 }}
+                      exit={{ opacity: 0, rotate: 15 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </motion.div>
+                  </AnimatePresence>
                 </button>
               </div>
+            </div>
 
-              {/* Remember Me */}
-              <div className="flex items-center space-x-2 px-2 pt-1 z-10 relative">
-                <Checkbox 
-                  id="remember" 
-                  checked={rememberMe}
-                  onCheckedChange={(checked) => setRememberMe(checked as boolean)}
-                  className="w-3.5 h-3.5 border-slate-400 data-[state=checked]:bg-pink-500 data-[state=checked]:border-pink-500 text-white rounded-[4px]" 
-                />
-                <label htmlFor="remember" className="text-[10px] font-medium text-slate-600 cursor-pointer select-none hover:text-slate-800 transition-colors">
-                  จดจำรหัสผ่าน (Remember me)
-                </label>
-              </div>
-
-              {/* Footer Text & Submit Button Section */}
-              <div className="flex items-end justify-between pt-3 gap-2">
-                <p className="text-[9px] leading-relaxed text-slate-600/80 max-w-[65%]">
-                  ระบบบริหารสถานศึกษา เข้าสู่ระบบเพื่อจัดการข้อมูลต และติดตามข่าวสารของโรงเรียน
-                  <br/><br/>
-                  <a href="#" className="font-semibold text-slate-700 hover:underline">Click here for more info.</a>
-                </p>
-
-                {/* Dark Action Button */}
-                <Button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-8 h-8 shrink-0 bg-[#1e1e1e] hover:bg-black text-white rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-95 disabled:opacity-70 p-0"
+            {/* Remember me */}
+            <div className="flex items-center justify-between px-1">
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <span className="text-xs text-slate-500 group-hover:text-slate-700 transition-colors select-none">
+                  จำรหัสผ่าน
+                </span>
+                <div
+                  onClick={() => setRememberMe(!rememberMe)}
+                  className={`relative w-8 h-4.5 rounded-full transition-all duration-200 flex-shrink-0 ${rememberMe ? 'bg-black' : 'bg-slate-300'}`}
+                  style={{ width: '32px', height: '18px' }}
                 >
-                  {isLoading ? (
-                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  ) : (
-                    <ChevronRight className="w-3 h-3" />
-                  )}
-                </Button>
-              </div>
-            </form>
-          </motion.div>
+                  <motion.div
+                    animate={{ x: rememberMe ? 15 : 2 }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                    className="absolute top-[2px] w-[14px] h-[14px] bg-white rounded-full shadow-sm"
+                  />
+                </div>
+              </label>
+            </div>
 
-          {/* School Announcements Card */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: "easeOut", delay: 0.1 }}
-            className="w-full bg-slate-900/80 backdrop-blur-xl border border-white/20 rounded-[1rem] p-4 shadow-[0_8px_32px_0_rgba(0,0,0,0.2)]"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="text-sm font-semibold text-white mb-0.5">ประกาศจากทางโรงเรียน</h3>
-                <p className="text-[10px] text-slate-400">โรงเรียนปิยามิตรวิทยา (Piyamit News Feed)</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-pink-500 animate-pulse shadow-[0_0_8px_rgba(236,72,153,0.5)]" />
-                <Button className="w-7 h-7 bg-white/10 hover:bg-white/20 text-white rounded-full p-0 flex items-center justify-center transition-colors">
-                  <ChevronRight className="w-3 h-3" />
-                </Button>
-              </div>
-            </div>
-            
-            <div className="space-y-2 border-t border-white/5 pt-3">
-              <div className="flex items-start gap-2.5 group cursor-pointer">
-                <div className="w-1 h-1 rounded-full bg-pink-400 mt-1.5 flex-shrink-0" />
-                <p className="text-[10px] text-slate-300 leading-relaxed font-medium group-hover:text-white transition-colors">
-                  📢 แจ้งกำหนดการเปิดภาคเรียนที่ 1 ปีการศึกษา 2567 ในวันที่ 16 พฤษภาคมนี้
-                </p>
-              </div>
-              <div className="flex items-start gap-2.5 group cursor-pointer">
-                <div className="w-1 h-1 rounded-full bg-slate-500 mt-1.5 flex-shrink-0" />
-                <p className="text-[10px] text-slate-400 leading-relaxed group-hover:text-slate-200 transition-colors">
-                  📝 ตรวจสอบรายชื่อห้องเรียนและรหัสนักเรียนใหม่ได้ที่ Dashboard หลังเข้าสู่ระบบ
-                </p>
-              </div>
-            </div>
-          </motion.div>
+            {/* Submit */}
+            <motion.button
+              type="submit"
+              disabled={isLoading}
+              whileHover={{ scale: 1.02, y: -1 }}
+              whileTap={{ scale: 0.98 }}
+              className="relative w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-semibold text-white mt-2 overflow-hidden disabled:opacity-70"
+              style={{
+                background: '#1e1e1e',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+              }}
+            >
+              {/* Shimmer effect */}
+              <div
+                className="absolute inset-0 opacity-30"
+                style={{
+                  background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%)',
+                  animation: 'shimmer 2.5s infinite',
+                }}
+              />
+
+              <AnimatePresence mode="wait" initial={false}>
+                {isLoading ? (
+                  <motion.div
+                    key="loading"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin"
+                  />
+                ) : (
+                  <motion.span
+                    key="label"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex items-center gap-2"
+                  >
+                    เข้าสู่ระบบ
+                    <ArrowRight size={16} />
+                  </motion.span>
+                )}
+              </AnimatePresence>
+            </motion.button>
+          </form>
+
+          {/* Footer */}
+          <p className="text-[10px] text-center text-slate-400 mt-6 leading-relaxed">
+            สำหรับผู้ที่มีบัญชีในระบบเท่านั้น
+            <br />
+            ติดต่อผู้ดูแลระบบหากไม่สามารถเข้าใช้งานได้
+          </p>
         </div>
 
-        {/* RIGHT SIDE - Calendar Card (Hidden on mobile) */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: "easeOut", delay: 0.2 }}
-          className="hidden lg:flex lg:col-span-2 self-stretch"
-        >
-          <div className="w-full h-full bg-white/95 backdrop-blur-xl border border-white/50 rounded-[1.25rem] p-3.5 shadow-[0_8px_32px_0_rgba(255,255,255,0.3)] flex flex-col">
-            {/* Calendar Header — Jan left, Minimalism style right */}
-            <div className="flex justify-between items-start mb-1">
-              <div>
-                <h2 className="text-3xl font-light text-slate-800 leading-none">{shortMonth}</h2>
-                <p className="text-2xl font-light text-slate-300 mt-0.5">{fullYear}</p>
-              </div>
-              <div className="text-right pt-0.5">
-                <p className="text-[10px] text-slate-400">PIYAMITWITTAYA</p>
-                <p className="text-[10px] text-slate-400 mt-0.5">SCHOOL MAMAGEMENT</p>
-              </div>
-            </div>
+        {/* Version tag */}
+        <p className="text-center text-[10px] text-slate-400/70 mt-4">
+          Dev. C.Metha 2026
+        </p>
+      </motion.div>
 
-            {/* Pink Circle — flex-1 to fill remaining space */}
-            <div className="flex-1 flex items-center justify-center py-2">
-              <div className="w-16 h-16 bg-gradient-to-br from-pink-300 to-pink-400 rounded-full shadow-lg" />
-            </div>
+      {/* Shimmer keyframe */}
+      <style>{`
+        @keyframes shimmer {
+          0%   { transform: translateX(-100%); }
+          100% { transform: translateX(200%); }
+        }
+      `}</style>
 
-            {/* Date Info */}
-            <div className="border-t border-slate-200 pt-2 mb-2">
-              <p className="text-xs text-slate-600">{dayName} {dateNum}</p>
-              <p className="text-[10px] text-slate-500 mt-0.5">{fullMonthYear}</p>
-              <p className="text-[10px] text-slate-500 mt-0.5 font-medium">{timeString}</p>
-            </div>
-
-            {/* Bottom Section */}
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] text-slate-500">Creativestyle</p>
-              <Button className="w-6 h-6 bg-slate-800 hover:bg-slate-900 text-white rounded-full p-0 flex items-center justify-center transition-colors">
-                <ChevronRight className="w-3 h-3" />
-              </Button>
-            </div>
-            <p className="text-[10px] text-slate-500 text-center mt-1.5">Click Here</p>
-          </div>
-        </motion.div>
-      </div>
       {/* First-time Password Change Modal */}
       {user && (
-        <ChangePasswordModal 
-          user={user} 
-          isOpen={showChangeModal} 
+        <ChangePasswordModal
+          user={user}
+          isOpen={showChangeModal}
           onSuccess={() => {
             setShowChangeModal(false);
-            const targetRole = authRole || role;
-            navigate(`/${targetRole}`);
-          }} 
+            navigate(redirectPath);
+          }}
         />
       )}
     </div>

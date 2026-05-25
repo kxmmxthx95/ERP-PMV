@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { DoorOpen, Plus, Search } from 'lucide-react';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { useClassManager } from '@/hooks/useClassManager';
+import { DoorOpen, Search } from 'lucide-react';
+import { useClassroomManager } from './hooks/useClassroomManager';
 import ClassCard from './components/ClassCard';
 import ClassFormModal from './components/ClassFormModal';
 import ClassStudentPanel from './components/ClassStudentPanel';
+import { Button } from '@/components/ui/button';
 import type { ClassRoom, NewClassRoom } from '@/types/class';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
@@ -22,7 +21,7 @@ const cardAnim = {
 };
 
 export default function ClassManager() {
-  const mgr = useClassManager();
+  const mgr = useClassroomManager();
   const { getGradesBySection } = useSchoolStructure();
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -30,8 +29,6 @@ export default function ClassManager() {
   const [selectedClass, setSelectedClass] = useState<ClassRoom | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
-  const openCreate = () => { setEditingClass(null); setModalOpen(true); };
-  const openEdit = (cls: ClassRoom) => { setEditingClass(cls); setModalOpen(true); };
   const closeModal = () => { setModalOpen(false); setEditingClass(null); };
 
   const normalizedDept = mgr.filterDept === 'early' ? 'early-childhood' : mgr.filterDept;
@@ -42,11 +39,7 @@ export default function ClassManager() {
     { id: 'primary', label: DEPARTMENT_CONFIG.primary.label },
     { id: 'secondary', label: DEPARTMENT_CONFIG.secondary.label },
   ];
-  const deptIdMap: Record<Department, string> = {
-    early: 'early-childhood',
-    primary: 'primary',
-    secondary: 'secondary',
-  };
+
 
   const ITEMS_PER_PAGE = 12;
   const totalPages = Math.ceil(mgr.filteredCards.length / ITEMS_PER_PAGE);
@@ -56,127 +49,113 @@ export default function ClassManager() {
     setCurrentPage(1);
   }, [mgr.searchQ, mgr.filterDept, mgr.filterGrade]);
 
+  // Safety check: if current page is beyond total pages (due to filtering), reset to 1
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [mgr.filteredCards.length, totalPages, currentPage]);
+
   // If a class is selected, show student management panel
   if (selectedClass) {
     return (
       <ClassStudentPanel
         classRoom={selectedClass}
         onBack={() => setSelectedClass(null)}
-        onEditClass={() => openEdit(selectedClass)}
       />
     );
   }
 
   return (
-    <div className="space-y-5 text-black">
-      {/* ── Header & Actions ── */}
-      <motion.div
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between gap-4"
-      >
-        <div className="flex items-center gap-2.5">
-          <DoorOpen size={22} className="text-black/70" />
-          <div>
-            <h1 className="text-xl font-bold text-black/85 tracking-tight">จัดการชั้นเรียน</h1>
-            <p className="text-xs text-black/40 mt-0.5">
-              ปีการศึกษา {mgr.yearId} · ภาคเรียนที่ {mgr.semester}
-              {' · '}
-              <span className="font-semibold text-black/60">{mgr.filteredCards.length} / {mgr.summary.total} ห้อง</span>
-            </p>
-          </div>
-        </div>
-
-        {/* Filter Bar (Schedule Style) */}
-        <div className="flex flex-wrap items-center justify-end gap-2 w-full lg:w-auto">
+    <div className="space-y-8 text-black pb-40 font-sukhumvit">
+      {/* Unified Filter Capsule - Floating at Bottom Center (Minimalist Version) */}
+      <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-3 w-full px-4 max-w-4xl pointer-events-none">
+        <motion.div 
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className="flex items-center bg-white/80 backdrop-blur-2xl border border-white/80 p-1.5 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.12)] max-w-full overflow-hidden pointer-events-auto"
+        >
           {/* Search */}
-          <div className="relative w-full sm:w-[180px]">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30 z-10" />
-            <Input
+          <div className="relative flex items-center px-4 group border-r border-slate-200/60 mr-1">
+            <Search size={14} className="text-slate-400 mr-2 group-focus-within:text-blue-500 transition-colors" />
+            <input
               value={mgr.searchQ}
               onChange={e => mgr.setSearchQ(e.target.value)}
-              placeholder="ค้นหาห้อง / ครู..."
-              className="w-full pl-9 pr-2 py-1.5 bg-black/5 hover:bg-black/10 border-transparent outline-none text-[11px] placeholder:text-black/40 shadow-none focus-visible:ring-1 focus-visible:ring-slate-300 h-9 rounded-xl transition-all"
+              placeholder="ค้นหา..."
+              className="w-24 md:w-36 bg-transparent border-none outline-none text-[12px] font-bold text-slate-700 placeholder:text-slate-300"
             />
           </div>
 
-          <div className="flex items-center h-9 bg-black/5 border border-black/5 rounded-xl p-1 gap-0.5 max-w-full overflow-x-auto scrollbar-hide">
-            {/* Dept pills */}
+          {/* Dept Filters */}
+          <div className="flex items-center gap-1 px-1">
             <button
               onClick={() => { mgr.setFilterDept('all'); mgr.setFilterGrade('all'); }}
-              className={`h-7 px-3 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap ${
-                mgr.filterDept === 'all'
-                  ? 'bg-[#1e1e1e] text-white shadow-md'
-                  : 'text-black/40 hover:text-black/70 hover:bg-black/5'
+              className={`px-4 py-1.5 rounded-full text-[11px] font-bold transition-all ${
+                mgr.filterDept === 'all' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'
               }`}
             >
               ทั้งหมด
             </button>
-            {departments.map(d => {
-              const val = deptIdMap[d.id] ?? d.id;
-              return (
-                <button
-                  key={d.id}
-                  onClick={() => { mgr.setFilterDept(val as any); mgr.setFilterGrade('all'); }}
-                  className={`h-7 px-3 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap ${
-                    mgr.filterDept === val
-                      ? 'bg-[#1e1e1e] text-white shadow-md'
-                      : 'text-black/40 hover:text-black/70 hover:bg-black/5'
-                  }`}
-                >
-                  {d.label}
-                </button>
-              );
-            })}
-
-            {/* Grade pills */}
-            <AnimatePresence>
-              {mgr.filterDept !== 'all' && (
-                <motion.div
-                  initial={{ opacity: 0, width: 0 }}
-                  animate={{ opacity: 1, width: 'auto' }}
-                  exit={{ opacity: 0, width: 0 }}
-                  className="flex items-center overflow-hidden gap-0.5"
-                >
-                  <div className="w-px h-4 bg-black/10 mx-0.5 shrink-0" />
-                  {grades.map(g => (
-                    <button
-                      key={g.id}
-                      onClick={() => mgr.setFilterGrade(g.id)}
-                      className={`h-7 px-2.5 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap ${
-                        mgr.filterGrade === g.id
-                          ? 'bg-[#1e1e1e] text-white shadow-md'
-                          : 'text-black/40 hover:text-black/70 hover:bg-black/5'
-                      }`}
-                    >
-                      {g.shortLabel || g.label}
-                    </button>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {departments.map(d => (
+              <button
+                key={d.id}
+                onClick={() => { mgr.setFilterDept(d.id as any); mgr.setFilterGrade('all'); }}
+                className={`px-4 py-1.5 rounded-full text-[11px] font-bold transition-all whitespace-nowrap ${
+                  mgr.filterDept === d.id ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                {d.label}
+              </button>
+            ))}
           </div>
 
-          <Button
-            onClick={openCreate}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-xl text-xs font-bold text-white transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] border-0 bg-[#1e1e1e] hover:bg-[#2a2a2a] flex-shrink-0"
-            style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
-          >
-            <Plus size={14} />
-            สร้างห้องเรียน
-          </Button>
-        </div>
-      </motion.div>
+          {mgr.filterDept !== 'all' && (
+            <>
+              <div className="h-6 w-[1px] bg-slate-200 mx-1" />
+              <div className="flex items-center gap-1 px-1">
+                <button
+                  onClick={() => mgr.setFilterGrade('all')}
+                  className={`px-3 py-1.5 rounded-full text-[11px] font-bold transition-all ${
+                    mgr.filterGrade === 'all' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  ทุกระดับ
+                </button>
+                {grades.map(g => (
+                  <button
+                    key={g.id}
+                    onClick={() => mgr.setFilterGrade(g.shortLabel)}
+                    className={`w-7 h-7 rounded-full text-[11px] font-bold flex items-center justify-center transition-all ${
+                      mgr.filterGrade === g.shortLabel ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    {(g.shortLabel || g.label).replace(/[^0-9]/g, '')}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+        </motion.div>
+      </div>
 
       {/* ── Card Grid ── */}
       {mgr.filteredCards.length === 0 ? (
         <motion.div
           initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          className="flex flex-col items-center justify-center h-52 gap-2 text-black/25 bg-white/40 rounded-2xl border border-black/5 shadow-sm"
+          className="flex flex-col items-center justify-center h-64 gap-3 text-slate-300 bg-white/40 rounded-3xl border border-white shadow-sm"
         >
-          <DoorOpen size={32} className="opacity-40" />
-          <p className="text-sm font-medium">ยังไม่มีห้องเรียน</p>
-          <p className="text-xs text-black/20">กด "สร้างห้องเรียน" เพื่อเพิ่มห้องใหม่</p>
+          <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center">
+            <DoorOpen size={32} className="opacity-20" />
+          </div>
+          <p className="text-sm font-bold text-slate-400">ไม่พบข้อมูลที่ตรงตามเงื่อนไข</p>
+
+          <button
+            onClick={() => { mgr.setFilterDept('all'); mgr.setFilterGrade('all'); mgr.setSearchQ(''); }}
+            className="mt-2 px-6 py-2.5 bg-slate-900 text-white text-[11px] font-black rounded-full shadow-xl hover:bg-slate-800 transition-all active:scale-95"
+          >
+            ล้างการกรองทั้งหมด
+          </button>
         </motion.div>
       ) : (
         <AnimatePresence mode="wait">
@@ -185,7 +164,7 @@ export default function ClassManager() {
             variants={containerAnim}
             initial="hidden"
             animate="show"
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+            className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3"
           >
             {paginatedCards.map((card) => (
               <motion.div key={card.classRoom.id} variants={cardAnim}>
@@ -195,7 +174,6 @@ export default function ClassManager() {
                 >
                   <ClassCard
                     card={card}
-                    onEdit={() => openEdit(card.classRoom)}
                   />
                 </div>
               </motion.div>

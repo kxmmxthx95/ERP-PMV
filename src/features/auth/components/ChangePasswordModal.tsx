@@ -19,6 +19,14 @@ interface ChangePasswordModalProps {
   isOpen: boolean;
 }
 
+function getErrorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === 'string' ? code : '';
+  }
+  return '';
+}
+
 export default function ChangePasswordModal({ user, onSuccess, isOpen }: ChangePasswordModalProps) {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -26,6 +34,7 @@ export default function ChangePasswordModal({ user, onSuccess, isOpen }: ChangeP
   const [isLoading, setIsLoading] = useState(false);
   const [showOld, setShowOld] = useState(false);
   const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,9 +64,10 @@ export default function ChangePasswordModal({ user, onSuccess, isOpen }: ChangeP
 
       toast.success('เปลี่ยนรหัสผ่านสำเร็จแล้ว');
       onSuccess();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      if (error.code === 'auth/wrong-password') {
+      const errorCode = getErrorCode(error);
+      if (errorCode === 'auth/wrong-password') {
         toast.error('รหัสผ่านเดิมไม่ถูกต้อง');
       } else {
         toast.error('เกิดข้อผิดพลาดในการเปลี่ยนรหัสผ่าน');
@@ -144,13 +154,20 @@ export default function ChangePasswordModal({ user, onSuccess, isOpen }: ChangeP
                 <div className="relative">
                   <ShieldCheck size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                   <Input
-                    type="password"
+                    type={showConfirm ? "text" : "password"}
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="pl-11 h-12 bg-white/50 border-white/60 rounded-2xl text-slate-800 focus:ring-2 focus:ring-pink-200 transition-all border shadow-sm"
+                    className="pl-11 pr-12 h-12 bg-white/50 border-white/60 rounded-2xl text-slate-800 focus:ring-2 focus:ring-pink-200 transition-all border shadow-sm"
                     placeholder="Confirm new password"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirm(!showConfirm)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
               </div>
 

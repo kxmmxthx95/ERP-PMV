@@ -45,8 +45,6 @@ export interface Teacher {
   department: string; // 'early' | 'primary' | 'secondary'
   /** รายวิชาที่ครูได้รับมอบหมาย (อ้างอิง Subject.id จาก curriculum) */
   teachingSubjectIds?: string[];
-  /** ภาระงานสอนสูงสุด คาบ/สัปดาห์ */
-  maxHoursPerWeek?: number;
 }
 
 // ── Schedule Entry ────────────────────────────────────────────────────────────
@@ -57,6 +55,7 @@ export interface ScheduleEntry {
   subjectId: string;   // อ้างอิงจาก curriculum
   subjectName: string;
   subjectCode: string;
+  subjectGroup?: string;
   teacherId: string;
   teacherName: string;
   day: SchoolDay;
@@ -68,7 +67,7 @@ export interface ScheduleEntry {
 
 // ── Conflict Detection ────────────────────────────────────────────────────────
 
-export type ConflictType = 'teacher' | 'room' | 'class';
+export type ConflictType = 'teacher' | 'room' | 'class' | 'duplicate';
 
 export interface Conflict {
   type: ConflictType;
@@ -86,6 +85,16 @@ export interface ConflictResult {
 export interface SchoolClass {
   id: string;   // e.g. 'ม.3/1'
   label: string;
+  className: string;
+  roomNumber?: string;
   gradeLevel: string;
   department: 'early' | 'primary' | 'secondary';
+  departmentId?: 'early' | 'primary' | 'secondary';
+  academicYear: string;
+  academicYearId?: string;
+  semester?: 1 | 2;
+  curriculumPackageId?: string;
+  curriculumId?: string;
+  enrolledCourses?: Array<{ subjectId: string; teacherId: string; semester?: 1 | 2 }>;
+  studentIds?: string[];
 }

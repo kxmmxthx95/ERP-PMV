@@ -9,43 +9,48 @@ import { Textarea } from '@/components/ui/textarea';
 import FormModal from '@/components/ui/FormModal';
 import type { ClassRoom, NewClassRoom } from '@/types/class';
 import type { Department } from '@/types/curriculum';
-import { DEPARTMENT_CONFIG } from '@/types/curriculum';
+
 import type { TeacherProfile } from '@/types/teacher';
 import { useSchoolStructure } from '@/hooks/useSchoolStructure';
 
 interface ClassFormModalProps {
-  open:           boolean;
-  editingClass?:  ClassRoom | null;
-  yearId:         string;
-  semester:       1 | 2;
-  teachers:       TeacherProfile[];
-  onClose:        () => void;
-  onSubmit:       (data: NewClassRoom) => void;
-  onUpdate:       (id: string, data: Partial<ClassRoom>) => void;
-  onDelete:       (id: string) => void;
+  open: boolean;
+  editingClass?: ClassRoom | null;
+  yearId: string;
+  semester: 1 | 2;
+  teachers: TeacherProfile[];
+  onClose: () => void;
+  onSubmit: (data: NewClassRoom) => void;
+  onUpdate: (id: string, data: Partial<ClassRoom>) => void;
+  onDelete: (id: string) => void;
 }
 
 const DEFAULT: NewClassRoom = {
-  className:          '',
-  gradeLevel:         '',
-  roomNumber:         '1',
-  departmentId:       'secondary',
-  academicYearId:     '',
-  semester:           1,
-  homeroomTeacherId:  '',
-  studentCount:       0,
-  maxStudents:        40,
-  room:               '',
-  note:               '',
-  isActive:           true,
+  className: '',
+  gradeLevel: '',
+  roomNumber: '1',
+  departmentId: 'secondary',
+  department: 'secondary',
+  academicYearId: '',
+  semester: 1,
+  homeroomTeacherId: '',
+  homeroomTeacherIds: [],
+  enrolledCourses: [],
+  studentCount: 0,
+  maxStudents: 40,
+  track: '',
+  trackColor: 'bg-slate-500 shadow-slate-500/40',
+  room: '',
+  note: '',
+  isActive: true,
 };
 
 export default function ClassFormModal({
   open, editingClass, yearId, semester,
   teachers, onClose, onSubmit, onUpdate, onDelete,
 }: ClassFormModalProps) {
-  const { departments, getGradesBySection } = useSchoolStructure();
-  
+  const { getGradesBySection } = useSchoolStructure();
+
   const [form, setForm] = useState<NewClassRoom>({ ...DEFAULT, academicYearId: yearId, semester });
   const [teacherSearch, setTeacherSearch] = useState('');
   const [showTeacherResults, setShowTeacherResults] = useState(false);
@@ -68,14 +73,14 @@ export default function ClassFormModal({
 
   const handleDeptChange = (dept: Department) => {
     set('departmentId', dept);
+    set('department', dept);
     const normalizedDept = dept === 'early' ? 'early-childhood' : dept;
     const grades = getGradesBySection(normalizedDept as any);
     set('gradeLevel', grades.length > 0 ? grades[0].shortLabel : '');
   };
 
-  const filteredTeachers = teachers.filter(t => 
-    t.name.toLowerCase().includes(teacherSearch.toLowerCase()) ||
-    t.employeeCode?.toLowerCase().includes(teacherSearch.toLowerCase())
+  const filteredTeachers = teachers.filter(t =>
+    t.name.toLowerCase().includes(teacherSearch.toLowerCase())
   );
 
 
@@ -85,16 +90,16 @@ export default function ClassFormModal({
     setShowTeacherResults(false);
   };
 
-  const isValid = form.gradeLevel && form.roomNumber.trim() && form.homeroomTeacherId;
-  const isEdit  = !!editingClass;
+  const isValid = form.academicYearId && form.gradeLevel && form.roomNumber.trim() && form.homeroomTeacherId;
+  const isEdit = !!editingClass;
 
   const handleSubmit = () => {
     if (!isValid) return;
     try {
       const generatedClassName = `${form.gradeLevel}/${form.roomNumber}`;
-      const finalForm = { 
-        ...form, 
-        className: generatedClassName 
+      const finalForm = {
+        ...form,
+        className: generatedClassName
       };
 
       if (isEdit && editingClass) {
@@ -131,120 +136,116 @@ export default function ClassFormModal({
       deleteLabel="ลบห้อง"
       maxWidth="sm"
     >
-      {/* Department selector */}
+
+
+      {/* 2. Department Selection */}
       <div className="space-y-1.5">
-        <Label className="text-[11px] font-bold text-black/40 ml-1 uppercase tracking-wider">ระดับ/แผนก <span className="text-red-400">*</span></Label>
-        <div className="flex h-9 bg-black/5 p-0.5 rounded-xl border border-black/5">
-          {departments.map(d => {
-            const deptValue = d.id === 'early-childhood' ? 'early' : d.id;
-            const cfg = DEPARTMENT_CONFIG[deptValue as Department];
-            const isActive = form.departmentId === deptValue;
+        <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">แผนก <span className="text-red-400">*</span></Label>
+        <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
+          {(['early', 'primary', 'secondary'] as Department[]).map(dept => {
+            const isActive = form.departmentId === dept;
+            const label = dept === 'early' ? 'ปฐมวัย' : dept === 'primary' ? 'ประถม' : 'มัธยม';
             return (
               <button
-                key={d.id}
+                key={dept}
                 type="button"
-                onClick={() => handleDeptChange(deptValue as Department)}
-                className={`flex-1 rounded-lg text-[11px] font-bold transition-all ${
-                  isActive 
-                    ? 'bg-[#1e1e1e] text-white shadow-md' 
-                    : 'text-black/40 hover:text-black/60 hover:bg-black/5'
-                }`}
+                onClick={() => handleDeptChange(dept)}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${isActive ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                  }`}
               >
-                {cfg.label}
+                {label}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Grade */}
+      {/* Academic Year */}
       <div className="space-y-1.5">
-        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">ระดับชั้น <span className="text-red-400">*</span></Label>
-        <Select value={form.gradeLevel} onValueChange={v => set('gradeLevel', v)}>
-          <SelectTrigger className="w-full h-9 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus:ring-1 focus:ring-slate-300">
-            <SelectValue placeholder="เลือกชั้น..." />
-          </SelectTrigger>
-          <SelectContent className="rounded-xl max-h-52">
-            {gradesForDept.map(g => (
-              <SelectItem key={g.id} value={g.shortLabel} className="text-[11px]">{g.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Room number */}
-      <div className="space-y-1.5">
-        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">เลขห้อง <span className="text-red-400">*</span></Label>
+        <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">ปีการศึกษา <span className="text-red-400">*</span></Label>
         <Input
-          value={form.roomNumber}
-          onChange={e => set('roomNumber', e.target.value)}
-          placeholder="เช่น 1, 2"
-          className="h-9 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
+          value={form.academicYearId}
+          onChange={e => set('academicYearId', e.target.value)}
+          placeholder="เช่น 2567"
+          className="h-10 text-sm rounded-xl bg-slate-50 border-slate-200"
         />
       </div>
 
-      {/* Searchable Homeroom teacher */}
+      {/* 3. Grade & Room */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">ระดับชั้น <span className="text-red-400">*</span></Label>
+          <Select value={form.gradeLevel} onValueChange={v => set('gradeLevel', v)}>
+            <SelectTrigger className="h-10 text-sm rounded-xl bg-slate-50 border-slate-200">
+              <SelectValue placeholder="เลือกชั้น..." />
+            </SelectTrigger>
+            <SelectContent className="rounded-xl">
+              {gradesForDept.map(g => (
+                <SelectItem key={g.id} value={g.shortLabel} className="text-sm">{g.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">ชื่อห้องเรียน (ทับ) <span className="text-red-400">*</span></Label>
+          <Input
+            value={form.roomNumber}
+            onChange={e => set('roomNumber', e.target.value)}
+            placeholder="เช่น 1 (สำหรับห้อง ม.4/1)"
+            className="h-10 text-sm rounded-xl bg-slate-50 border-slate-200"
+          />
+        </div>
+      </div>
+
+
+
+      {/* 5. Track / Program */}
+      <div className="space-y-1.5">
+        <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">แผนการเรียน / ชื่อแผนก</Label>
+        <Input
+          value={form.track || ''}
+          onChange={e => set('track', e.target.value)}
+          placeholder="เช่น วิทย์-คณิต, ศิลป์-คำนวณ"
+          className="h-10 text-sm rounded-xl bg-slate-50 border-slate-200"
+        />
+      </div>
+
+      {/* 6. Homeroom Teacher */}
       <div className="space-y-1.5 relative">
-        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">ครูประจำชั้น <span className="text-red-400">*</span></Label>
+        <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">ครูประจำชั้น <span className="text-red-400">*</span></Label>
         <div className="relative">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <Input
             value={teacherSearch}
             onChange={e => {
               setTeacherSearch(e.target.value);
               setShowTeacherResults(true);
-              if (!e.target.value) set('homeroomTeacherId', '');
             }}
             onFocus={() => setShowTeacherResults(true)}
             placeholder="ค้นหาชื่อครู..."
-            className="h-8 pl-8 pr-3 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
+            className="h-10 pl-9 text-sm rounded-xl bg-slate-50 border-slate-200"
           />
         </div>
 
         {showTeacherResults && teacherSearch && (
-          <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white/98 backdrop-blur-xl border border-black/5 rounded-2xl shadow-2xl overflow-hidden max-h-48 overflow-y-auto divide-y divide-black/5 custom-scrollbar">
-            {filteredTeachers.length > 0 ? (
-              filteredTeachers.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => selectTeacher(t)}
-                  className="w-full px-4 py-2 text-left hover:bg-black/5 transition-colors flex items-center justify-between"
-                >
-                  <div>
-                    <p className="text-[11px] font-bold text-black/80">{t.name}</p>
-                    <p className="text-[9px] text-black/40">{t.position || 'ครูผู้สอน'}</p>
-                  </div>
-                  {form.homeroomTeacherId === t.id && <Check size={12} className="text-emerald-500" />}
-                </button>
-              ))
-            ) : (
-              <div className="px-4 py-3 text-[10px] text-center text-black/30">ไม่พบรายชื่อครู</div>
-            )}
+          <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto">
+            {filteredTeachers.map(t => (
+              <button
+                key={t.id}
+                onClick={() => selectTeacher(t)}
+                className="w-full px-4 py-2 text-left hover:bg-blue-50 text-sm flex items-center justify-between"
+              >
+                <span>{t.name}</span>
+                {form.homeroomTeacherId === t.id && <Check size={14} className="text-blue-500" />}
+              </button>
+            ))}
           </div>
         )}
-        {/* Click outside to close (Overlay) */}
-        {showTeacherResults && (
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setShowTeacherResults(false)}
-          />
-        )}
-      </div>
-
-      {/* Room location */}
-      <div className="space-y-1.5">
-        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">ที่ตั้งห้องเรียน</Label>
-        <Input
-          value={form.room ?? ''}
-          onChange={e => set('room', e.target.value)}
-          placeholder="เช่น อาคาร 2 ชั้น 3 ห้อง 301"
-          className="h-8 text-[11px] rounded-xl bg-black/[0.03] border-transparent focus-visible:ring-1 focus-visible:ring-slate-300"
-        />
       </div>
 
       {/* Note */}
       <div className="space-y-1.5">
-        <Label className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">หมายเหตุ</Label>
+        <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">หมายเหตุ</Label>
         <Textarea
           value={form.note ?? ''}
           onChange={e => set('note', e.target.value)}

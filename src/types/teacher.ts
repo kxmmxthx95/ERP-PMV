@@ -10,17 +10,19 @@ export type TeacherStatus = 'active' | 'inactive';
 
 export interface TeacherProfile {
   id: string;
-  name: string;
+  name: string;                // ชื่อ-นามสกุลแบบรวม (เพื่อความเข้ากันได้ย้อนหลัง)
+  prefix?: string;             // คำนำหน้า: นาย, นาง, นางสาว
+  firstName?: string;
+  lastName?: string;
   nameEn?: string;
-  employeeCode: string;         // รหัสครู เช่น 'T001'
+  department: Department;       // ระดับที่สังกัด: 'early' | 'primary' | 'secondary'
   email?: string;
   phone?: string;
-  department: Department;       // ระดับที่สังกัด: 'early' | 'primary' | 'secondary'
   position?: string;            // ตำแหน่งทางวิชาการ เช่น 'ครูชำนาญการ'
   teachingSubjectIds: string[]; // รหัสวิชาที่ได้รับมอบหมาย (อ้างอิง Subject.id)
-  maxHoursPerWeek: number;      // ภาระงานสอนสูงสุด (คาบ/สัปดาห์)
   status: TeacherStatus;
   photoURL?: string;
+  userId?: string;
   createdAt?: string;           // ISO date string
 }
 

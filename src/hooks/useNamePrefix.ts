@@ -11,7 +11,7 @@ export function useNamePrefix(group: PrefixGroup = 'adult') {
   const prefixes = useMemo(() => {
     switch (group) {
       case 'student':
-        return ['ด.ช.', 'ด.ญ.', 'นาย', 'นางสาว'];
+        return ['ด.ช.', 'ด.ญ.', 'นาย', 'นางสาว', 'นาง'];
       case 'teacher':
         return [
           'นาย',
@@ -37,7 +37,8 @@ export function useNamePrefix(group: PrefixGroup = 'adult') {
   };
 
   // ฟังก์ชันช่วยแยกคำนำหน้า ชื่อ และนามสกุล ออกจากชื่อเต็ม
-  const extractNameParts = (fullName: string) => {
+  const extractNameParts = (fullName: string = '') => {
+    if (!fullName) return { prefix: '', firstName: '', lastName: '' };
     const parts = fullName.split(' ');
     const last = parts.length > 1 ? parts.pop() || '' : '';
     let firstAndPrefix = parts.join(' ');

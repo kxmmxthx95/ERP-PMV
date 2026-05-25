@@ -19,9 +19,16 @@ export function useAcademicCalendar(userRole?: string, extraEvents: CalendarEven
       collection(db, 'calendar_events'),
       where('academicYearId', '==', activeYear.year)
     );
-    const unsubscribe = onSnapshot(q, (snap) => {
-      setDbEvents(snap.docs.map(d => ({ id: d.id, ...d.data() } as CalendarEvent)));
-    });
+    const unsubscribe = onSnapshot(q, 
+      (snap) => {
+        setDbEvents(snap.docs.map(d => ({ id: d.id, ...d.data() } as CalendarEvent)));
+      },
+      (err) => {
+        if (userRole === 'admin' || userRole === 'sysadmin') {
+          console.error('useAcademicCalendar listener error:', err);
+        }
+      }
+    );
     return () => unsubscribe();
   }, [activeYear?.year]);
 

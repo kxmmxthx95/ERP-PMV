@@ -33,8 +33,8 @@ const ALL_ROLES = [
 ];
 
 const ALL_DEPARTMENTS = [
-  { value: 'dept:early',   label: 'ปฐมวัย' },
-  { value: 'dept:primary', label: 'ประถมศึกษา' },
+  { value: 'dept:early',     label: 'ปฐมวัย' },
+  { value: 'dept:primary',   label: 'ประถมศึกษา' },
   { value: 'dept:secondary', label: 'มัธยมศึกษา' },
 ];
 
@@ -42,8 +42,8 @@ export type EventFormData = Omit<CalendarEvent, 'id' | 'academicYearId' | 'creat
 
 interface AddEventModalProps {
   open: boolean;
-  defaultDate?: string;           // YYYY-MM-DD — pre-fill when adding new event
-  eventToEdit?: CalendarEvent;    // if provided → edit mode
+  defaultDate?: string;
+  eventToEdit?: CalendarEvent;
   onClose: () => void;
   onSubmit: (event: EventFormData) => void;
   onUpdate?: (id: string, event: Partial<CalendarEvent>) => void;
@@ -58,9 +58,14 @@ const formSchema = z.object({
   targetRoles: z.array(z.string()).min(1, 'กรุณาเลือกอย่างน้อย 1 กลุ่ม'),
   description: z.string().optional(),
 }).refine(data => data.endDate >= data.startDate, {
-  message: "วันสิ้นสุดต้องไม่ก่อนวันเริ่มต้น",
-  path: ["endDate"],
+  message: 'วันสิ้นสุดต้องไม่ก่อนวันเริ่มต้น',
+  path: ['endDate'],
 });
+
+const inputStyle = {
+  background: 'rgba(255,255,255,0.6)',
+  borderColor: 'rgba(200,180,255,0.4)',
+};
 
 export default function AddEventModal({
   open,
@@ -85,7 +90,6 @@ export default function AddEventModal({
     },
   });
 
-  // Sync form whenever eventToEdit changes (e.g. user clicks different event)
   useEffect(() => {
     if (isEditMode) {
       form.reset({
@@ -110,7 +114,6 @@ export default function AddEventModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventToEdit?.id, isEditMode, open, defaultDate, form]);
 
-
   const onSubmitForm = (values: z.infer<typeof formSchema>) => {
     const data: EventFormData = {
       title: values.title.trim(),
@@ -120,7 +123,6 @@ export default function AddEventModal({
       targetRoles: values.targetRoles,
       description: values.description?.trim() || '',
     };
-
     if (isEditMode && onUpdate) {
       onUpdate(eventToEdit.id, data);
     } else {
@@ -136,10 +138,6 @@ export default function AddEventModal({
     }
   };
 
-  const handleFormSubmit = () => {
-    form.handleSubmit(onSubmitForm)();
-  };
-
   return (
     <FormModal
       open={open}
@@ -148,258 +146,123 @@ export default function AddEventModal({
       icon={isEditMode ? <Pencil size={14} /> : <CalendarPlus size={14} />}
       submitLabel={isEditMode ? 'บันทึกการแก้ไข' : 'ยืนยันเพิ่มกิจกรรม'}
       submitDisabled={!form.formState.isValid}
-      onSubmit={handleFormSubmit}
+      onSubmit={() => form.handleSubmit(onSubmitForm)()}
       onDelete={isEditMode && onDelete ? handleDelete : undefined}
       deleteLabel="ลบกิจกรรม"
       maxWidth="md"
     >
       <Form {...form}>
-        <form>
-          <div className="space-y-4">
+        <form className="space-y-5">
 
-                    {/* Title */}
-                    <FormField
-                      control={form.control}
-                      name="title"
-                      render={({ field }: any) => (
-                        <FormItem className="space-y-1.5">
-                          <FormLabel className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">
-                            ชื่อกิจกรรม <span className="text-red-400">*</span>
-                          </FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="เช่น สอบกลางภาค เทอม 1"
-                              className="w-full text-xs px-4 py-2.5 rounded-xl outline-none transition-all h-10 shadow-none focus-visible:ring-1 focus-visible:ring-slate-300 bg-black/[0.03] border-transparent"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormMessage className="text-[10px] font-medium" />
-                        </FormItem>
-                      )}
-                    />
+          {/* Title */}
+          <FormField
+            control={form.control}
+            name="title"
+            render={({ field }: any) => (
+              <FormItem className="space-y-1.5">
+                <FormLabel className="text-[11px] font-bold text-slate-600 uppercase tracking-widest font-sukhumvit">
+                  ชื่อกิจกรรม <span className="text-rose-400">*</span>
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder="เช่น สอบกลางภาค เทอม 1"
+                    className="h-10 rounded-3xl border text-xs font-medium focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none font-sarabun"
+                    style={inputStyle}
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage className="text-[10px] font-medium" />
+              </FormItem>
+            )}
+          />
 
-                    {/* Type */}
-                    <FormField
-                      control={form.control}
-                      name="type"
-                      render={({ field }: any) => {
-                        const typeCfg = EVENT_TYPE_CONFIG[field.value as CalendarEventType] || EVENT_TYPE_CONFIG['activity'];
-                        return (
-                          <FormItem className="space-y-1.5">
-                            <FormLabel className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">
-                              ประเภทกิจกรรม <span className="text-red-400">*</span>
-                            </FormLabel>
-                            <Select onValueChange={field.onChange} value={field.value}>
-                              <FormControl>
-                                <SelectTrigger
-                                  className="w-full text-xs px-4 py-2.5 rounded-xl outline-none transition-all cursor-pointer h-10 shadow-none border-transparent focus:ring-1 focus:ring-slate-300"
-                                  style={{
-                                    color: typeCfg.color,
-                                    background: `${typeCfg.color}10`,
-                                    fontWeight: 700,
-                                  }}
-                                >
-                                  <SelectValue placeholder="เลือกประเภทกิจกรรม" />
-                                </SelectTrigger>
-                              </FormControl>
-                              <SelectContent className="bg-white/95 backdrop-blur-xl border-white/50 rounded-xl shadow-lg border">
-                                {ALL_TYPES.map(t => (
-                                  <SelectItem key={t} value={t} className="text-xs rounded-lg cursor-pointer">
-                                    {EVENT_TYPE_CONFIG[t].label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <FormMessage className="text-[10px] font-medium" />
-                          </FormItem>
-                        );
+          {/* Type */}
+          <FormField
+            control={form.control}
+            name="type"
+            render={({ field }: any) => {
+              const typeCfg = EVENT_TYPE_CONFIG[field.value as CalendarEventType] || EVENT_TYPE_CONFIG['activity'];
+              return (
+                <FormItem className="space-y-1.5">
+                  <FormLabel className="text-[11px] font-bold text-slate-600 uppercase tracking-widest font-sukhumvit">
+                    ประเภทกิจกรรม <span className="text-rose-400">*</span>
+                  </FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl>
+                      <SelectTrigger
+                        className="w-full h-10 rounded-3xl border text-xs font-bold shadow-none focus:ring-2 focus:ring-blue-500/20 font-sukhumvit"
+                        style={{
+                          color: typeCfg.color,
+                          background: `${typeCfg.color}12`,
+                          borderColor: `${typeCfg.color}30`,
+                        }}
+                      >
+                        <SelectValue placeholder="เลือกประเภทกิจกรรม" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent
+                      className="rounded-[1.5rem] overflow-hidden p-1.5"
+                      style={{
+                        background: 'rgba(255,255,255,0.97)',
+                        backdropFilter: 'blur(24px)',
+                        border: '1px solid rgba(255,255,255,0.95)',
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.14)',
                       }}
-                    />
+                    >
+                      {ALL_TYPES.map(t => (
+                        <SelectItem key={t} value={t} className="text-[11px] font-bold rounded-xl font-sukhumvit cursor-pointer">
+                          {EVENT_TYPE_CONFIG[t].label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage className="text-[10px] font-medium" />
+                </FormItem>
+              );
+            }}
+          />
 
-                    {/* Dates */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <FormField
-                        control={form.control}
-                        name="startDate"
-                        render={({ field }: any) => (
-                          <FormItem className="space-y-1.5">
-                            <FormLabel className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">
-                              วันเริ่มต้น <span className="text-red-400">*</span>
-                            </FormLabel>
-                            <FormControl>
-                              <Input
-                                type="date"
-                                className="w-full text-xs px-4 py-2.5 rounded-xl outline-none transition-all h-10 shadow-none focus-visible:ring-1 focus-visible:ring-slate-300 bg-black/[0.03] border-transparent"
-                                {...field}
-                                onChange={(e) => {
-                                  field.onChange(e);
-                                  const end = form.getValues('endDate');
-                                  if (end < e.target.value) {
-                                    form.setValue('endDate', e.target.value);
-                                  }
-                                }}
-                              />
-                            </FormControl>
-                            <FormMessage className="text-[10px] font-medium" />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={form.control}
-                        name="endDate"
-                        render={({ field }: any) => (
-                          <FormItem className="space-y-1.5">
-                            <FormLabel className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">
-                              วันสิ้นสุด <span className="text-red-400">*</span>
-                            </FormLabel>
-                            <FormControl>
-                              <Input
-                                type="date"
-                                min={form.getValues('startDate')}
-                                className="w-full text-xs px-4 py-2.5 rounded-xl outline-none transition-all h-10 shadow-none focus-visible:ring-1 focus-visible:ring-slate-300 bg-black/[0.03] border-transparent"
-                                {...field}
-                              />
-                            </FormControl>
-                            <FormMessage className="text-[10px] font-medium" />
-                          </FormItem>
-                        )}
-                      />
-                    </div>
-
-                    {/* Target Roles + Departments */}
-                    <FormField
-                      control={form.control}
-                      name="targetRoles"
-                      render={({ field }: any) => {
-                        const allDeptsSelected = ALL_DEPARTMENTS.every(d => field.value.includes(d.value));
-                        const allRolesSelected = ALL_ROLES.every(r => field.value.includes(r.value));
-
-                        return (
-                          <FormItem className="space-y-1.5">
-                            <FormLabel className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">
-                              แสดงให้กลุ่ม <span className="text-red-400">*</span>
-                            </FormLabel>
-                            <FormControl>
-                              <div className="space-y-4 pt-1">
-                                {/* Roles */}
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between px-1">
-                                    <p className="text-[10px] font-bold text-black/30 uppercase tracking-widest">ผู้ใช้</p>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const allRoleValues = ALL_ROLES.map(r => r.value);
-                                        if (allRolesSelected) {
-                                          field.onChange(field.value.filter((r: string) => !allRoleValues.includes(r)));
-                                        } else {
-                                          const newRoles = [...field.value];
-                                          allRoleValues.forEach(v => {
-                                            if (!newRoles.includes(v)) newRoles.push(v);
-                                          });
-                                          field.onChange(newRoles);
-                                        }
-                                      }}
-                                      className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-md transition-colors hover:bg-black/5 text-black/40"
-                                    >
-                                      {allRolesSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'}
-                                    </button>
-                                  </div>
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {ALL_ROLES.map(r => {
-                                      const active = field.value.includes(r.value);
-                                      return (
-                                        <button
-                                          key={r.value}
-                                          type="button"
-                                          onClick={() => {
-                                            const newRoles = active
-                                              ? field.value.filter((val: string) => val !== r.value)
-                                              : [...field.value, r.value];
-                                            field.onChange(newRoles);
-                                          }}
-                                          className="text-[11px] font-bold px-3 py-1.5 rounded-xl transition-all duration-200"
-                                          style={{
-                                            background: active ? 'rgba(99,102,241,0.12)' : 'rgba(0,0,0,0.03)',
-                                            border: `1px solid ${active ? 'rgba(99,102,241,0.20)' : 'transparent'}`,
-                                            color: active ? '#4f46e5' : 'rgba(0,0,0,0.45)',
-                                          }}
-                                        >
-                                          {r.label}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-
-                                {/* Departments */}
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between px-1">
-                                    <p className="text-[10px] font-bold text-black/30 uppercase tracking-widest">แผนก</p>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const allDeptValues = ALL_DEPARTMENTS.map(d => d.value);
-                                        if (allDeptsSelected) {
-                                          field.onChange(field.value.filter((r: string) => !allDeptValues.includes(r)));
-                                        } else {
-                                          const newRoles = [...field.value];
-                                          allDeptValues.forEach(v => {
-                                            if (!newRoles.includes(v)) newRoles.push(v);
-                                          });
-                                          field.onChange(newRoles);
-                                        }
-                                      }}
-                                      className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-md transition-colors hover:bg-black/5 text-black/40"
-                                    >
-                                      {allDeptsSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'}
-                                    </button>
-                                  </div>
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {ALL_DEPARTMENTS.map(d => {
-                                      const active = field.value.includes(d.value);
-                                      return (
-                                        <button
-                                          key={d.value}
-                                          type="button"
-                                          onClick={() => {
-                                            const newRoles = active
-                                              ? field.value.filter((val: string) => val !== d.value)
-                                              : [...field.value, d.value];
-                                            field.onChange(newRoles);
-                                          }}
-                                          className="text-[11px] font-bold px-3 py-1.5 rounded-xl transition-all duration-200"
-                                          style={{
-                                            background: active ? 'rgba(16,185,129,0.12)' : 'rgba(0,0,0,0.03)',
-                                            border: `1px solid ${active ? 'rgba(16,185,129,0.20)' : 'transparent'}`,
-                                            color: active ? '#059669' : 'rgba(0,0,0,0.45)',
-                                          }}
-                                        >
-                                          {d.label}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              </div>
-                            </FormControl>
-                            <FormMessage className="text-[10px] font-medium" />
-                          </FormItem>
-                        );
-                      }}
-                    />
-
-            {/* Description */}
+          {/* Dates */}
+          <div className="grid grid-cols-2 gap-3">
             <FormField
               control={form.control}
-              name="description"
+              name="startDate"
               render={({ field }: any) => (
                 <FormItem className="space-y-1.5">
-                  <FormLabel className="text-[11px] font-semibold text-black/50 ml-1 uppercase tracking-wider">รายละเอียด (ไม่บังคับ)</FormLabel>
+                  <FormLabel className="text-[11px] font-bold text-slate-600 uppercase tracking-widest font-sukhumvit">
+                    วันเริ่มต้น <span className="text-rose-400">*</span>
+                  </FormLabel>
                   <FormControl>
-                    <textarea
-                      placeholder="ระบุข้อมูลเพิ่มเติมของกิจกรรม..."
-                      rows={3}
-                      className="w-full text-xs px-4 py-3 rounded-xl outline-none transition-all resize-none focus-visible:ring-1 focus-visible:ring-slate-300 bg-black/[0.03] border-transparent"
+                    <Input
+                      type="date"
+                      className="h-10 rounded-3xl border text-xs font-medium focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none font-sarabun"
+                      style={inputStyle}
+                      {...field}
+                      onChange={(e) => {
+                        field.onChange(e);
+                        const end = form.getValues('endDate');
+                        if (end < e.target.value) form.setValue('endDate', e.target.value);
+                      }}
+                    />
+                  </FormControl>
+                  <FormMessage className="text-[10px] font-medium" />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="endDate"
+              render={({ field }: any) => (
+                <FormItem className="space-y-1.5">
+                  <FormLabel className="text-[11px] font-bold text-slate-600 uppercase tracking-widest font-sukhumvit">
+                    วันสิ้นสุด <span className="text-rose-400">*</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      type="date"
+                      min={form.getValues('startDate')}
+                      className="h-10 rounded-3xl border text-xs font-medium focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none font-sarabun"
+                      style={inputStyle}
                       {...field}
                     />
                   </FormControl>
@@ -408,6 +271,138 @@ export default function AddEventModal({
               )}
             />
           </div>
+
+          {/* Target Roles + Departments */}
+          <FormField
+            control={form.control}
+            name="targetRoles"
+            render={({ field }: any) => {
+              const allDeptsSelected = ALL_DEPARTMENTS.every(d => field.value.includes(d.value));
+              const allRolesSelected = ALL_ROLES.every(r => field.value.includes(r.value));
+
+              const toggleAll = (items: { value: string }[], allSelected: boolean) => {
+                const vals = items.map(x => x.value);
+                if (allSelected) {
+                  field.onChange(field.value.filter((v: string) => !vals.includes(v)));
+                } else {
+                  const next = [...field.value];
+                  vals.forEach(v => { if (!next.includes(v)) next.push(v); });
+                  field.onChange(next);
+                }
+              };
+
+              const toggle = (val: string) => {
+                const active = field.value.includes(val);
+                field.onChange(active ? field.value.filter((v: string) => v !== val) : [...field.value, val]);
+              };
+
+              return (
+                <FormItem className="space-y-1.5">
+                  <FormLabel className="text-[11px] font-bold text-slate-600 uppercase tracking-widest font-sukhumvit">
+                    แสดงให้กลุ่ม <span className="text-rose-400">*</span>
+                  </FormLabel>
+                  <FormControl>
+                    <div
+                      className="rounded-2xl p-4 space-y-4"
+                      style={{ background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(200,180,255,0.3)' }}
+                    >
+                      {/* Roles */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-sukhumvit">ผู้ใช้งาน</p>
+                          <button
+                            type="button"
+                            onClick={() => toggleAll(ALL_ROLES, allRolesSelected)}
+                            className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg transition-colors hover:bg-black/5 text-slate-400"
+                          >
+                            {allRolesSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {ALL_ROLES.map(r => {
+                            const active = field.value.includes(r.value);
+                            return (
+                              <button
+                                key={r.value}
+                                type="button"
+                                onClick={() => toggle(r.value)}
+                                className="text-[11px] font-bold px-3 py-1.5 rounded-xl transition-all duration-200 font-sukhumvit"
+                                style={{
+                                  background: active ? 'rgba(99,102,241,0.10)' : 'rgba(0,0,0,0.03)',
+                                  border: `1px solid ${active ? 'rgba(99,102,241,0.22)' : 'transparent'}`,
+                                  color: active ? '#4f46e5' : 'rgba(0,0,0,0.40)',
+                                }}
+                              >
+                                {r.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Departments */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-sukhumvit">แผนก</p>
+                          <button
+                            type="button"
+                            onClick={() => toggleAll(ALL_DEPARTMENTS, allDeptsSelected)}
+                            className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg transition-colors hover:bg-black/5 text-slate-400"
+                          >
+                            {allDeptsSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {ALL_DEPARTMENTS.map(d => {
+                            const active = field.value.includes(d.value);
+                            return (
+                              <button
+                                key={d.value}
+                                type="button"
+                                onClick={() => toggle(d.value)}
+                                className="text-[11px] font-bold px-3 py-1.5 rounded-xl transition-all duration-200 font-sukhumvit"
+                                style={{
+                                  background: active ? 'rgba(16,185,129,0.10)' : 'rgba(0,0,0,0.03)',
+                                  border: `1px solid ${active ? 'rgba(16,185,129,0.22)' : 'transparent'}`,
+                                  color: active ? '#059669' : 'rgba(0,0,0,0.40)',
+                                }}
+                              >
+                                {d.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </FormControl>
+                  <FormMessage className="text-[10px] font-medium" />
+                </FormItem>
+              );
+            }}
+          />
+
+          {/* Description */}
+          <FormField
+            control={form.control}
+            name="description"
+            render={({ field }: any) => (
+              <FormItem className="space-y-1.5">
+                <FormLabel className="text-[11px] font-bold text-slate-600 uppercase tracking-widest font-sukhumvit">
+                  รายละเอียด (ไม่บังคับ)
+                </FormLabel>
+                <FormControl>
+                  <textarea
+                    placeholder="ระบุข้อมูลเพิ่มเติมของกิจกรรม..."
+                    rows={3}
+                    className="w-full text-xs px-4 py-3 rounded-2xl outline-none transition-all resize-none focus:ring-2 focus:ring-blue-500/20 font-sarabun border"
+                    style={inputStyle}
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage className="text-[10px] font-medium" />
+              </FormItem>
+            )}
+          />
         </form>
       </Form>
     </FormModal>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { isSameDay } from 'date-fns';
-import { collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useAuth } from '@/hooks/useAuth';
@@ -13,6 +13,7 @@ import CalendarPanel from './components/CalendarPanel';
 import UpcomingPanel from './components/UpcomingPanel';
 import AddEventModal, { type EventFormData } from './components/AddEventModal';
 import { useSchoolStructure } from '@/hooks/useSchoolStructure';
+import CalendarFilterCapsule from './components/CalendarFilterCapsule';
 
 export default function AcademicCalendar() {
   const { role } = useAuth();
@@ -26,14 +27,22 @@ export default function AcademicCalendar() {
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | undefined>(undefined);
   const [filterDepartment, setFilterDepartment] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [dbEvents, setDbEvents] = useState<CalendarEvent[]>([]);
+  const [semesterSettings, setSemesterSettings] = useState<any>(null);
 
-  // Fetch Thai public holidays from Calendarific for the current displayed year
-  const { holidays, isLoading: holidaysLoading, error: holidaysError } = useThaiHolidays(
+  const { holidays } = useThaiHolidays(
     currentMonth.getFullYear(),
   );
 
-  // ── ดึงข้อมูลจาก Firebase ──
+  useEffect(() => {
+    const fetchSemesters = async () => {
+      const snap = await getDoc(doc(db, 'settings', 'dept_semesters'));
+      if (snap.exists()) setSemesterSettings(snap.data());
+    };
+    fetchSemesters();
+  }, []);
+
   useEffect(() => {
     if (!activeYear?.year) {
       setDbEvents([]);
@@ -43,14 +52,20 @@ export default function AcademicCalendar() {
       collection(db, 'calendar_events'),
       where('academicYearId', '==', activeYear.year)
     );
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const evts = snap.docs.map(d => ({ id: d.id, ...d.data() } as CalendarEvent));
-      setDbEvents(evts);
+    const unsubscribe = onSnapshot(q, {
+      next: (snap) => {
+        const evts = snap.docs.map(d => ({ id: d.id, ...d.data() } as CalendarEvent));
+        setDbEvents(evts);
+      },
+      error: (err) => {
+        if (role === 'admin' || role === 'sysadmin') {
+          console.error('calendar_events listener error:', err);
+        }
+      }
     });
     return () => unsubscribe();
   }, [activeYear?.year]);
 
-  // ── รวมข้อมูล Firebase กับ API Holidays และกรองตาม Role ──
   const allEvents = useMemo(() => {
     const apiHolidays: CalendarEvent[] = holidays.map(h => ({
       ...h,
@@ -59,17 +74,69 @@ export default function AcademicCalendar() {
       createdBy: 'system'
     }));
 
-    const combined = [...dbEvents, ...apiHolidays];
+    // Inject semester dates as events
+    const semesterEvents: CalendarEvent[] = [];
+    if (semesterSettings) {
+      const depts = ['kindergarten', 'primary', 'secondary'] as const;
+      const deptLabels: Record<string, string> = { kindergarten: 'อนุบาล', primary: 'ประถม', secondary: 'มัธยม' };
+      const deptIds: Record<string, string> = { kindergarten: 'dept:early', primary: 'dept:primary', secondary: 'dept:secondary' };
 
-    // กรองตาม Role (ผู้บริหารและ Sysadmin เห็นทุกกิจกรรม)
+      depts.forEach(dept => {
+        const config = semesterSettings[dept];
+        if (!config) return;
+
+        ['semester1', 'semester2', 'summerSemester'].forEach((semKey) => {
+          const sem = config[semKey];
+          if (!sem?.startDate || !sem?.endDate) return;
+          if (semKey === 'summerSemester' && !config.summerEnabled) return;
+
+          const semLabel = semKey === 'semester1' ? 'เทอม 1' : semKey === 'semester2' ? 'เทอม 2' : 'Summer';
+          
+          semesterEvents.push({
+            id: `system-${dept}-${semKey}-start`,
+            title: `เปิดเรียน ${semLabel} (${deptLabels[dept]})`,
+            startDate: sem.startDate,
+            endDate: sem.startDate,
+            type: 'semester-start',
+            targetRoles: [deptIds[dept], 'student', 'teacher', 'parent', 'staff'],
+            description: `วันเปิดภาคเรียน ${semLabel} ระดับชั้น${deptLabels[dept]}`
+          });
+
+          semesterEvents.push({
+            id: `system-${dept}-${semKey}-end`,
+            title: `ปิดเรียน ${semLabel} (${deptLabels[dept]})`,
+            startDate: sem.endDate,
+            endDate: sem.endDate,
+            type: 'semester-end',
+            targetRoles: [deptIds[dept], 'student', 'teacher', 'parent', 'staff'],
+            description: `วันปิดภาคเรียน ${semLabel} ระดับชั้น${deptLabels[dept]}`
+          });
+        });
+      });
+    }
+
+    const dbIds = new Set(dbEvents.map(e => e.id));
+    const filteredSemesterEvents = semesterEvents.filter(e => !dbIds.has(e.id));
+    const combined = [...dbEvents, ...apiHolidays, ...filteredSemesterEvents];
+
     return combined.filter(e => {
       if (role === 'sysadmin' || role === 'admin') return true;
       if (!e.targetRoles || e.targetRoles.length === 0) return true;
-      return role ? e.targetRoles.includes(role) : true;
-    });
-  }, [dbEvents, holidays, activeYear?.year, role]);
 
-  // ── Helper Functions สำหรับส่งไปยัง Calendar Panel ──
+      // 1. ถ้ามี Role ของผู้ใช้ระบุอยู่ตรงๆ ให้เห็นได้เลย
+      if (role && e.targetRoles.includes(role)) return true;
+
+      // 2. กรณีพิเศษ: ถ้ามีการระบุแผนก (dept:) แต่ไม่ได้ระบุ Role เฉพาะเจาะจง (เช่น student, teacher)
+      // เราจะอนุญาตให้ Role พื้นฐานเห็นได้ เพื่อไม่ให้กิจกรรมหายไปจากหน้าจอ
+      const hasDeptTag = e.targetRoles.some(r => r.startsWith('dept:'));
+      const hasRoleTag = e.targetRoles.some(r => !r.startsWith('dept:'));
+
+      if (hasDeptTag && !hasRoleTag) return true;
+
+      return false;
+    });
+  }, [dbEvents, holidays, activeYear?.year, role, semesterSettings]);
+
   const upcomingEvents = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     return allEvents
@@ -81,7 +148,6 @@ export default function AcademicCalendar() {
     return allEvents.filter(e => dateStr >= e.startDate && dateStr <= e.endDate);
   };
 
-  // ── CRUD Operations (เพิ่ม/แก้ไข/ลบ ลง Firebase) ──
   const addEvent = async (eventData: EventFormData) => {
     if (!activeYear?.year) {
       alert('กรุณาตั้งค่าปีการศึกษาปัจจุบันก่อนเพิ่มกิจกรรม');
@@ -95,24 +161,27 @@ export default function AcademicCalendar() {
   };
 
   const updateEvent = async (id: string, eventData: Partial<CalendarEvent>) => {
-    if (id.startsWith('api-')) return; // ป้องกันการแก้ไขวันหยุดราชการจาก API
-    await updateDoc(doc(db, 'calendar_events', id), eventData);
+    if (id.startsWith('api-')) return;
+    // ใช้ setDoc + merge เพื่อให้สามารถบันทึกทับ ID ที่มาจากระบบ (system-) ได้
+    await setDoc(doc(db, 'calendar_events', id), {
+      ...eventData,
+      academicYearId: activeYear?.year || '',
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
   };
 
   const deleteEvent = async (id: string) => {
-    if (id.startsWith('api-')) return; // ป้องกันการลบวันหยุดราชการจาก API
+    if (id.startsWith('api-')) return;
     await deleteDoc(doc(db, 'calendar_events', id));
   };
 
   const handleMoveEvent = async (id: string, newDate: Date) => {
-    if (id.startsWith('api-')) return;
+    if (id.startsWith('api-') || id.startsWith('system-')) return;
     const event = allEvents.find(e => e.id === id);
     if (!event) return;
 
-    // ปรับ timezone ให้อยู่ในโซน Local ก่อนตัด String เป็น YYYY-MM-DD
     const targetDateStr = new Date(newDate.getTime() - newDate.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
-    // รักษาระยะเวลาของกิจกรรมให้เท่าเดิม
     const oldStart = new Date(event.startDate);
     const oldEnd = new Date(event.endDate);
     const durationDays = Math.round((oldEnd.getTime() - oldStart.getTime()) / (1000 * 60 * 60 * 24));
@@ -148,23 +217,33 @@ export default function AcademicCalendar() {
     ? new Date(selectedDate.getTime() - selectedDate.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
     : undefined;
 
-  // ── กรองกิจกรรมตามแผนก ──
-  const checkDeptMatch = (ev: CalendarEvent, targetDept: string) => {
-    if (targetDept === 'all') return true;
-    if (!ev.targetRoles || ev.targetRoles.length === 0) return true;
+  const checkMatch = (ev: CalendarEvent, targetDept: string, query: string) => {
+    let deptMatch = true;
+    if (targetDept !== 'all') {
+      if (ev.targetRoles && ev.targetRoles.length > 0) {
+        const hasAnyDept = ev.targetRoles.some(r => r.startsWith('dept:'));
+        if (hasAnyDept) {
+          deptMatch = ev.targetRoles.includes(targetDept);
+        }
+      }
+    }
 
-    // ถ้าไม่ได้ระบุแผนกเลย (ไม่มี string ที่ขึ้นต้นด้วย dept:) ถือว่าเป็นกิจกรรมของทุกแผนก
-    const hasAnyDept = ev.targetRoles.some(r => r.startsWith('dept:'));
-    if (!hasAnyDept) return true;
+    let searchMatch = true;
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      searchMatch =
+        ev.title.toLowerCase().includes(q) ||
+        (ev.description?.toLowerCase().includes(q) ?? false);
+    }
 
-    return ev.targetRoles.includes(targetDept);
+    return deptMatch && searchMatch;
   };
 
-  const filteredUpcomingEvents = upcomingEvents.filter(ev => checkDeptMatch(ev, filterDepartment));
+  const filteredUpcomingEvents = upcomingEvents.filter(ev => checkMatch(ev, filterDepartment, searchQuery));
 
   const handleGetEventsForDate = (dateStr: string) => {
     const evs = getEventsForDate(dateStr);
-    return evs.filter(ev => checkDeptMatch(ev, filterDepartment));
+    return evs.filter(ev => checkMatch(ev, filterDepartment, searchQuery));
   };
 
   const deptIdMap: Record<string, string> = {
@@ -173,53 +252,58 @@ export default function AcademicCalendar() {
     'secondary': 'dept:secondary',
   };
 
+  const handleEditEvent = (event: CalendarEvent) => {
+    setEditingEvent(event);
+    setModalOpen(true);
+  };
+
   return (
     <div className="space-y-5 text-black">
-      <CalendarHeader
-        onAddEvent={() => setModalOpen(true)}
-        holidayStatus={{
-          isLoading: holidaysLoading,
-          error: holidaysError,
-          count: holidays.length,
-        }}
-        filterType={filterType}
-        onTypeChange={handleTypeChange}
-        allTypes={ALL_TYPES}
-        filterDept={filterDepartment}
-        onDeptChange={setFilterDepartment}
-        departments={departments}
-        deptIdMap={deptIdMap}
-      />
+      <CalendarHeader />
 
       <motion.div
         variants={containerAnim}
         initial="hidden"
         animate="show"
-        className="grid grid-cols-1 xl:grid-cols-3 gap-4"
+        className="grid grid-cols-1 lg:grid-cols-10 gap-4"
       >
-        <CalendarPanel
-          currentMonth={currentMonth}
-          selectedDate={selectedDate}
-          activeFilters={activeFilters}
-          getEventsForDate={handleGetEventsForDate}
-          onChangeMonth={setCurrentMonth}
-          onSelectDate={handleSelectDate}
-          onEditEvent={ev => { setEditingEvent(ev); setModalOpen(true); }}
-          onAddEventForDate={day => {
-            if (!selectedDate || !isSameDay(selectedDate, day)) {
-              setSelectedDate(day);
-            }
-            setEditingEvent(undefined);
-            setModalOpen(true);
-          }}
-          onMoveEvent={handleMoveEvent}
-        />
+        <div className="lg:col-span-7">
+          <CalendarPanel
+            currentMonth={currentMonth}
+            selectedDate={selectedDate}
+            activeFilters={activeFilters}
+            getEventsForDate={handleGetEventsForDate}
+            onChangeMonth={setCurrentMonth}
+            onSelectDate={handleSelectDate}
+            onMoveEvent={handleMoveEvent}
+          />
+        </div>
 
-        <UpcomingPanel
-          upcomingEvents={filteredUpcomingEvents}
-          activeFilters={activeFilters}
-        />
+        <div className="lg:col-span-3">
+          <UpcomingPanel
+            upcomingEvents={filteredUpcomingEvents}
+            activeFilters={activeFilters}
+            selectedDate={selectedDate}
+            selectedEvents={selectedDate ? handleGetEventsForDate(new Date(selectedDate.getTime() - selectedDate.getTimezoneOffset() * 60000).toISOString().slice(0, 10)) : []}
+            onClearSelection={() => setSelectedDate(null)}
+            filterType={filterType}
+            onTypeChange={handleTypeChange}
+            allTypes={ALL_TYPES}
+            onEditEvent={handleEditEvent}
+            onDeleteEvent={deleteEvent}
+          />
+        </div>
       </motion.div>
+
+      <CalendarFilterCapsule
+        filterDept={filterDepartment}
+        onDeptChange={setFilterDepartment}
+        departments={departments}
+        deptIdMap={deptIdMap}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        onAddEvent={() => setModalOpen(true)}
+      />
 
       <AddEventModal
         open={modalOpen}

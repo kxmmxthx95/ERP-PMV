@@ -28,20 +28,20 @@ const CODE_PREFIX_TO_GROUP: Record<string, SubjectGroupId> = {
   E1001: 'thai',
   E1002: 'math',
   E1003: 'arts',
-  E1004: 'health_pe',
-  E1005: 'foreign_lang',
+  E1004: 'pe',
+  E1005: 'foreign',
   // ประถมศึกษา (P)
   P1001: 'thai',
   P1002: 'math',
   P1003: 'science',
   P1004: 'social',
   P1005: 'social',       // ประวัติศาสตร์ → สังคม
-  P1006: 'foreign_lang',
-  P1007: 'health_pe',
+  P1006: 'foreign',
+  P1007: 'pe',
   P1008: 'arts',
   P1009: 'careers',
   P2001: 'science',      // คอมพิวเตอร์ → วิทย์
-  P2002: 'foreign_lang',
+  P2002: 'foreign',
   P3001: 'other',
   P3002: 'other',
   // มัธยมศึกษา (M)
@@ -53,15 +53,15 @@ const CODE_PREFIX_TO_GROUP: Record<string, SubjectGroupId> = {
   M1006: 'science',      // ชีววิทยา
   M1007: 'social',
   M1008: 'social',       // ประวัติศาสตร์
-  M1009: 'foreign_lang',
-  M1010: 'health_pe',
+  M1009: 'foreign',
+  M1010: 'pe',
   M1011: 'arts',
   M1012: 'careers',
   M2001: 'math',
-  M2002: 'foreign_lang',
+  M2002: 'foreign',
   M2003: 'science',      // วิทยาการคำนวณ
-  M3001: 'foreign_lang',
-  M3002: 'foreign_lang',
+  M3001: 'foreign',
+  M3002: 'foreign',
   M3003: 'social',       // เศรษฐศาสตร์
   M4001: 'other',
   M4002: 'other',
@@ -71,13 +71,13 @@ export function useSubjectGroup(subjects: Subject[] = []) {
   // คำนวณ groups ใหม่เสมอเมื่อ subjects เปลี่ยนแปลง เพื่อความ reactive
   const groups = useMemo<SubjectGroup[]>(() => {
     const initial = SEED_GROUPS.map(g => ({ ...g, subjectIds: [] as string[] }));
-    
+
     for (const subject of subjects) {
       // 1. ใช้ค่าจาก subjectGroup property ในตัว subject (ถ้ามี)
       // 2. ถ้าไม่มี ให้ใช้ auto-map จากรหัสวิชา (Legacy)
       // 3. ถ้ายังไม่พบอีก ให้ลง 'other'
       const groupKey = (subject.subjectGroup as SubjectGroupId) || CODE_PREFIX_TO_GROUP[subject.code.slice(0, 5)];
-      
+
       const targetKey = groupKey || 'other';
       const idx = initial.findIndex(g => g.groupKey === targetKey);
       if (idx !== -1) {

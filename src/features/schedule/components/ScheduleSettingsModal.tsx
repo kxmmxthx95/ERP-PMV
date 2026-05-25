@@ -1,32 +1,36 @@
-import { useState, useEffect } from 'react';
-import { Clock, Save, Settings } from 'lucide-react';
+import { useState } from 'react';
+import { Settings, Zap, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { useScheduleSettings } from '@/hooks/useScheduleSettings';
 
 interface ScheduleSettingsModalProps {
-  classId?: string;
+  targetId?: string;
 }
 
-export default function ScheduleSettingsModal({ classId }: ScheduleSettingsModalProps) {
-  const { periodCount, lunchPeriods, periodTimes, updateSettings } = useScheduleSettings(classId);
+export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModalProps) {
+  const { periodCount, lunchPeriods, periodTimes, updateSettings } = useScheduleSettings(targetId);
 
   const [open, setOpen] = useState(false);
   const [localCount, setLocalCount] = useState(periodCount);
   const [localLunches, setLocalLunches] = useState<number[]>(lunchPeriods);
   const [localTimes, setLocalTimes] = useState(periodTimes);
 
-  // ดึงค่าล่าสุดมาแสดงเมื่อเปิด Modal
-  useEffect(() => {
-    if (open) {
-      setLocalCount(periodCount);
-      setLocalLunches(lunchPeriods);
-      setLocalTimes(periodTimes);
-    }
-  }, [open, periodCount, lunchPeriods, periodTimes]);
+  // Generator States
+  const [genStartTime, setGenStartTime] = useState("08:30");
+  const [genPeriodDur, setGenPeriodDur] = useState(50);
+  const [genBreakDur, setGenBreakDur] = useState(0);
+  const [genLunchDur, setGenLunchDur] = useState(50);
+  const [genLunchPeriod, setGenLunchPeriod] = useState(6);
+
+  const syncFromSource = () => {
+    setLocalCount(periodCount);
+    setLocalLunches(lunchPeriods);
+    setLocalTimes(periodTimes);
+  };
 
   const handleSave = async () => {
     await updateSettings({
@@ -38,86 +42,191 @@ export default function ScheduleSettingsModal({ classId }: ScheduleSettingsModal
     setOpen(false);
   };
 
-  const toggleLunch = (period: number) => {
-    setLocalLunches(prev =>
-      prev.includes(period)
-        ? prev.filter(p => p !== period)
-        : [...prev, period].sort((a, b) => a - b)
-    );
-  };
+  const handleGenerate = () => {
+    // Helper: "08:30" -> 510 mins
+    const parse = (s: string) => {
+      const [h, m] = s.split(':').map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+    // Helper: 510 -> "08:30"
+    const format = (m: number) => {
+      const hh = Math.floor(m / 60) % 24;
+      const mm = m % 60;
+      return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    };
 
-  const updateTime = (period: number, value: string) => {
-    setLocalTimes(prev => ({ ...prev, [period]: value }));
+    let current = parse(genStartTime);
+    const nextTimes: Record<number, string> = {};
+    const nextLunches: number[] = [];
+
+    for (let p = 1; p <= localCount; p++) {
+      const isLunch = p === genLunchPeriod;
+      const dur = isLunch ? genLunchDur : genPeriodDur;
+      
+      const startStr = format(current);
+      current += dur;
+      const endStr = format(current);
+      
+      nextTimes[p] = `${startStr} - ${endStr}`;
+      if (isLunch) nextLunches.push(p);
+
+      // Add break if not lunch and not last
+      if (!isLunch && p < localCount && (p + 1) !== genLunchPeriod) {
+        current += genBreakDur;
+      }
+    }
+
+    setLocalTimes(nextTimes);
+    setLocalLunches(nextLunches);
+    toast.success('สร้างโครงสร้างเวลาเรียบร้อยแล้ว');
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) syncFromSource();
+        setOpen(nextOpen);
+      }}
+    >
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm" className="w-full sm:w-auto h-auto py-1 px-2.5 rounded-md flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-colors hover:bg-black/5 border-none shadow-none text-black/70 flex-shrink-0">
+        <button
+          type="button"
+          className="w-full sm:w-auto h-auto py-1 px-2.5 rounded-md flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-colors hover:bg-black/5 border-none shadow-none text-black/70 flex-shrink-0"
+        >
           <Settings size={13} />
           ตั้งค่า
-        </Button>
+        </button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl bg-white/95 backdrop-blur-xl border-white/50 rounded-3xl shadow-2xl p-6">
-        <DialogHeader className="flex flex-row items-center gap-3 border-b border-black/5 pb-4 mb-4">
-          <div className="w-9 h-9 rounded-xl bg-[#1e1e1e] flex items-center justify-center shadow-md flex-shrink-0">
-            <Clock className="text-white" size={18} />
+      <DialogContent className="w-[min(94vw,560px)] max-w-none max-h-[90vh] overflow-hidden bg-white rounded-[40px] shadow-2xl border-none p-0">
+        <div className="flex max-h-[90vh] flex-col">
+          <div className="relative px-8 pt-8 pb-4">
+            <button
+              onClick={() => setOpen(false)}
+              className="absolute right-6 top-6 flex h-8 w-8 items-center justify-center rounded-full bg-black/5 text-black/40 transition-colors hover:bg-black/10"
+            >
+              <X size={16} />
+            </button>
+            <h2 className="text-2xl font-black text-black/80">ตั้งค่าคาบเรียนและเวลา</h2>
+            <p className="mt-1 text-[13px] font-medium text-black/30">
+              จัดการจำนวนคาบและเวลาในแต่ละช่วง ({targetId || 'ค่าเริ่มต้น'})
+            </p>
           </div>
-          <div className="flex flex-col items-start">
-            <DialogTitle className="text-sm font-bold text-black/80">ตั้งค่าคาบเรียนและเวลา</DialogTitle>
-            <p className="text-xs text-black/40 mt-0.5">กำหนดจำนวนคาบเรียนต่อวันและเวลาในแต่ละคาบ ({classId || 'ค่าเริ่มต้น'})</p>
-          </div>
-        </DialogHeader>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          <div className="space-y-2">
-            <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">จำนวนคาบเรียนต่อวัน</Label>
-            <div className="flex items-center gap-3">
-              <Button variant="outline" size="sm" onClick={() => setLocalCount(Math.max(1, localCount - 1))} className="h-8 rounded-lg">-</Button>
-              <span className="text-sm font-bold w-6 text-center">{localCount}</span>
-              <Button variant="outline" size="sm" onClick={() => setLocalCount(localCount + 1)} className="h-8 rounded-lg">+</Button>
-            </div>
-          </div>
-        </div>
+          <div className="flex-1 space-y-8 overflow-y-auto px-8 py-4 custom-scrollbar">
+            {/* Automatic Generation Section */}
+            <div className="space-y-6">
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+                <h4 className="text-[12px] font-black uppercase tracking-widest text-black/20">
+                  สร้างโครงสร้างเวลาอัตโนมัติ
+                </h4>
+              </div>
 
-        <div className="space-y-3">
-          <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2 block border-b border-black/5 pb-2">กำหนดเวลาและประเภทคาบ</Label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[40vh] overflow-y-auto pr-2">
-            {Array.from({ length: localCount }, (_, i) => i + 1).map(period => {
-              const isLunch = localLunches.includes(period);
-              return (
-                <div key={period} className={`p-3 rounded-xl border transition-all ${isLunch ? 'bg-amber-50/50 border-amber-200 shadow-sm ring-1 ring-amber-100' : 'bg-black/[0.02] border-black/5'}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <Label className={`text-[11px] font-bold ${isLunch ? 'text-amber-700' : 'text-black/60'}`}>
-                      คาบที่ {period}
-                    </Label>
-                    <button
-                      onClick={() => toggleLunch(period)}
-                      className={`text-[9px] px-1.5 py-0.5 rounded-md font-bold transition-colors ${isLunch ? 'bg-amber-500 text-white' : 'bg-black/10 text-black/40 hover:bg-black/20'}`}
-                    >
-                      {isLunch ? 'พักกลางวัน' : 'ปกติ | พัก'}
-                    </button>
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="pl-1 text-[12px] font-bold text-black/60">เริ่มเรียน <span className="text-rose-500">*</span></Label>
+                    <Input
+                      type="time"
+                      value={genStartTime}
+                      onChange={e => setGenStartTime(e.target.value)}
+                      className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                    />
                   </div>
+                  <div className="space-y-1.5">
+                    <Label className="pl-1 text-[12px] font-bold text-black/60">นาทีต่อคาบ <span className="text-rose-500">*</span></Label>
+                    <Input
+                      type="number"
+                      value={genPeriodDur}
+                      onChange={e => setGenPeriodDur(Number(e.target.value))}
+                      className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="pl-1 text-[12px] font-bold text-black/60">พักเบรกระหว่างคาบ (นาที)</Label>
                   <Input
-                    value={localTimes[period] || ''}
-                    onChange={e => updateTime(period, e.target.value)}
-                    placeholder="08:30 - 09:20"
-                    className="h-8 text-[11px] bg-white/60 border-black/10 focus-visible:ring-1 focus-visible:ring-slate-300 shadow-none rounded-lg"
+                    type="number"
+                    value={genBreakDur}
+                    onChange={e => setGenBreakDur(Number(e.target.value))}
+                    className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
                   />
                 </div>
-              );
-            })}
-          </div>
-        </div>
 
-        <div className="mt-6 flex justify-end gap-2">
-          <Button variant="ghost" onClick={() => setOpen(false)} className="h-8 text-[11px] rounded-lg hover:bg-slate-100 font-medium">
-            ยกเลิก
-          </Button>
-          <Button onClick={handleSave} className="bg-[#1e1e1e] hover:bg-[#2a2a2a] text-white text-[11px] h-8 rounded-lg px-5 shadow-sm font-medium">
-            <Save size={14} className="mr-2" />
-            บันทึกการตั้งค่า
-          </Button>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="pl-1 text-[12px] font-bold text-black/60">คาบที่พักเที่ยง</Label>
+                    <Input
+                      type="number"
+                      value={genLunchPeriod}
+                      onChange={e => setGenLunchPeriod(Number(e.target.value))}
+                      className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="pl-1 text-[12px] font-bold text-black/60">พักเที่ยง (นาที)</Label>
+                    <Input
+                      type="number"
+                      value={genLunchDur}
+                      onChange={e => setGenLunchDur(Number(e.target.value))}
+                      className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                    />
+                  </div>
+                </div>
+
+                <Button
+                  onClick={handleGenerate}
+                  className="h-12 w-full rounded-2xl bg-blue-50 text-blue-600 shadow-none hover:bg-blue-100 font-black text-[13px] transition-all active:scale-[0.98]"
+                >
+                  <Zap size={16} className="mr-2" />
+                  สร้างเวลาอัตโนมัติ
+                </Button>
+              </div>
+            </div>
+
+            {/* Manual Setting Section */}
+            <div className="space-y-6 pb-8">
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 w-1.5 rounded-full bg-slate-300" />
+                <h4 className="text-[12px] font-black uppercase tracking-widest text-black/20">
+                  จำนวนคาบต่อวัน
+                </h4>
+              </div>
+
+              <div className="flex items-center justify-between rounded-[32px] bg-black/[0.03] p-6">
+                <div>
+                  <p className="text-xl font-black text-black/80">{localCount} คาบ</p>
+                  <p className="text-[12px] font-medium text-black/30">จำนวนคาบเรียนในหนึ่งวัน</p>
+                </div>
+                <div className="flex items-center gap-3 bg-white/50 p-1.5 rounded-[20px] shadow-sm">
+                  <button
+                    onClick={() => setLocalCount(Math.max(1, localCount - 1))}
+                    className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-white text-lg font-bold shadow-sm transition-all hover:bg-slate-50 active:scale-90"
+                  >
+                    -
+                  </button>
+                  <span className="w-8 text-center text-sm font-black text-black/60">{localCount}</span>
+                  <button
+                    onClick={() => setLocalCount(localCount + 1)}
+                    className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-white text-lg font-bold shadow-sm transition-all hover:bg-slate-50 active:scale-90"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="px-8 py-6">
+            <Button
+              onClick={handleSave}
+              className="h-14 w-full rounded-[24px] bg-[#007AFF] text-white text-[15px] font-black shadow-xl shadow-blue-500/20 hover:bg-[#0063CC] hover:scale-[1.02] active:scale-[0.98] transition-all"
+            >
+              บันทึกการตั้งค่า
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

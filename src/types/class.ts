@@ -3,19 +3,31 @@ import type { Department } from '@/types/curriculum';
 // ── ClassRoom ─────────────────────────────────────────────────────────────────
 // สอดคล้องกับ CLAUDE.md Database Schema Level 2 — Relationship Data
 
+export interface EnrolledCourse {
+  subjectId: string;          // ref → subjects
+  teacherId: string;          // ref → users/teachers (ครูผู้สอนวิชานี้)
+  semester?: 1 | 2;           // ภาคเรียนที่สอน (ถ้าไม่มีถือว่าเป็นทั้งสองเทอม — backward compat)
+}
+
 export interface ClassRoom {
   id: string;
   className: string;          // e.g. "ม.3/1"
   gradeLevel: string;         // e.g. "ม.3"
   roomNumber: string;         // e.g. "1", "2", "A"
   departmentId: Department;   // 'early' | 'primary' | 'secondary'
+  department: Department;     // แผนก (เพื่อเก็บลง Firestore ให้ตรงความต้องการ)
   academicYearId: string;     // e.g. "2568"
   semester: 1 | 2;
-  homeroomTeacherId: string;  // ref → TeacherProfile.id
+  homeroomTeacherId: string;  // ref → TeacherProfile.id (ครูประจำชั้นหลัก)
+  homeroomTeacherIds: string[]; // ref → TeacherProfile.id (ครูประจำชั้น 1-2 คน)
+  enrolledCourses: EnrolledCourse[]; // รายวิชาและครูผู้สอน
   studentCount: number;       // จำนวนนักเรียนปัจจุบัน
   maxStudents: number;        // ความจุสูงสุด
+  track?: string;             // แผนการเรียน เช่น "วิทย์-คณิต"
+  trackColor?: string;        // สีของแผนการเรียน
   room?: string;              // ห้องเรียน เช่น "อาคาร 3 ห้อง 301"
   note?: string;
+  curriculumPackageId?: string; // ref → curriculumPackages/id
   isActive: boolean;
   createdAt: string;          // ISO date
 }

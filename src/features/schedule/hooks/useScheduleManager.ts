@@ -1,0 +1,532 @@
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useSchedule } from '@/hooks/useSchedule';
+import { useScheduleSettings } from '@/hooks/useScheduleSettings';
+import { useCurriculum } from '@/hooks/useCurriculum';
+import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
+import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
+import type { ScheduleEntry, SchoolDay } from '@/types/schedule';
+import { SCHOOL_DAYS, PERIOD_COUNT, LUNCH_PERIOD } from '@/types/schedule';
+import type { Department } from '@/types/curriculum';
+import { DEPARTMENT_CONFIG } from '@/types/curriculum';
+
+export type ViewMode = 'class' | 'teacher' | 'compare';
+
+export interface SlotModalState {
+  open: boolean;
+  day: SchoolDay | null;
+  period: number | null;
+  editingEntry: ScheduleEntry | null;
+}
+
+const isGradeMatch = (curriculumGrade?: string, classroomGrade?: string) => {
+  if (!curriculumGrade || !classroomGrade) return true;
+  const normalize = (s: string) => s.trim().replace(/\s+/g, '').replace('ชั้น', '');
+  const g1 = normalize(curriculumGrade);
+  const g2 = normalize(classroomGrade);
+  return g1 === g2 || g1.includes(g2) || g2.includes(g1);
+};
+
+const normalizeGrade = (grade?: string) =>
+  (grade || '').trim().replace(/\s+/g, '').replace('ชั้น', '');
+
+const normalizeDepartment = (dept?: string, gradeLevel?: string): Department | undefined => {
+  const raw = (dept || '').trim().toLowerCase();
+  if (raw === 'early' || raw === 'early-childhood' || raw === 'อนุบาล' || raw === 'ปฐมวัย') return 'early';
+  if (raw === 'primary' || raw === 'ประถม') return 'primary';
+  if (raw === 'secondary' || raw === 'มัธยม') return 'secondary';
+
+  const g = normalizeGrade(gradeLevel);
+  if (g.startsWith('อ')) return 'early';
+  if (g.startsWith('ป')) return 'primary';
+  if (g.startsWith('ม')) return 'secondary';
+  return undefined;
+};
+
+export function useScheduleManager() {
+  const { year: academicYear, activeSemester } = useActiveAcademicYear();
+  const activeYear = academicYear ?? '2568';
+  const [semester, setSemester] = useState<1 | 2>((activeSemester ?? 1) as 1 | 2);
+
+  const schedule = useSchedule();
+  const curriculum = useCurriculum();
+  const curriculumVersioned = useCurriculumVersioned();
+  const teacherManager = useTeacherManager();
+
+  // ── View mode ─────────────────────────────────────────────────────────────────
+  const [viewMode, setViewMode] = useState<ViewMode>('class');
+
+  // ── Department + Grade filters ────────────────────────────────────────────────
+  const [filterDept, setFilterDept] = useState<Department | 'all'>('all');
+  const [filterGrade, setFilterGrade] = useState<string>('all');
+
+  // ── Filtered class list ───────────────────────────────────────────────────────
+  const filteredClasses = useMemo(() => {
+    const gradeFilter = normalizeGrade(filterGrade);
+
+    const base = schedule.classes.filter(c => {
+      const dept = normalizeDepartment(c.department || c.departmentId, c.gradeLevel);
+      if (filterDept !== 'all' && dept !== filterDept) return false;
+      if (filterGrade !== 'all' && normalizeGrade(c.gradeLevel) !== gradeFilter) return false;
+      return true;
+    });
+
+    // พยายามกรองตามปีการศึกษาก่อน แต่ถ้าว่างให้ fallback ไปที่รายการ base
+    const yearFiltered = base.filter(c => !c.academicYear || String(c.academicYear) === String(activeYear));
+    const source = yearFiltered.length > 0 ? yearFiltered : base;
+
+    return source.sort((a, b) =>
+      (a.gradeLevel || '').localeCompare(b.gradeLevel || '', 'th', { numeric: true }) ||
+      (a.label || '').localeCompare(b.label || '', 'th', { numeric: true })
+    );
+  }, [schedule.classes, activeYear, filterDept, filterGrade]);
+
+  // Grade levels available for the selected dept
+  const availableGrades = useMemo(() => {
+    const src = filterDept === 'all'
+      ? schedule.classes
+      : schedule.classes.filter(c => normalizeDepartment(c.department || c.departmentId, c.gradeLevel) === filterDept);
+
+    return [...new Set(src.map(c => c.gradeLevel).filter(Boolean))].sort();
+  }, [schedule.classes, filterDept]);
+
+  // Department summary — จำนวนห้องและคาบต่อแผนก
+  const deptSummary = useMemo(() =>
+    (['early', 'primary', 'secondary'] as Department[]).map(dept => ({
+      dept,
+      cfg: DEPARTMENT_CONFIG[dept],
+      classCount: schedule.classes.filter(c => c.department === dept).length,
+    })),
+    [schedule.classes],
+  );
+
+  // ── Selection — auto-reset when filter changes ────────────────────────────────
+  const [selectedClassId, setSelectedClassIdRaw] = useState<string>('');
+  const [selectedTeacherId, setSelectedTeacherId] = useState<string>('');
+
+  // ── Compare mode — second selection ───────────────────────────────────────────
+  const [compareClassId, setCompareClassIdRaw] = useState<string>('');
+  const [compareTeacherId, setCompareTeacherId] = useState<string>('');
+
+  const resolvedCompareClassId = compareClassId && schedule.classes.some(c => c.id === compareClassId)
+    ? compareClassId
+    : '';
+
+  const setCompareClassId = (id: string) => setCompareClassIdRaw(id);
+
+  // เมื่อ filter เปลี่ยน ถ้า selectedClassId ไม่อยู่ใน filteredClasses ให้ reset
+  const resolvedClassId = selectedClassId && filteredClasses.some(c => c.id === selectedClassId)
+    ? selectedClassId
+    : '';
+
+  const settingsId = viewMode === 'teacher' ? selectedTeacherId : resolvedClassId;
+  const { periodTimes } = useScheduleSettings(settingsId);
+
+  const setSelectedClassId = (id: string) => setSelectedClassIdRaw(id);
+
+  const handleSetFilterDept = (dept: Department | 'all') => {
+    setFilterDept(dept);
+    setFilterGrade('all');
+    // reset class selection and wait for explicit user search
+    setSelectedClassIdRaw('');
+  };
+
+  const handleSetFilterGrade = (grade: string) => {
+    setFilterGrade(grade);
+    // Reset room selection to force manual choice
+    setSelectedClassIdRaw('');
+  };
+
+  // ── Slot modal ────────────────────────────────────────────────────────────────
+  const [slotModal, setSlotModal] = useState<SlotModalState>({
+    open: false, day: null, period: null, editingEntry: null,
+  });
+
+  const openSlotModal = (day: SchoolDay, period: number, editingEntry: ScheduleEntry | null = null) => {
+    if (period === LUNCH_PERIOD) return; // คาบพักไม่สามารถแก้ไขได้
+    setSlotModal({ open: true, day, period, editingEntry });
+  };
+
+  const closeSlotModal = () =>
+    setSlotModal({ open: false, day: null, period: null, editingEntry: null });
+
+  // ── Edit mode ────────────────────────────────────────────────────────────────
+  const [isEditMode, setIsEditMode] = useState(false);
+
+
+  // ── Export / Print ─────────────────────────────────────────────────────────────
+  const exportRef = useRef<HTMLDivElement>(null);
+  const handlePrint = useCallback(() => {
+    if (!exportRef.current) return;
+    window.print();
+  }, []);
+
+  // ── Derived grid data ─────────────────────────────────────────────────────────
+  const displayedEntries = useMemo(() => {
+    if (viewMode === 'class' || viewMode === 'compare') {
+      return schedule.getEntriesForClass(resolvedClassId, activeYear, semester);
+    }
+    return schedule.getEntriesForTeacher(selectedTeacherId, activeYear, semester);
+  }, [viewMode, resolvedClassId, selectedTeacherId, activeYear, semester, schedule.entries]);
+
+  // grid[day][period] => ScheduleEntry[]
+  const grid = useMemo(() => {
+    const g: Record<number, Record<number, ScheduleEntry[]>> = {};
+    for (const day of SCHOOL_DAYS) {
+      g[day] = {};
+      for (let p = 1; p <= PERIOD_COUNT; p++) {
+        g[day][p] = [];
+      }
+    }
+    for (const entry of displayedEntries) {
+      if (g[entry.day] && g[entry.day][entry.period]) {
+        g[entry.day][entry.period].push(entry);
+      } else if (g[entry.day]) {
+        // Safe fallback for periods outside current settings
+        if (!g[entry.day][entry.period]) g[entry.day][entry.period] = [];
+        g[entry.day][entry.period].push(entry);
+      }
+    }
+    return g;
+  }, [displayedEntries, periodTimes]);
+
+  // ── Compare grid ──────────────────────────────────────────────────────────────
+  const compareEntries = useMemo(() => {
+    if (viewMode !== 'compare') return [];
+    return schedule.getEntriesForClass(resolvedCompareClassId, activeYear, semester);
+  }, [viewMode, resolvedCompareClassId, activeYear, semester, schedule.entries]);
+
+  const compareGrid = useMemo(() => {
+    const g: Record<number, Record<number, ScheduleEntry[]>> = {};
+    for (const day of SCHOOL_DAYS) {
+      g[day] = {};
+      for (let p = 1; p <= PERIOD_COUNT; p++) {
+        g[day][p] = [];
+      }
+    }
+    for (const entry of compareEntries) {
+      if (g[entry.day] && g[entry.day][entry.period]) {
+        g[entry.day][entry.period].push(entry);
+      }
+    }
+    return g;
+  }, [compareEntries]);
+
+  // สรุปจำนวนคาบต่อครูในภาพรวม
+  const currentTeacherLoad = schedule.teacherLoadSummary[selectedTeacherId] ?? 0;
+
+  // ── Primary: ดึงวิชาจาก enrolledCourses ของห้องเรียน (เหมือน ClassCourseTab) ──
+  // selectedClassRoom ดึงจาก schedule.classes (shared listener)
+  const selectedClassRoom = schedule.classes.find(c => c.id === resolvedClassId);
+
+  // Ensure versioned curriculum courses are loaded for all classrooms in the schedule
+  useEffect(() => {
+    if (!schedule.classes.length || !curriculumVersioned.versions.length) return;
+
+    schedule.classes.forEach((c) => {
+      const classPackageId = (c as any).curriculumPackageId || (c as any).curriculumId;
+      const academicYearId = (c as any).academicYearId || (c as any).academicYear || activeYear;
+      const currentYearNum = Number.parseInt(String(academicYearId), 10);
+
+      let targetVersionId: string | undefined = classPackageId;
+      if (!targetVersionId) {
+        const matchedVersion = curriculumVersioned.versions.find((v) =>
+          Number(v.year) === currentYearNum &&
+          (!v.assignedGrades?.length || v.assignedGrades.some((g) => isGradeMatch(g, c.gradeLevel))),
+        );
+        targetVersionId = matchedVersion?.id;
+      }
+
+      if (
+        targetVersionId &&
+        !curriculumVersioned.coursesByVersion[targetVersionId] &&
+        !curriculumVersioned.loadingVersionIds.has(targetVersionId)
+      ) {
+        void curriculumVersioned.loadCoursesForVersion(targetVersionId);
+      }
+    });
+  }, [
+    activeYear,
+    curriculumVersioned,
+    schedule.classes,
+  ]);
+
+  const availableSubjects = useMemo(() => {
+    if (viewMode === 'teacher' && !selectedTeacherId) return [];
+    if (viewMode === 'class' && !selectedClassRoom) return [];
+
+    // ── Case 1: Teacher View — Show all subjects this teacher is assigned to ──
+    if (viewMode === 'teacher' && selectedTeacherId) {
+      const teacherSubjects: any[] = [];
+      const seen = new Set<string>();
+
+      schedule.classes.forEach(c => {
+        const enrolled = c.enrolledCourses || [];
+        enrolled.forEach(ec => {
+          if (ec.teacherId === selectedTeacherId) {
+            const subjectKey = `${c.id}-${ec.subjectId}`;
+            if (seen.has(subjectKey)) return;
+            seen.add(subjectKey);
+
+            // Find subject details (same fallback logic)
+            const allVersioned = Object.values(curriculumVersioned.coursesByVersion).flat();
+            const courseDetail = allVersioned.find(v => v.id === ec.subjectId || v.courseCode === ec.subjectId);
+            const genSubject = curriculum.subjects.find(s => s.id === ec.subjectId || s.code === ec.subjectId);
+
+            teacherSubjects.push({
+              id: ec.subjectId,
+              code: courseDetail?.courseCode || genSubject?.code || ec.subjectId,
+              name: courseDetail?.courseName || genSubject?.name || 'Unknown Subject',
+              credits: courseDetail?.credit || genSubject?.credits || 0,
+              hoursPerWeek: courseDetail?.periodsPerWeek || genSubject?.hoursPerWeek || 0,
+              department: (courseDetail?.department || genSubject?.department || c.departmentId || c.department) as any,
+              gradeLevel: courseDetail?.gradeLevel || genSubject?.gradeLevel || c.gradeLevel,
+              category: (courseDetail?.category || (genSubject as any)?.category) as any,
+              subjectGroup: courseDetail?.subjectGroup || genSubject?.subjectGroup,
+              semester: ec.semester,
+              assignedTeacherId: selectedTeacherId,
+              classId: c.id, // Keep track of which class this is for
+              className: c.className
+            });
+          }
+        });
+      });
+      return teacherSubjects.sort((a, b) => a.className.localeCompare(b.className, 'th') || a.code.localeCompare(b.code));
+    }
+
+    // ── Case 2: Class View — Original logic ──
+    const dept = (selectedClassRoom?.departmentId || selectedClassRoom?.department || '').trim() as Department;
+    const grade = (selectedClassRoom?.gradeLevel || '').trim();
+
+    const enrolledCourses = selectedClassRoom?.enrolledCourses || [];
+    if (enrolledCourses.length > 0) {
+      const allVersionedCourses = Object.values(curriculumVersioned.coursesByVersion).flat();
+      const subjects = enrolledCourses
+        .filter(ec => !ec.semester || Number(ec.semester) === Number(semester))
+        .map(ec => {
+          const courseDetail = allVersionedCourses.find(c => c.id === ec.subjectId || c.courseCode === ec.subjectId);
+          const genSubject = curriculum.subjects.find(s => s.id === ec.subjectId || s.code === ec.subjectId);
+
+          return {
+            id: ec.subjectId,
+            code: courseDetail?.courseCode || genSubject?.code || '',
+            name: courseDetail?.courseName || genSubject?.name || 'Unknown Subject',
+            credits: courseDetail?.credit || genSubject?.credits || 0,
+            hoursPerWeek: courseDetail?.periodsPerWeek || genSubject?.hoursPerWeek || 0,
+            totalHours: courseDetail?.totalHours || genSubject?.totalHours || 0,
+            department: (courseDetail?.department || genSubject?.department) as any,
+            gradeLevel: courseDetail?.gradeLevel || genSubject?.gradeLevel || '',
+            category: (courseDetail?.category || (genSubject as any)?.category) as any,
+            subjectGroup: courseDetail?.subjectGroup || genSubject?.subjectGroup,
+            semester: ec.semester,
+            assignedTeacherId: ec.teacherId,
+          };
+        })
+        .filter(s => s.code);
+
+      if (subjects.length > 0) {
+        return subjects.sort((a, b) => (a.code || '').localeCompare(b.code || '', 'th'));
+      }
+    }
+
+    const linkedCurriculumId = (selectedClassRoom as any)?.curriculumPackageId || (selectedClassRoom as any)?.curriculumId;
+    const linkedVersion = linkedCurriculumId
+      ? curriculumVersioned.versions.find(v => v.id === linkedCurriculumId)
+      : curriculumVersioned.versions.find(v =>
+          Number(v.year) === Number.parseInt(String((selectedClassRoom as any)?.academicYearId || (selectedClassRoom as any)?.academicYear || activeYear), 10) &&
+          (!v.assignedGrades?.length || v.assignedGrades.some(g => isGradeMatch(g, grade))),
+        );
+
+    if (linkedVersion?.id) {
+      const packageCourses = curriculumVersioned.coursesByVersion[linkedVersion.id] || [];
+      const filtered = packageCourses.filter(c => 
+        !c.isRetired && 
+        (!c.semester || Number(c.semester) === Number(semester)) &&
+        isGradeMatch(c.gradeLevel, grade)
+      );
+
+      if (filtered.length > 0) {
+        return filtered
+          .map(c => ({
+            id: c.id,
+            code: c.courseCode,
+            name: c.courseName,
+            credits: c.credit,
+            hoursPerWeek: c.periodsPerWeek || 0,
+            totalHours: c.totalHours || 0,
+            department: c.department as any,
+            gradeLevel: c.gradeLevel,
+            category: c.category as any,
+            subjectGroup: c.subjectGroup,
+            semester: c.semester,
+            academicYear: c.academicYear,
+          }))
+          .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'th'));
+      }
+    }
+
+    if (dept && grade) {
+      const allVersionedCourses = Object.values(curriculumVersioned.coursesByVersion).flat();
+      const filtered = allVersionedCourses.filter(c =>
+        !c.isRetired &&
+        (!c.department || c.department.trim() === dept) &&
+        (!c.gradeLevel || c.gradeLevel.trim() === grade) &&
+        (!c.semester || Number(c.semester) === Number(semester)) &&
+        (!c.academicYear || String(c.academicYear) === String(activeYear))
+      );
+
+      if (filtered.length > 0) {
+        const seen = new Set<string>();
+        const deduped = filtered.filter(c => {
+          const key = c.courseCode.toUpperCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        return deduped
+          .map(c => ({
+            id: c.id,
+            code: c.courseCode,
+            name: c.courseName,
+            credits: c.credit,
+            hoursPerWeek: c.periodsPerWeek || 0,
+            totalHours: c.totalHours || 0,
+            department: c.department as any,
+            gradeLevel: c.gradeLevel,
+            category: c.category as any,
+            subjectGroup: c.subjectGroup,
+            semester: c.semester,
+            academicYear: c.academicYear,
+          }))
+          .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'th'));
+      }
+    }
+
+    return [];
+  }, [
+    viewMode,
+    selectedTeacherId,
+    selectedClassRoom,
+    schedule.classes,
+    curriculumVersioned.coursesByVersion,
+    curriculum.subjects,
+    semester,
+    activeYear
+  ]);
+
+
+  // selectedClass ยังคงใช้เพื่อ display breadcrumb / pass to child components
+  const selectedClass = selectedClassRoom
+    ? {
+        id: selectedClassRoom.id,
+        label: selectedClassRoom.className,
+        gradeLevel: selectedClassRoom.gradeLevel,
+        department: (selectedClassRoom.department || selectedClassRoom.departmentId) as Department,
+        academicYear: selectedClassRoom.academicYearId || (selectedClassRoom as any).academicYear,
+      }
+    : schedule.classes.find(c => c.id === resolvedClassId);
+
+  // ── Drag & Drop ──────────────────────────────────────────────────────────────
+  const handleSubjectDrop = useCallback((day: SchoolDay, period: number, subjectId: string, teacherId: string) => {
+    if (!isEditMode) return;
+    
+    const subject = availableSubjects.find(s => s.id === subjectId || s.code === subjectId);
+    if (!subject) return;
+
+    // Use assigned teacher from enrolledCourses if available, otherwise fallback to provided teacherId
+    const targetTeacherId = (subject as any).assignedTeacherId || teacherId;
+    const targetClassId = (subject as any).classId || resolvedClassId;
+
+    const teacher = teacherManager.scheduleTeachers.find(t => t.id === targetTeacherId);
+    
+    // If no teacher, or invalid teacher, open modal instead of adding directly
+    if (!teacher) {
+      openSlotModal(day, period, null);
+      return;
+    }
+
+    if (targetClassId) {
+      schedule.addEntry({
+        classId: targetClassId,
+        day,
+        period,
+        subjectId: subject.id,
+        subjectCode: subject.code,
+        subjectName: subject.name,
+        subjectGroup: subject.subjectGroup,
+        teacherId: teacher.id,
+        teacherName: teacher.name,
+        year: activeYear,
+        semester,
+      });
+    }
+  }, [isEditMode, availableSubjects, teacherManager.scheduleTeachers, resolvedClassId, activeYear, semester, schedule, openSlotModal]);
+
+  return {
+    // Academic year
+    year: activeYear,
+    semester,
+    setSemester,
+
+    // View mode
+    viewMode,
+    setViewMode,
+    isEditMode,
+    setIsEditMode,
+
+    // Filters
+    filterDept,
+    setFilterDept: handleSetFilterDept,
+    filterGrade,
+    setFilterGrade: handleSetFilterGrade,
+    filteredClasses,
+    availableGrades,
+    deptSummary,
+
+    // Selection
+    selectedClassId: resolvedClassId,
+    setSelectedClassId,
+    selectedTeacherId,
+    setSelectedTeacherId,
+    selectedClass,
+
+    // Grid
+    grid,
+    displayedEntries,
+    handleSubjectDrop,
+
+    // Modal
+    slotModal,
+    openSlotModal,
+    closeSlotModal,
+
+    // Data
+    allEntries: schedule.entries,
+    classes: schedule.classes,
+    teachers: teacherManager.scheduleTeachers,
+    availableSubjects,
+    teacherLoadSummary: schedule.teacherLoadSummary,
+    currentTeacherLoad,
+
+    // Print
+    exportRef,
+    handlePrint,
+
+    // Compare mode
+    compareClassId: resolvedCompareClassId,
+    setCompareClassId,
+    compareTeacherId,
+    setCompareTeacherId,
+    compareGrid,
+
+    // Schedule actions
+    addEntry: schedule.addEntry,
+    updateEntry: schedule.updateEntry,
+    deleteEntry: schedule.deleteEntry,
+    deleteEntriesInSlot: (day: SchoolDay, period: number, criteria: { teacherId?: string, classId?: string }) => 
+      schedule.deleteEntriesInSlot(day, period, activeYear, semester, criteria),
+    moveEntry: schedule.moveEntry,
+    detectConflicts: schedule.detectConflicts,
+  };
+}

@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import type { AcademicYear } from '@/portals/sysadmin/settings/types';
+import type { AcademicYear } from '@/types/settings';
 
 /**
  * Hook to access the currently active academic year and semester.
@@ -19,7 +19,19 @@ export function useActiveAcademicYear() {
   const getActiveYear = useCallback((): AcademicYear | null => {
     try {
       const stored = localStorage.getItem('activeAcademicYear');
-      return stored ? JSON.parse(stored) : null;
+      if (stored) return JSON.parse(stored);
+      
+      // Fallback to current year if nothing in localStorage
+      const now = new Date();
+      const currentYearBE = now.getFullYear() + 543;
+      return {
+        id: 'default',
+        year: currentYearBE.toString(),
+        activeSemester: 1,
+        startDate: '',
+        endDate: '',
+        status: 'active'
+      };
     } catch {
       return null;
     }
@@ -29,20 +41,32 @@ export function useActiveAcademicYear() {
 
   return {
     activeYear,
-    activeSemester: activeYear?.activeSemester ?? null,
-    year: activeYear?.year ?? null,
+    activeSemester: activeYear?.activeSemester ?? 1,
+    year: activeYear?.year ?? (new Date().getFullYear() + 543).toString(),
     isLoaded: activeYear !== null,
   };
 }
 
 /**
  * Helper function to set the active academic year in localStorage.
- * Called by SysAdminSettings when user selects an active year.
+ * Called by SysAdminSettings or Global Year Selector.
  */
-export function setActiveAcademicYear(year: AcademicYear | null) {
-  if (year) {
+export function setActiveAcademicYear(year: AcademicYear | string | null) {
+  if (typeof year === 'string') {
+    const academicYear: AcademicYear = {
+      id: year,
+      year: year,
+      activeSemester: 1,
+      startDate: '',
+      endDate: '',
+      status: 'active'
+    };
+    localStorage.setItem('activeAcademicYear', JSON.stringify(academicYear));
+  } else if (year) {
     localStorage.setItem('activeAcademicYear', JSON.stringify(year));
   } else {
     localStorage.removeItem('activeAcademicYear');
   }
+  // Trigger a global reload to refresh all data
+  window.location.reload();
 }

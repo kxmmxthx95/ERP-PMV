@@ -1,186 +1,306 @@
-import React, { useMemo, useState } from 'react';
-import { BookOpen, GraduationCap, Library, Award } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { motion } from 'framer-motion';
+import { BookOpen, GraduationCap, Library, Award, Layers } from 'lucide-react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import type { Subject } from '@/types/curriculum';
-import { useSchoolStructure } from '@/hooks/useSchoolStructure';
+import {
+  type CurriculumVersion, type CurriculumCourse,
+  CURRICULUM_TRACK_CONFIG, DEPARTMENT_CONFIG,
+} from '@/types/curriculum';
 
 const glassCard: React.CSSProperties = {
-  background: 'rgba(255, 255, 255, 0.65)',
+  background: 'rgba(255,255,255,0.72)',
   backdropFilter: 'blur(24px) saturate(150%)',
   WebkitBackdropFilter: 'blur(24px) saturate(150%)',
-  border: '1px solid rgba(255, 255, 255, 0.8)',
-  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.04)',
+  border: '1px solid rgba(255,255,255,0.90)',
+  boxShadow: '0 15px 35px -5px rgba(0,0,0,0.06), 0 10px 15px -6px rgba(0,0,0,0.04)',
 };
 
 interface CurriculumDashboardProps {
-  subjects: Subject[];
-  academicYear: string;
+  versions: CurriculumVersion[];
+  coursesByVersion: Record<string, CurriculumCourse[]>;
+  getCourseSummary: (versionId: string) => { count: number; totalCredit: number; basic: number; additional: number; activity: number };
+  isLoading: boolean;
 }
 
-export default function CurriculumDashboard({ subjects, academicYear }: CurriculumDashboardProps) {
-  const { departments, getGradesBySection } = useSchoolStructure();
-  const [filterDept, setFilterDept] = useState<string>('all');
+const CATEGORY_COLORS = { basic: '#0ea5e9', additional: '#f97316', activity: '#10b981' };
+const DEPT_COLORS: Record<string, string> = { early: '#ec4899', primary: '#3b82f6', secondary: '#8b5cf6' };
 
-  const filteredSubjects = useMemo(() => {
-    if (filterDept === 'all') return subjects;
-    return subjects.filter(s => {
-      const normalized = s.department === 'early' ? 'early-childhood' : s.department;
-      return normalized === filterDept;
+export default function CurriculumDashboard({
+  versions,
+  coursesByVersion,
+  getCourseSummary,
+  isLoading,
+}: CurriculumDashboardProps) {
+
+  const allCourses = useMemo(() => Object.values(coursesByVersion).flat().filter(c => !c.isRetired), [coursesByVersion]);
+
+  const totalVersions = versions.length;
+  const totalCourses = allCourses.length;
+  const totalCredits = useMemo(() => allCourses.reduce((s, c) => s + (c.credit || 0), 0), [allCourses]);
+  const editableVersions = versions.filter(v => v.allowEdit).length;
+
+  // Category breakdown (pie)
+  const categoryData = useMemo(() => {
+    const basic = allCourses.filter(c => c.category === 'basic').length;
+    const additional = allCourses.filter(c => c.category === 'additional').length;
+    const activity = allCourses.filter(c => c.category === 'activity').length;
+    return [
+      { name: 'พื้นฐาน', value: basic, color: CATEGORY_COLORS.basic },
+      { name: 'เพิ่มเติม', value: additional, color: CATEGORY_COLORS.additional },
+      { name: 'กิจกรรม', value: activity, color: CATEGORY_COLORS.activity },
+    ].filter(d => d.value > 0);
+  }, [allCourses]);
+
+  // Credits per version (bar chart — top 8)
+  const versionCreditData = useMemo(() => {
+    return [...versions]
+      .sort((a, b) => (b.year || 0) - (a.year || 0))
+      .slice(0, 8)
+      .map(v => {
+        const s = getCourseSummary(v.id);
+        return { name: v.name.length > 14 ? v.name.slice(0, 14) + '…' : v.name, credits: s.totalCredit, courses: s.count };
+      });
+  }, [versions, getCourseSummary]);
+
+  // Department distribution
+  const deptData = useMemo(() => {
+    const counts: Record<string, number> = {};
+    allCourses.forEach(c => { counts[c.department] = (counts[c.department] || 0) + 1; });
+    return Object.entries(counts).map(([dept, count]) => ({
+      dept,
+      count,
+      label: DEPARTMENT_CONFIG[dept as keyof typeof DEPARTMENT_CONFIG]?.label || dept,
+      color: DEPT_COLORS[dept] || '#94a3b8',
+    }));
+  }, [allCourses]);
+
+  // Track breakdown (from versions that have a track)
+  const trackData = useMemo(() => {
+    const counts: Record<string, number> = {};
+    versions.forEach(v => {
+      if (v.track) counts[v.track] = (counts[v.track] || 0) + 1;
     });
-  }, [subjects, filterDept]);
+    return Object.entries(counts).map(([track, count]) => ({
+      track,
+      count,
+      label: CURRICULUM_TRACK_CONFIG[track as keyof typeof CURRICULUM_TRACK_CONFIG]?.label || track,
+      color: CURRICULUM_TRACK_CONFIG[track as keyof typeof CURRICULUM_TRACK_CONFIG]?.color || '#94a3b8',
+      bg: CURRICULUM_TRACK_CONFIG[track as keyof typeof CURRICULUM_TRACK_CONFIG]?.bg || 'rgba(148,163,184,0.1)',
+    }));
+  }, [versions]);
 
-  const stats = useMemo(() => {
-    const totalCredits = filteredSubjects.reduce((sum, s) => sum + (s.credits || 0), 0);
-    const coreCount = filteredSubjects.filter(s => s.category === 'core').length;
-    const electiveCount = filteredSubjects.filter(s => s.category === 'elective' || s.category === 'added').length;
-    const activityCount = filteredSubjects.filter(s => s.category === 'activity').length;
-
-    let barData = [];
-    let barTitle = '';
-
-    if (filterDept === 'all') {
-      barTitle = 'สัดส่วนรายวิชาตามแผนก';
-      barData = [
-        { name: 'ปฐมวัย', count: subjects.filter(s => s.department === 'early').length, fill: '#ec4899' },
-        { name: 'ประถมศึกษา', count: subjects.filter(s => s.department === 'primary').length, fill: '#f59e0b' },
-        { name: 'มัธยมศึกษา', count: subjects.filter(s => s.department === 'secondary').length, fill: '#3b82f6' },
-      ];
-    } else {
-      barTitle = 'สัดส่วนรายวิชาตามระดับชั้น';
-      const grades = getGradesBySection(filterDept as any) || [];
-      const color = filterDept === 'early-childhood' ? '#ec4899' : filterDept === 'primary' ? '#f59e0b' : '#3b82f6';
-      barData = grades.map(g => ({
-        name: g.shortLabel,
-        count: filteredSubjects.filter(s => (s as any).gradeLevel === g.id).length,
-        fill: color
-      }));
-    }
-
-    const catData = [
-      { name: 'พื้นฐาน', value: coreCount, fill: '#3b82f6' },
-      { name: 'เพิ่มเติม', value: electiveCount, fill: '#8b5cf6' },
-      { name: 'กิจกรรม', value: activityCount, fill: '#10b981' },
-    ];
-
-    return { totalCredits, coreCount, electiveCount, activityCount, barData, barTitle, catData };
-  }, [subjects, filteredSubjects, filterDept, getGradesBySection]);
+  if (isLoading) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="h-28 rounded-3xl bg-slate-100 animate-pulse" />
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      {/* ── Top Bar Filter ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <h2 className="text-sm font-bold text-black/80 tracking-tight">สรุปภาพรวมหลักสูตร</h2>
-        <div
-          className="flex gap-1 overflow-x-auto rounded-xl shadow-sm max-w-full w-fit"
-          style={{
-            background: 'rgba(255, 255, 255, 0.4)',
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-            border: '1px solid rgba(255, 255, 255, 0.6)',
-            padding: '0.25rem',
-          }}
+    <div className="space-y-6">
+
+      {/* ── KPI Row ── */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        {[
+          { icon: Library, label: 'หลักสูตรทั้งหมด', value: totalVersions, sub: `${editableVersions} แก้ไขได้`, color: '#3b82f6' },
+          { icon: BookOpen, label: 'รายวิชาทั้งหมด', value: totalCourses, sub: 'ใน catalog', color: '#10b981' },
+          { icon: Award, label: 'หน่วยกิตรวม', value: totalCredits.toFixed(1), sub: 'ทุกหลักสูตร', color: '#f97316' },
+          { icon: Layers, label: 'สายการเรียน', value: trackData.length, sub: `จาก ${totalVersions} หลักสูตร`, color: '#8b5cf6' },
+        ].map(({ icon: Icon, label, value, sub, color }) => (
+          <motion.div
+            key={label}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={glassCard}
+            className="rounded-3xl p-5 flex items-center gap-4"
+          >
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: `${color}18` }}>
+              <Icon size={22} style={{ color }} strokeWidth={2} />
+            </div>
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest font-sarabun mb-0.5">{label}</p>
+              <p className="text-2xl font-black text-slate-900 font-sarabun leading-none">{value}</p>
+              <p className="text-[10px] font-medium text-slate-400 mt-0.5 font-sukhumvit">{sub}</p>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+
+        {/* ── Credits Per Version (bar) ── */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={glassCard}
+          className="xl:col-span-2 rounded-3xl p-6"
         >
-          {[{ id: 'all', label: 'ทั้งหมด' }, ...departments].map(tab => {
-            const active = filterDept === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setFilterDept(tab.id)}
-                className="flex items-center justify-center px-4 py-1.5 rounded-md text-[11px] font-semibold transition-all duration-200 flex-shrink-0"
-                style={{
-                  background: active ? '#1e1e1e' : 'transparent',
-                  color: active ? '#fff' : 'rgba(0, 0, 0, 0.6)',
-                  boxShadow: active ? '0 4px 12px rgba(0,0,0,0.15)' : 'none',
-                }}
-                onMouseEnter={e => {
-                  if (!active) (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.05)';
-                }}
-                onMouseLeave={e => {
-                  if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent';
-                }}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── KPI Cards ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="รายวิชาทั้งหมด" value={filteredSubjects.length} subtitle={filterDept === 'all' ? `หลักสูตรปี ${academicYear}` : `ในแผนกที่เลือก`} icon={BookOpen} color="#3b82f6" />
-        <StatCard title="หน่วยกิตรวม" value={stats.totalCredits} subtitle="จากรายวิชาในแผนก" icon={Library} color="#8b5cf6" />
-        <StatCard title="วิชาพื้นฐาน" value={stats.coreCount} subtitle="วิชาแกนบังคับ" icon={GraduationCap} color="#f59e0b" />
-        <StatCard title="กิจกรรมพัฒนาผู้เรียน" value={stats.activityCount} subtitle="ชมรม/แนะแนว/สังคม" icon={Award} color="#10b981" />
-      </div>
-
-      {/* ── Charts ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div style={glassCard} className="p-6 rounded-3xl">
-          <h3 className="text-sm font-bold text-black/80 mb-6">{stats.barTitle}</h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.barData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.05)" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: 'rgba(0,0,0,0.4)' }} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: 'rgba(0,0,0,0.4)' }} />
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
+              <GraduationCap size={18} className="text-blue-500" />
+            </div>
+            <div>
+              <p className="text-[13px] font-black text-slate-800 font-sukhumvit">หน่วยกิตต่อหลักสูตร</p>
+              <p className="text-[10px] font-medium text-slate-400 font-sarabun">แสดงสูงสุด 8 หลักสูตรล่าสุด</p>
+            </div>
+          </div>
+          {versionCreditData.length === 0 ? (
+            <div className="h-40 flex items-center justify-center text-slate-300 text-sm font-bold font-sukhumvit">ยังไม่มีข้อมูล</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={versionCreditData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.04)" />
+                <XAxis dataKey="name" tick={{ fontSize: 9, fontFamily: 'Sarabun', fill: '#94a3b8' }} />
+                <YAxis tick={{ fontSize: 9, fontFamily: 'Sarabun', fill: '#94a3b8' }} />
                 <Tooltip
-                  cursor={{ fill: 'rgba(0,0,0,0.03)' }}
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}
+                  contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.08)', fontSize: 11, fontFamily: 'Sarabun' }}
+                  formatter={(v) => [`${(v as number).toFixed(1)} นก.`, 'หน่วยกิต']}
                 />
-                <Bar dataKey="count" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="credits" fill="#3b82f6" radius={[6, 6, 0, 0]} maxBarSize={40} />
               </BarChart>
             </ResponsiveContainer>
-          </div>
-        </div>
+          )}
+        </motion.div>
 
-        <div style={glassCard} className="p-6 rounded-3xl">
-          <h3 className="text-sm font-bold text-black/80 mb-6">สัดส่วนหมวดวิชา</h3>
-          <div className="h-64 flex flex-col items-center justify-center">
-            <ResponsiveContainer width="100%" height="80%">
-              <PieChart>
-                <Pie
-                  data={stats.catData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                  stroke="none"
+        {/* ── Category Pie ── */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={glassCard}
+          className="rounded-3xl p-6"
+        >
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center">
+              <BookOpen size={18} className="text-emerald-500" />
+            </div>
+            <p className="text-[13px] font-black text-slate-800 font-sukhumvit">หมวดวิชา</p>
+          </div>
+          {categoryData.length === 0 ? (
+            <div className="h-40 flex items-center justify-center text-slate-300 text-sm font-bold font-sukhumvit">ยังไม่มีข้อมูล</div>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={130}>
+                <PieChart>
+                  <Pie data={categoryData} cx="50%" cy="50%" innerRadius={38} outerRadius={58} paddingAngle={3} dataKey="value">
+                    {categoryData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.08)', fontSize: 11, fontFamily: 'Sarabun' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="flex flex-col gap-1.5 mt-2">
+                {categoryData.map(d => (
+                  <div key={d.name} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: d.color }} />
+                      <span className="text-[11px] font-bold text-slate-600 font-sukhumvit">{d.name}</span>
+                    </div>
+                    <span className="text-[11px] font-black text-slate-800 font-sarabun">{d.value}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </motion.div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+
+        {/* ── Department Distribution ── */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={glassCard}
+          className="rounded-3xl p-6"
+        >
+          <p className="text-[13px] font-black text-slate-800 font-sukhumvit mb-4">รายวิชาตามแผนก</p>
+          {deptData.length === 0 ? (
+            <div className="h-24 flex items-center justify-center text-slate-300 text-sm font-bold font-sukhumvit">ยังไม่มีข้อมูล</div>
+          ) : (
+            <div className="space-y-3">
+              {deptData.map(d => {
+                const pct = totalCourses > 0 ? (d.count / totalCourses) * 100 : 0;
+                return (
+                  <div key={d.dept}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11px] font-bold text-slate-600 font-sukhumvit">{d.label}</span>
+                      <span className="text-[11px] font-black text-slate-800 font-sarabun">{d.count} วิชา</span>
+                    </div>
+                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${pct}%` }}
+                        transition={{ duration: 0.8, ease: 'easeOut' }}
+                        className="h-full rounded-full"
+                        style={{ background: d.color }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </motion.div>
+
+        {/* ── Track Breakdown ── */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={glassCard}
+          className="rounded-3xl p-6"
+        >
+          <p className="text-[13px] font-black text-slate-800 font-sukhumvit mb-4">หลักสูตรตามสายการเรียน</p>
+          {trackData.length === 0 ? (
+            <div className="h-24 flex items-center justify-center text-slate-300 text-sm text-center font-bold font-sukhumvit">
+              ยังไม่มีหลักสูตรที่ระบุสาย
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {trackData.map(t => (
+                <div
+                  key={t.track}
+                  className="flex items-center gap-2 px-3 py-2 rounded-2xl"
+                  style={{ background: t.bg, border: `1px solid ${t.color}30` }}
                 >
-                  {stats.catData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="flex justify-center gap-6 mt-2">
-              {stats.catData.map(c => (
-                <div key={c.name} className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: c.fill }} />
-                  <span className="text-[11px] font-medium text-black/60">{c.name} ({c.value})</span>
+                  <div className="w-2 h-2 rounded-full shrink-0" style={{ background: t.color }} />
+                  <span className="text-[11px] font-bold font-sukhumvit" style={{ color: t.color }}>{t.label}</span>
+                  <span className="text-[11px] font-black font-sarabun" style={{ color: t.color }}>{t.count}</span>
                 </div>
               ))}
             </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+          )}
 
-function StatCard({ title, value, subtitle, icon: Icon, color }: any) {
-  return (
-    <div style={glassCard} className="p-5 rounded-3xl flex items-center gap-4">
-      <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${color}15`, color }}>
-        <Icon size={22} />
-      </div>
-      <div>
-        <p className="text-xs font-semibold text-black/50">{title}</p>
-        <p className="text-2xl font-bold text-black/80 leading-none mt-1.5">{value}</p>
-        {subtitle && <p className="text-[10px] text-black/40 mt-1.5">{subtitle}</p>}
+          {/* Recent versions list */}
+          {versions.length > 0 && (
+            <div className="mt-5 space-y-2">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-sarabun mb-2">หลักสูตรล่าสุด</p>
+              {[...versions].sort((a, b) => (b.year || 0) - (a.year || 0)).slice(0, 4).map(v => {
+                const s = getCourseSummary(v.id);
+                const trackCfg = v.track ? CURRICULUM_TRACK_CONFIG[v.track] : null;
+                return (
+                  <div key={v.id} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[11px] font-bold text-slate-700 font-sukhumvit truncate">{v.name}</span>
+                      {trackCfg && (
+                        <span
+                          className="text-[9px] font-bold px-1.5 py-0.5 rounded-md shrink-0"
+                          style={{ background: trackCfg.bg, color: trackCfg.color }}
+                        >
+                          {trackCfg.label}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-black text-slate-400 font-sarabun shrink-0 ml-2">{s.count} วิชา</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </motion.div>
       </div>
     </div>
   );

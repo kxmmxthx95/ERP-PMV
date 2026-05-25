@@ -7,6 +7,8 @@ export interface UserData {
   prefix?: string;
   firstName?: string;
   lastName?: string;
+  firstNameEn?: string;
+  lastNameEn?: string;
   email: string;
   role: string;
   status: UserStatus;
@@ -15,4 +17,8 @@ export interface UserData {
   department?: string;
   isActive?: boolean;
   createdAt?: any;
+  photoURL?: string;
+  lineToken?: string;
+  deviceId?: string;
+  studentCode?: string;
 }

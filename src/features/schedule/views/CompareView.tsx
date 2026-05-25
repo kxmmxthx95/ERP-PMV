@@ -20,12 +20,17 @@ export function CompareView({
   deleteEntry,
   moveEntry,
   compareClassId,
-  compareGrid
+  compareGrid,
 }: CompareViewProps) {
   return (
-    <div className="space-y-8 pb-10">
+    <div className="space-y-8 pb-8">
       <div className="space-y-2">
-        <h3 className="text-xs font-black text-black/30 uppercase tracking-widest pl-2">Main Schedule</h3>
+        <div className="flex items-center gap-2 pl-1">
+          <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+          <span className="text-[10px] font-black text-black/35 uppercase tracking-widest">
+            ห้องหลัก{selectedClassId ? ` — ${selectedClassId}` : ''}
+          </span>
+        </div>
         <ScheduleGrid
           grid={grid}
           viewMode="class"
@@ -40,15 +45,20 @@ export function CompareView({
         />
       </div>
 
-      <div className="space-y-2 pt-4 border-t border-black/5">
-        <h3 className="text-xs font-black text-black/30 uppercase tracking-widest pl-2">Comparison View</h3>
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 pl-1">
+          <div className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+          <span className="text-[10px] font-black text-black/30 uppercase tracking-widest">
+            ห้องเปรียบเทียบ{compareClassId ? ` — ${compareClassId}` : ''}
+          </span>
+        </div>
         <ScheduleGrid
           grid={compareGrid}
           viewMode="class"
           classId={compareClassId}
           readOnly
-          onSlotClick={() => { }}
-          onDeleteEntry={() => { }}
+          onSlotClick={() => {}}
+          onDeleteEntry={() => {}}
         />
       </div>
     </div>

@@ -27,19 +27,19 @@ export default function CalendarDayGrid({
 }: CalendarDayGridProps) {
   const handleSelect = (day: Date) => {
     const isAlreadySelected = selectedDate ? isSameDay(day, selectedDate) : false;
-    onSelectDate(isAlreadySelected ? new Date(NaN) : day); // NaN date signals deselect
+    onSelectDate(isAlreadySelected ? new Date(NaN) : day);
   };
 
   return (
     <>
       {/* Day-of-week headers */}
-      <div className="grid grid-cols-7 px-4 pt-3 pb-1">
+      <div className="grid grid-cols-7 px-5 pt-4 pb-2">
         {DAY_NAMES.map((d, i) => (
           <div
             key={d}
-            className="text-center text-[11px] font-bold pb-2"
+            className="text-center text-[10px] font-black pb-2 font-sukhumvit uppercase tracking-widest"
             style={{
-              color: i === 0 ? '#ef4444' : i === 6 ? '#3b82f6' : 'rgba(0,0,0,0.35)',
+              color: i === 0 ? 'rgba(239,68,68,0.65)' : i === 6 ? 'rgba(59,130,246,0.65)' : 'rgba(15,23,42,0.22)',
             }}
           >
             {d}
@@ -48,7 +48,7 @@ export default function CalendarDayGrid({
       </div>
 
       {/* Day cells */}
-      <div className="grid grid-cols-7 gap-px px-4 pb-4">
+      <div className="grid grid-cols-7 gap-0.5 px-4 pb-5">
         {days.map(day => {
           const dateStr = toDateStr(day);
           const dayEvents = getEventsForDate(dateStr);

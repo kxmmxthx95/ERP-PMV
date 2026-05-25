@@ -5,16 +5,14 @@
 // ── Glass/Panel Styles ──────────────────────────────────
 export const glassStyles = {
   card: {
-    background: 'rgba(255,255,255,0.96)',
-    backdropFilter: 'blur(24px)',
+    background: '#ffffff',
     border: '1px solid rgba(0,0,0,0.08)',
-    boxShadow: '0 24px 64px rgba(0,0,0,0.14)',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.04)',
   },
   panel: {
-    background: 'rgba(255,255,255,0.72)',
-    backdropFilter: 'blur(24px) saturate(150%)',
-    border: '1px solid rgba(255,255,255,0.90)',
-    boxShadow: '0 8px 32px rgba(0,0,0,0.06)',
+    background: '#f8f8ff',
+    border: '1px solid rgba(0,0,0,0.05)',
+    boxShadow: '0 6px 18px rgba(0,0,0,0.04)',
   },
 } as const;
 
@@ -44,17 +42,23 @@ export const spacing = {
 
 // ── Color Tokens (emerald + teal theme) ────────────────
 export const colors = {
-  primary: {
-    light: '#10b981', // emerald-500
-    default: '#0d9488', // teal-600
-    dark: '#0f766e',   // teal-800
+  palette: {
+    royalBlue: '#0056FF',
+    azureBlue: '#2277FF',
+    black: '#000000',
+    softLavender: '#E3E7FC',
+    white: '#FFFFFF',
+  },
+  gradient: {
+    futurewave: 'linear-gradient(135deg, #0056FF 0%, #2277FF 100%)',
+    midnightSurge: 'linear-gradient(135deg, #02163F 0%, #03122B 100%)',
   },
   neutral: {
-    text: 'text-black/80',
-    textSubtle: 'text-black/50',
-    textMuted: 'text-black/40',
-    border: 'border-black/08',
-    hover: 'hover:bg-black/05',
+    text: 'text-black/85',
+    textSubtle: 'text-black/55',
+    textMuted: 'text-black/45',
+    border: 'border-black/10',
+    hover: 'hover:bg-slate-100/60',
   },
 } as const;
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Trash2, ChevronRight, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -12,11 +12,13 @@ interface FormModalProps {
   onSubmit: () => void;
   submitLabel?: string;
   submitDisabled?: boolean;
+  submitClassName?: string;
   onDelete?: () => void;
   deleteLabel?: string;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   footerNote?: React.ReactNode;
+  showCancel?: boolean;
 }
 
 const maxWMap = {
@@ -36,11 +38,13 @@ export default function FormModal({
   onSubmit,
   submitLabel = 'Done',
   submitDisabled = false,
+  submitClassName,
   onDelete,
   deleteLabel = 'ลบข้อมูล',
   children,
   maxWidth = 'md',
   footerNote,
+  showCancel = true,
 }: FormModalProps) {
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -48,8 +52,13 @@ export default function FormModal({
         showCloseButton={false}
         className={cn(
           maxWMap[maxWidth],
-          "rounded-[3.5rem] bg-white/90 backdrop-blur-2xl border-2 border-white/50 p-0 overflow-hidden font-sukhumvit focus:outline-none shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)]"
+          "w-[92vw] rounded-[2rem] sm:rounded-[2.5rem] border-none p-0 shadow-2xl overflow-hidden"
         )}
+        style={{
+          background: 'rgba(255,255,255,0.7)',
+          backdropFilter: 'blur(24px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(180%)'
+        }}
       >
         {/* Visually hidden accessibility title */}
         <DialogTitle className="sr-only">{title}</DialogTitle>
@@ -57,15 +66,15 @@ export default function FormModal({
 
         <div className="flex flex-col min-h-0 max-h-[90vh]">
           {/* ── Header ── */}
-          <div className="px-10 pt-10 pb-4 shrink-0 flex items-start justify-between gap-4">
-            <div className="space-y-1.5">
+          <div className="px-5 sm:px-6 pt-6 sm:pt-7 pb-2 sm:pb-3 shrink-0 flex justify-between items-start bg-transparent">
+            <div className="space-y-1 pr-6">
               <div className="flex items-center gap-3">
                 {icon && (
-                  <div className="w-10 h-10 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-600">
+                  <div className="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-600">
                     {icon}
                   </div>
                 )}
-                <h1 className="text-2xl font-black text-slate-800 tracking-tight leading-tight">
+                <h1 className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">
                   {title}
                 </h1>
               </div>
@@ -75,23 +84,24 @@ export default function FormModal({
                 </p>
               )}
             </div>
-            
             <button
               onClick={onClose}
-              className="w-12 h-12 rounded-full bg-slate-50/80 flex items-center justify-center text-slate-400 hover:bg-white hover:text-slate-600 transition-all border border-slate-100/50"
+              type="button"
+              className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100/50 active:scale-90 transition-all shrink-0 -mt-1 -mr-1"
+              aria-label="Close"
             >
-              <X size={20} />
+              <X size={18} />
             </button>
           </div>
 
           {/* ── Scrollable Content ── */}
-          <div className="flex-1 overflow-y-auto px-10 pt-2 pb-6 scrollbar-hide">
+          <div className="flex-1 overflow-y-auto px-5 sm:px-6 pt-2 pb-4 sm:pb-5 custom-scrollbar">
             <div className="space-y-6">
               {children}
 
               {footerNote && (
-                <div className="mt-4 p-4 rounded-2xl bg-blue-50/30 border border-blue-100/50">
-                  <p className="text-[12px] font-bold text-blue-500/70 text-center">{footerNote}</p>
+                <div className="mt-3 p-3 rounded-xl bg-blue-50/40 border border-blue-100/50">
+                  <p className="text-[11px] font-bold text-blue-500/70 text-center">{footerNote}</p>
                 </div>
               )}
 
@@ -99,9 +109,9 @@ export default function FormModal({
                 <div className="pt-4">
                   <button
                     onClick={onDelete}
-                    className="w-full flex items-center justify-center gap-2 h-14 rounded-3xl text-sm font-black text-rose-500 bg-rose-50/50 hover:bg-rose-50 transition-colors border border-rose-100/50"
+                    className="w-full flex items-center justify-center gap-2 h-10 rounded-xl text-sm font-bold text-rose-500 bg-rose-50/50 hover:bg-rose-50 transition-colors border border-rose-100/50"
                   >
-                    <Trash2 size={18} />
+                    <Trash2 size={16} />
                     {deleteLabel}
                   </button>
                 </div>
@@ -110,21 +120,27 @@ export default function FormModal({
           </div>
 
           {/* ── Fixed Footer ── */}
-          <div className="px-10 py-6 bg-white/50 backdrop-blur-md flex items-center justify-end gap-4 border-t border-slate-100/50 shrink-0">
-            <button
-              onClick={onClose}
-              className="px-6 h-12 rounded-2xl text-sm font-black text-slate-400 hover:text-slate-600 transition-all"
-            >
-              ยกเลิก
-            </button>
+          <DialogFooter className="px-5 sm:px-6 py-4 sm:py-5 flex items-center justify-end gap-3 border-t border-slate-100/50 shrink-0 bg-transparent">
+            {showCancel && (
+              <button
+                onClick={onClose}
+                className="px-4 h-10 rounded-xl text-sm font-bold text-slate-500 hover:text-slate-700 transition-all"
+              >
+                ยกเลิก
+              </button>
+            )}
             <button
               onClick={onSubmit}
               disabled={submitDisabled}
-              className="px-8 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm shadow-xl shadow-slate-900/10 transition-all active:scale-95 disabled:opacity-50 disabled:bg-slate-200 focus:outline-none"
+              className={cn(
+                "h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shadow-lg shadow-slate-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:bg-slate-200",
+                showCancel ? "px-10" : "w-full",
+                submitClassName
+              )}
             >
               {submitLabel}
             </button>
-          </div>
+          </DialogFooter>
         </div>
       </DialogContent>
     </Dialog>

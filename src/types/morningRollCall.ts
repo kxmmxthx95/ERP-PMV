@@ -1,4 +1,4 @@
-export type RollCallStatus = 'present' | 'absent' | 'late' | 'leave';
+export type RollCallStatus = 'present' | 'absent' | 'late' | 'leave' | 'unmarked';
 
 export interface StudentRollCall {
   studentId: string;
@@ -6,6 +6,8 @@ export interface StudentRollCall {
   studentCode: string;
   status: RollCallStatus;
   note?: string;
+  photoURL?: string;
+  gender?: 'male' | 'female';
 }
 
 export interface MorningRollCallSession {

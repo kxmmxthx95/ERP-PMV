@@ -12,23 +12,88 @@ React 19 + Firebase app with 6 user roles (sysadmin, admin, teacher, staff, pare
 
 ## Setup & Commands
 
+### Prerequisites
+
+- **Node.js:** 22+ required for Cloud Functions (`src/functions/`); main app works with any recent Node version
+- **Firebase CLI:** Install for local emulator and deployments: `npm install -g firebase-tools`
+
 ### Environment Variables
 
-Copy `.env` as-is — it contains Firebase config, Google Calendar API key, and LINE Login credentials. Do not commit sensitive secrets to code; `.env` is already in `.gitignore`.
+Root `.env` contains Firebase config, Google Calendar API key, and LINE Login credentials. Do not commit sensitive secrets; `.env` is already in `.gitignore`. Copy `.env` from a team member if setting up locally.
 
-### Scripts
+### Main App Scripts
 
 ```bash
-npm run dev          # Vite dev server (http://localhost:5173)
-npm run build        # tsc -b && vite build
-npm run lint         # ESLint
-npm run preview      # Preview production build
-npm run validate:firestore-config   # Validate Firestore config (Node script)
+npm run dev                           # Vite dev server on http://localhost:3000
+npm run build                         # TypeScript check + Vite build (run before committing)
+npm run lint                          # ESLint; use --fix to auto-fix issues
+npm run preview                       # Preview production build locally
+npm run validate:firestore-config     # Validate Firestore schema + indexes
 ```
 
-**TypeScript:** Strict mode enforced (`tsconfig.app.json`). Run `npm run build` before committing to catch type errors.
+**TypeScript:** Strict mode enforced. Rules like `noUnusedLocals`, `noUnusedParameters` are errors. **Always run `npm run build` before committing** — it performs full type checking and will catch issues that the IDE might miss.
 
 **No test runner:** Features are tested manually via the dev server.
+
+### Firebase & Cloud Functions
+
+Cloud Functions live in `src/functions/` with their own `package.json`, TypeScript config, and build process. They require **Node 22**.
+
+```bash
+# From project root:
+npm run backfill:class-sessions                      # Backfill missing class session records
+npm run cleanup:staff-attendance-duplicates          # Remove duplicate attendance records
+npm run cleanup:staff-attendance-duplicates:dry-run  # Preview cleanup without applying
+npm run validate:firestore-config                    # Validate Firestore indexes & schema
+
+# From src/functions/:
+npm run build          # TypeScript → lib/
+npm run build:watch    # Watch mode during development
+npm run serve          # Run emulator locally (requires firebase-tools)
+npm run deploy         # Deploy functions to Firebase
+npm run logs           # Stream production function logs
+```
+
+**Before running migrations:** Always do a dry-run first and review what will change. Backup Firestore data if possible.
+
+### Path Alias
+
+Use `@/` to import from `src/` (configured in `vite.config.ts`):
+```tsx
+import { PermissionGate } from '@/components/PermissionGate';  // ✓
+import { PermissionGate } from '../components/PermissionGate'; // ✗
+```
+
+---
+
+## Firebase Setup & Firestore Indexes
+
+### Initial Setup
+
+1. Get `.env` with Firebase config from a team member
+2. Install Firebase CLI: `npm install -g firebase-tools`
+3. Authenticate: `firebase login`
+4. Verify config: `npm run validate:firestore-config`
+
+### Deploying Indexes
+
+Composite indexes are defined in `firestore.indexes.json`. They are **required** for efficient queries on `schedules`, `grades`, `syllabi`, and `attendance` collections:
+
+```bash
+firebase deploy --only firestore:indexes
+```
+
+This is safe to run locally — it just creates indexes in your Firebase project, doesn't mutate data. Check [Firebase Console](https://console.firebase.google.com) → Firestore → Indexes to see deployment status.
+
+### Local Emulator (Optional)
+
+To test locally without hitting live Firebase:
+
+```bash
+firebase emulators:start
+```
+
+Then point your app to the local emulator by setting environment variables in your `.env.local` or modifying `src/lib/firebase.ts`.
 
 ---
 
@@ -55,13 +120,37 @@ The canonical feature key list is in `src/types/rolePermission.ts` (`FEATURE_LIS
 The active router is **`src/App.tsx`** (not `src/router/AppRouter.tsx`, which is legacy/unused). All feature pages are lazy-loaded via `React.lazy`. The layout wrapper is `src/components/layouts/PortalLayout.tsx`, which renders the mobile bottom tab bar and the side drawer nav — both configured per role via `ROLE_CONFIG` and `BOTTOM_TAB_CONFIG` inside that file.
 
 ```
-/login              → LoginPage (public)
-/portal             → PortalLayout (protected)
-  /portal           → HomePage (widgets, role-aware)
-  /portal/users     → UsersPage
-  /portal/grades    → GradeBookPage
-  ... (see App.tsx for full list)
-/exam/:roomId       → StudentExamPage (standalone, no layout)
+/login                    → LoginPage (public)
+/line/connect             → LineConnectPage (public)
+/portal                   → PortalLayout (protected)
+  /portal                 → HomePage (widgets, role-aware)
+  /portal/users           → UsersPage
+  /portal/logs            → LogsPage
+  /portal/roles           → RolePermissionManager
+  /portal/calendar        → AcademicCalendar
+  /portal/curriculum      → CurriculumManager
+  /portal/schedule        → ScheduleEditor
+  /portal/teachers        → TeacherManager
+  /portal/lesson-plan     → LessonPlanManager
+  /portal/classes         → ClassManager
+  /portal/students        → StudentManager
+  /portal/profile         → ProfilePage
+  /portal/teaching        → TeachingManager
+  /portal/exams           → ExamManager
+  /portal/question-bank   → QuestionBankManager
+  /portal/grades          → GradeBookPage
+  /portal/attendance      → AttendanceCenterPage
+  /portal/staff-attendance → StaffAttendancePage
+  /portal/morning-rollcall → MorningRollCallPage
+  /portal/leave           → LeaveManagementPage
+  /portal/leave/report    → LeaveReportPage
+  /portal/duty-schedule   → DutySchedulePage
+  /portal/report-control  → ReportControlCenter
+  /portal/announcements   → AnnouncementsPage
+  /portal/feedback        → FeedbackPage
+  /portal/settings        → SettingsPage (sysadmin, require='full')
+  /portal/migrate         → CourseMigrationTool (sysadmin, require='full')
+/exam/:roomId             → StudentExamPage (standalone, no layout)
 ```
 
 ### State Management
@@ -79,19 +168,29 @@ Each subdirectory of `src/features/` is a self-contained feature with its own co
 |---|---|---|
 | `auth/` | `/login` | `authService.ts` |
 | `home/` | `/portal` | `useRolePermissions` |
-| `grades/` | `/portal/grades` | `useGradeBook` |
-| `attendance/` | `/portal/attendance`, `/portal/staff-attendance` | `useStaffAttendance`, `useDailySchedules` |
-| `schedule/` | `/portal/schedule` | `useSchedule` |
-| `curriculum/` | `/portal/curriculum` | `useCurriculum` |
-| `syllabus/` | (admin/teacher views) | `useSyllabus`, `useSyllabusManager`, `useTeacherSyllabus` |
-| `teachers/` | `/portal/teachers` | (no dedicated hook yet) |
-| `students/` | `/portal/students` | `useStudentManager` |
+| `announcements/` | `/portal/announcements` | `useAnnouncements` |
+| `attendance/` | `/portal/attendance`, `/portal/staff-attendance`, `/portal/morning-rollcall` | `useStaffAttendance`, `useDailySchedules`, `useMorningRollCall` |
+| `calendar/` | `/portal/calendar` | `useAcademicCalendar` |
+| `classes/` | `/portal/classes` | `useSchoolStructure` |
+| `curriculum/` | `/portal/curriculum` | `useCurriculum`, `useCurriculumVersioned` |
+| `duty/` | `/portal/duty-schedule` | — |
 | `exam/` | `/portal/exams`, `/exam/:roomId` | `useExamRoom`, `useQuestionSetBank` |
+| `feedback/` | `/portal/feedback` | `useStudentFeedback` |
+| `grades/` | `/portal/grades` | `useGradeBook` |
 | `leave/` | `/portal/leave`, `/portal/leave/report` | `useLeaveRequests` |
 | `lessonPlan/` | `/portal/lesson-plan` | `useLessonPlan` |
-| `duty/` | `/portal/duty-schedule` | — |
-| `reports/` | `/portal/reports`, `/portal/report-control` | — |
-| `settings/` | `/portal/settings` | — |
+| `logs/` | `/portal/logs` | — |
+| `profile/` | `/portal/profile`, `/line/connect` | — |
+| `questionBank/` | `/portal/question-bank` | `useQuestionSetBank`, `useSetQuestions` |
+| `reports/` | `/portal/report-control` | — |
+| `roles/` | `/portal/roles` | `useRolePermissions` |
+| `schedule/` | `/portal/schedule` | `useSchedule` |
+| `settings/` | `/portal/settings`, `/portal/migrate` | — |
+| `students/` | `/portal/students` | `useStudentManager` |
+| `syllabus/` | (admin/teacher views) | `useSyllabus`, `useSyllabusManager`, `useTeacherSyllabus` |
+| `teachers/` | `/portal/teachers` | — |
+| `teaching/` | `/portal/teaching` | `useTeachingManager` |
+| `users/` | `/portal/users` | `useUserForm` |
 
 ---
 
@@ -175,13 +274,12 @@ export function useGrades(classId: string) {
 
 ### Styling
 
-- Tailwind utility classes everywhere.
-- Glassmorphism is the system-wide card style — use the exported `GLASS` constant from `PortalLayout.tsx`:
-  ```typescript
-  import { GLASS } from '@/components/layouts/PortalLayout';
-  // background: rgba(255,255,255,0.35), backdropFilter: blur(20px) saturate(180%)
-  ```
+- Tailwind utility classes everywhere. Use `cn()` from `src/lib/utils.ts` (wraps `clsx` + `tailwind-merge`) to conditionally join classes.
+- Glassmorphism is the system-wide card style. Two sources:
+  - `GLASS` from `@/components/layouts/PortalLayout` — the portal shell's translucent card style
+  - `glassStyles`, `typography`, `spacing`, `colors` from `@/lib/designTokens` — richer set of tokens (card/panel variants, label/sectionTitle text styles, border radius, color palette)
 - Animations: Framer Motion `motion.div` + `variants`.
+- Icons: Prefer `react-icons/hi2` for all new UI work. Do not introduce new `lucide-react` imports in newly created code.
 
 ### Home Page Widgets
 
@@ -189,6 +287,14 @@ export function useGrades(classId: string) {
 1. Add a `widget_*` entry to `FEATURE_LIST` in `src/types/rolePermission.ts`.
 2. Create widget component in `src/features/home/widgets/`.
 3. Register it in `HomePage.tsx`.
+
+### Local Cache Layer
+
+`src/lib/sessionCache.ts` wraps `localStorage` with a 1-hour TTL. Use it to avoid redundant Firestore reads for slow-changing data (e.g. schedules, subjects). Call `sessionCache.invalidate(key)` after any write to that data.
+
+### Audit Logging
+
+All significant user actions (create/update/delete) should call `logEvent()` from `src/lib/activityLogger.ts`. Logs land in Firestore `activity_logs/{date}` and are visible at `/portal/logs`. Supply `action`, `category` (`academic`, `user`, `data`, etc.), `status`, and `targetId`.
 
 ### Permission System Flow
 
@@ -232,18 +338,34 @@ See `.claude/CURRICULUM_SOFT_DELETE_MIGRATION.md` for details.
 
 ## Debugging & Development
 
+### Type Errors
+
+Before pushing, always run `npm run build` to catch type errors. The IDE may not flag all strict mode violations:
+
+```bash
+npm run build            # Full type check
+npm run lint --fix       # Fix auto-fixable lint issues
+```
+
 ### React Query Cache
 
 Inspect cached data in React DevTools → Components tab → click on any component using `useQuery` and check the "Hooks" panel. The `queryKey` always includes `[featureName, ...params]`.
 
+To manually trigger a refetch in the browser console:
+```javascript
+import { queryClient } from '@/lib/queryClient'; // (if exported)
+queryClient.invalidateQueries({ queryKey: ['grades'] });
+```
+
 ### Firestore State
 
-- Enable Firestore debug logging:
+- Enable debug logging temporarily:
   ```typescript
   import { enableLogging } from 'firebase/firestore';
-  enableLogging(true);
+  enableLogging(true); // writes detailed logs to console
   ```
-- Use [Firebase Console](https://console.firebase.google.com) to browse live data and run test queries.
+- Use [Firebase Console](https://console.firebase.google.com) → Firestore to browse live data and run test queries
+- Check composite index status: Console → Firestore → Indexes
 
 ### Permission Debugging
 
@@ -251,6 +373,44 @@ Add to any component to see current permissions:
 ```tsx
 const perms = useMyPermissions();
 console.log('Current permissions:', perms);
+// Logs: { view: [...], edit: [...], full: [...], canAccess: fn, canEdit: fn, ... }
+```
+
+### Common Issues
+
+**Query returns empty:** Verify that all 3 partition fields (`academicYearId`, `semester`, `departmentId`) are included in the Firestore query. See Firestore Schema section for details.
+
+**Lint errors on commit:** Run `npm run lint --fix` to auto-correct most issues (unused imports, formatting). For remaining errors, fix manually or skip the pre-commit hook if certain (use `git commit --no-verify` as a last resort).
+
+---
+
+## Build & Deployment
+
+### Production Build
+
+```bash
+npm run build    # Runs: tsc -b && vite build
+```
+
+This:
+1. Type-checks all TypeScript (`tsc -b` uses incremental compilation)
+2. Bundles with Vite to `dist/` folder
+3. Minifies and optimizes for production
+
+Preview locally before deploying:
+```bash
+npm run preview   # Serves dist/ on http://localhost:3000
+```
+
+### Deploying to Firebase Hosting
+
+```bash
+npm run build && firebase deploy --only hosting
+```
+
+To deploy everything (hosting + functions + indexes):
+```bash
+firebase deploy
 ```
 
 ---
@@ -260,7 +420,7 @@ console.log('Current permissions:', perms);
 | File | Purpose |
 |---|---|
 | `src/App.tsx` | All routes + ProtectedRoute logic |
-| `src/components/layouts/PortalLayout.tsx` | Shell UI, nav, role configs |
+| `src/components/layouts/PortalLayout.tsx` | Shell UI, nav, role configs, `GLASS` constant |
 | `src/components/PermissionGate.tsx` | Route + UI access control |
 | `src/types/rolePermission.ts` | `FEATURE_LIST` — source of truth for all feature keys |
 | `src/store/authStore.ts` | Zustand auth state |
@@ -268,4 +428,13 @@ console.log('Current permissions:', perms);
 | `src/hooks/useActiveAcademicYear.ts` | Active year/semester (localStorage) |
 | `src/hooks/useMyPermissions.ts` | Permission helpers for current user |
 | `src/lib/firebase.ts` | Firebase initialization |
+| `src/lib/designTokens.ts` | Design tokens: `glassStyles`, `typography`, `spacing`, `colors` |
+| `src/lib/utils.ts` | `cn()` — Tailwind class merging utility |
+| `src/lib/activityLogger.ts` | `logEvent()` — writes to `activity_logs/{date}` in Firestore |
+| `src/lib/sessionCache.ts` | localStorage TTL cache (1h) for slow-changing Firestore data |
 | `firestore.indexes.json` | Composite indexes (deploy with Firebase CLI) |
+| `vite.config.ts` | Vite config, path aliases, port settings |
+| `tsconfig.app.json` | TypeScript strict mode config |
+| `src/functions/` | Cloud Functions source (separate package.json, Node 22) |
+| `src/functions/lib/` | Compiled JS (after `npm run build` in functions/) |
+| `firebase.json` | Firebase hosting + functions config |

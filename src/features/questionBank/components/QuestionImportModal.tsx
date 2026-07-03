@@ -4,7 +4,7 @@ import {
   X, FileSpreadsheet, Download, Upload, AlertCircle, 
   CheckCircle2, Loader2, Info
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '@/lib/lazyXlsx';
 import type { QuestionDifficulty, QuestionType, NewQuestion, MultipleChoiceOption } from '@/types/questionBank';
 
 interface Props {
@@ -30,7 +30,8 @@ export default function QuestionImportModal({ open, onClose, onImport }: Props) 
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
+    const XLSX = await loadXlsx();
     const headers = [
       'โจทย์', 
       'ความยาก (easy/medium/hard)', 
@@ -56,8 +57,9 @@ export default function QuestionImportModal({ open, onClose, onImport }: Props) 
 
     setIsProcessing(true);
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
+        const XLSX = await loadXlsx();
         const bstr = evt.target?.result;
         const wb = XLSX.read(bstr, { type: 'binary' });
         const wsname = wb.SheetNames[0];

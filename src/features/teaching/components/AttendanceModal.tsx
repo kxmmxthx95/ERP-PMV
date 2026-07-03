@@ -3,8 +3,9 @@ import { motion } from 'framer-motion';
 import { X, CheckCircle2, UserCheck, UserX, Clock, FileCheck, Save, Search } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTeachingManager } from '@/hooks/useTeachingManager';
-import { useAllLeaveRequests } from '@/hooks/useLeaveRequests';
+import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
 import type { AttendanceStatus, NewAttendanceRecord } from '@/types/teaching';
+import type { LeaveRequest } from '@/types/leave';
 import type { Department } from '@/types/curriculum';
 
 interface AttendanceModalProps {
@@ -52,7 +53,7 @@ export default function AttendanceModal({
 }: AttendanceModalProps) {
   const today = new Date().toISOString().slice(0, 10);
   const { getStudentsForClass, getAttendanceForSession, saveAttendanceSession, activeYearStr, semester, classes } = useTeachingManager(teacherId);
-  const { requests: leaveRequests } = useAllLeaveRequests();
+  const { requests: leaveRequests } = useStudentLeaveRequests(today);
   
   const [students, setStudents] = useState<ModalStudent[]>([]);
   const [search, setSearch] = useState('');
@@ -69,7 +70,7 @@ export default function AttendanceModal({
     const attMap = new Map(existingAttendance.map(a => [a.studentId, a.status]));
 
     // Filter approved leaves for today
-    const activeLeaves = leaveRequests.filter(r => 
+    const activeLeaves = (leaveRequests as LeaveRequest[]).filter((r: LeaveRequest) => 
       r.requesterType === 'student' &&
       r.status === 'approved' && 
       today >= r.startDate && 
@@ -80,7 +81,7 @@ export default function AttendanceModal({
       const existingStatus = attMap.get(student.id);
       const candidateIds = getIdentityCandidates(student);
       const studentFullName = `${student.prefix}${student.firstName}${student.lastName}`;
-      const leave = activeLeaves.find(l =>
+      const leave = activeLeaves.find((l: LeaveRequest) =>
         candidateIds.includes(l.requesterId)
         || (typeof l.requesterStudentCode === 'string' && l.requesterStudentCode === student.studentCode)
         || normalizeThaiName(l.requesterName) === normalizeThaiName(studentFullName)

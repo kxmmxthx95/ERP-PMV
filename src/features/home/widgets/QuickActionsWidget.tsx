@@ -34,7 +34,7 @@ export default function QuickActionsWidget() {
   const actions = (role ? ACTIONS_BY_ROLE[role] : null) ?? DEFAULT_ACTIONS;
 
   return (
-    <div style={WIDGET_GLASS} className="rounded-3xl p-5 flex flex-col gap-3 w-full">
+    <div style={WIDGET_GLASS} className="rounded-2xl p-3 flex flex-col gap-2 w-full">
       <span className="font-bold text-sm text-slate-700">Quick Actions</span>
       <div className="grid grid-cols-4 gap-2">
         {actions.map((a) => {

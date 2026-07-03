@@ -2,44 +2,84 @@ import { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Save, Edit2, ArrowLeft, AlertTriangle, CheckCircle, RotateCcw } from 'lucide-react';
-import { ResponsiveContainer, AreaChart, Area, CartesianGrid, XAxis, YAxis, Tooltip } from 'recharts';
+import { Save, Edit2, ArrowLeft, AlertTriangle, CheckCircle, RotateCcw, ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
-import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
+import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import {
   useTodayMorningRollCall,
   useSaveMorningRollCall,
   getClassRollCallsByAcademicYear,
 } from '@/hooks/useMorningRollCall';
-import { useStudentManager } from '@/hooks/useStudentManager';
+import { useMorningRollCallClassStudents } from '@/hooks/useMorningRollCallClassStudents';
+import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
+import {
+  buildLeaveNote,
+  findApprovedLeaveForStudentOnDate,
+} from '@/lib/attendance/leaveRequestStudentMatch';
 import type { RollCallStatus, StudentRollCall, MorningRollCallSession } from '@/types/morningRollCall';
+import type { LeaveRequest } from '@/types/leave';
+import type { Student } from '@/types/student';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
+import { colors } from '@/lib/designTokens';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 
 interface StudentRowData extends StudentRollCall {
   enrollmentIndex: number;
 }
 
-const CLASS_DEPT_THEMES: Record<Department, { from: string; to: string }> = {
-  early: { from: '#fb7185', to: '#ec4899' },
-  primary: { from: '#38bdf8', to: '#3b82f6' },
-  secondary: { from: '#8b5cf6', to: '#4f46e5' },
-};
+const SOLID_CLASS_CARD_COLOR = colors.palette.royalBlue;
+
+function stripThaiPrefix(name: string) {
+  return name.replace(/^(นาย|นางสาว|นาง|ดร\.?|ผศ\.?)/i, '').trim();
+}
+
+function applyApprovedLeaveToRows(
+  rows: StudentRowData[],
+  classStudents: Student[],
+  leaveRequests: LeaveRequest[],
+  date: string,
+): StudentRowData[] {
+  if (leaveRequests.length === 0) return rows;
+
+  const studentById = new Map(classStudents.map((student) => [student.id, student]));
+
+  return rows.map((row) => {
+    if (row.status !== 'unmarked') return row;
+
+    const student = studentById.get(row.studentId);
+    const approvedLeave = findApprovedLeaveForStudentOnDate(
+      leaveRequests,
+      student ?? { id: row.studentId, studentCode: row.studentCode },
+      date,
+      row.studentName,
+    );
+    if (!approvedLeave) return row;
+
+    return {
+      ...row,
+      status: 'leave' as RollCallStatus,
+      note: buildLeaveNote(approvedLeave),
+    };
+  });
+}
 
 export default function MorningRollCallPage() {
   const navigate = useNavigate();
   const { user, userData, role } = useAuth();
   const isAdmin = role === 'admin' || role === 'sysadmin';
   const { year, activeSemester, isLoaded } = useActiveAcademicYear();
-  const { events: calendarEvents } = useAcademicCalendar(role ?? undefined);
   const classMgr = useClassroomManager();
-  const studentMgr = useStudentManager(year ?? '2568');
   const { mutate: saveRollCall, isPending: isSaving } = useSaveMorningRollCall();
 
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
+  const { students: classStudents, loadingRoster: loadingClassStudents } = useMorningRollCallClassStudents(
+    year ?? undefined,
+    selectedClassId,
+  );
   const [editMode, setEditMode] = useState(false);
   const [studentRows, setStudentRows] = useState<StudentRowData[]>([]);
   const [showWarningModal, setShowWarningModal] = useState(false);
@@ -53,19 +93,16 @@ export default function MorningRollCallPage() {
   const [filterDept, setFilterDept] = useState<Department | 'all'>('all');
   const [now, setNow] = useState(new Date());
   const [optimisticSession, setOptimisticSession] = useState<MorningRollCallSession | null>(null);
+  const [isMobileSummaryCollapsed, setIsMobileSummaryCollapsed] = useState(false);
 
-  const [headerCenterPortalEl, setHeaderCenterPortalEl] = useState<HTMLElement | null>(null);
-  const [headerMobileCenterPortalEl, setHeaderMobileCenterPortalEl] = useState<HTMLElement | null>(null);
-  const [headerFiltersPortalEl, setHeaderFiltersPortalEl] = useState<HTMLElement | null>(null);
-  const [headerMobileActionsPortalEl, setHeaderMobileActionsPortalEl] = useState<HTMLElement | null>(null);
+  const [headerRightPortalEl, setHeaderRightPortalEl] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    setHeaderCenterPortalEl(document.getElementById('header-portal-center'));
-    setHeaderMobileCenterPortalEl(document.getElementById('header-portal-center-mobile'));
-    setHeaderFiltersPortalEl(document.getElementById('header-portal-filters'));
-    setHeaderMobileActionsPortalEl(document.getElementById('header-portal-mobile-actions'));
+    setHeaderRightPortalEl(document.getElementById('header-portal-right-actions'));
   }, []);
 
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const { isHoliday: isRollCallBlocked, isWeekend, holidayTitle } = useIsSchoolDayToday(role ?? undefined, today);
+  const { requests: leaveRequests } = useStudentLeaveRequests(today);
   const { data: fetchedSession } = useTodayMorningRollCall(selectedClassId);
   const existingSession = optimisticSession ?? fetchedSession;
 
@@ -133,84 +170,44 @@ export default function MorningRollCallPage() {
     [classMgr.classCards, selectedClassId],
   );
 
-  const normalizeText = (value: unknown) => String(value ?? '').trim();
-  const getClassNameFromParts = (grade: unknown, room: unknown) => {
-    const g = normalizeText(grade);
-    const r = normalizeText(room);
-    return g && r ? `${g}/${r}` : '';
-  };
-
-  const doesEnrollmentMatchClass = (enrollment: any, cls: any) => {
-    const enrollmentClassId = normalizeText(enrollment.classId ?? enrollment.classroomId ?? enrollment.roomId);
-    const classId = normalizeText(cls.id);
-    if (enrollmentClassId && classId && enrollmentClassId === classId) return true;
-
-    const enrollmentClassName = normalizeText(enrollment.className);
-    const clsClassName = normalizeText(cls.className);
-    if (enrollmentClassName && clsClassName && enrollmentClassName === clsClassName) return true;
-
-    const enrollmentGrade = normalizeText(enrollment.gradeLevel);
-    const clsGrade = normalizeText(cls.gradeLevel);
-    const enrollmentRoom = normalizeText(enrollment.roomNumber ?? enrollment.roomNo);
-    const clsRoom = normalizeText(cls.roomNumber);
-    if (enrollmentGrade && clsGrade && enrollmentRoom && clsRoom) {
-      return enrollmentGrade === clsGrade && enrollmentRoom === clsRoom;
-    }
-
-    const enrollmentComposed = getClassNameFromParts(enrollment.gradeLevel, enrollment.roomNumber ?? enrollment.roomNo);
-    if (enrollmentComposed && clsClassName && enrollmentComposed === clsClassName) return true;
-
-    return false;
-  };
-
-  const getStudentIdsForClass = (cls: any) => {
-    const yearMatchedEnrollments = (studentMgr.enrollments || []).filter(
-      e =>
-        String((e as any).academicYearId ?? (e as any).academicYear ?? '') === String(year)
-        && doesEnrollmentMatchClass(e, cls),
-    );
-    const enrollmentStudentIds = yearMatchedEnrollments.map(e => e.studentId).filter(Boolean);
-    const classStudentIds = Array.isArray(cls?.studentIds) ? cls.studentIds.filter(Boolean) : [];
-    return Array.from(new Set([...enrollmentStudentIds, ...classStudentIds]));
-  };
-
-  const students = useMemo(() => {
+  const students = useMemo<StudentRowData[]>(() => {
     if (!selectedClass || !year) return [];
-    const enrollments = (studentMgr.enrollments || []).filter(
-      e =>
-        String((e as any).academicYearId ?? (e as any).academicYear ?? '') === String(year)
-        && doesEnrollmentMatchClass(e, selectedClass),
-    );
-    const enrollmentByStudentId = new Map(enrollments.map(e => [e.studentId, e] as const));
-    const studentIds = getStudentIdsForClass(selectedClass);
 
-    return studentIds
-      .map((studentId, idx) => {
-        const enrollment = enrollmentByStudentId.get(studentId);
-        const student = studentMgr.students?.find(s => s.id === studentId);
-        return {
-          studentId,
-          studentName: `${student?.firstName || ''} ${student?.lastName || ''}`.trim(),
-          studentCode: student?.studentCode || '',
+    return classStudents
+      .reduce<StudentRowData[]>((acc, student, idx) => {
+        const studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+        const studentCode = student.studentCode || '';
+        if (!studentName && !studentCode) return acc;
+
+        acc.push({
+          studentId: student.id,
+          studentName,
+          studentCode,
           status: 'unmarked' as RollCallStatus,
           note: '',
           enrollmentIndex: idx,
-          photoURL: student?.photoURL,
-          gender: student?.gender as 'male' | 'female' | undefined,
-          className: (enrollment as any)?.className || selectedClass.className,
-        };
-      })
+          photoURL: student.photoURL,
+          gender: student.gender as 'male' | 'female' | undefined,
+        });
+        return acc;
+      }, [])
       .sort((a, b) => {
         const codeA = parseInt(a.studentCode, 10) || 0;
         const codeB = parseInt(b.studentCode, 10) || 0;
         return codeA - codeB;
       });
-  }, [selectedClass, year, studentMgr.enrollments, studentMgr.students]);
+  }, [selectedClass, year, classStudents]);
+
+  const studentsWithLeave = useMemo(
+    () => applyApprovedLeaveToRows(students, classStudents, leaveRequests, today),
+    [students, classStudents, leaveRequests, today],
+  );
 
   useEffect(() => {
     if (!selectedClassId) return;
     // existingSession is undefined while the query is loading — don't reset yet
     if (existingSession === undefined) return;
+    if (!existingSession && loadingClassStudents) return;
     if (existingSession) {
       if (!editMode) return;
       // Initialize with existing session data when entering editMode
@@ -227,14 +224,24 @@ export default function MorningRollCallPage() {
     } else {
       // Only initialize if user hasn't started marking yet, to prevent resetting marks
       // when the query resolves after the user has already begun interacting.
-      setStudentRows(prev => prev.length === 0 ? students : prev);
+      setStudentRows(prev => prev.length === 0 ? studentsWithLeave : prev);
     }
-  }, [selectedClassId, students, existingSession, editMode]);
+  }, [selectedClassId, studentsWithLeave, existingSession, editMode, loadingClassStudents]);
+
+  useEffect(() => {
+    if (!selectedClassId || existingSession || editMode) return;
+    setStudentRows((prev) => {
+      if (prev.length === 0) return studentsWithLeave;
+      return applyApprovedLeaveToRows(prev, classStudents, leaveRequests, today);
+    });
+  }, [leaveRequests, today, classStudents, selectedClassId, existingSession, editMode, studentsWithLeave]);
 
   // Initialize rows when students change or existing session is loaded
-  const rowsToUse = useMemo(() => {
+  const rowsToUse = useMemo<StudentRowData[]>(() => {
+    let rows: StudentRowData[];
+
     if (existingSession && !editMode) {
-      return existingSession.attendance.map((a, idx) => {
+      rows = existingSession.attendance.map((a, idx) => {
         const studentInfo = students.find(s => s.studentId === a.studentId);
         return {
           ...a,
@@ -242,13 +249,15 @@ export default function MorningRollCallPage() {
           photoURL: a.photoURL || studentInfo?.photoURL,
           gender: a.gender || studentInfo?.gender,
         };
-      });
+      }).filter(row => Boolean((row.studentName || '').trim() || (row.studentCode || '').trim()));
+    } else if (studentRows.length === 0 && studentsWithLeave.length > 0) {
+      rows = studentsWithLeave;
+    } else {
+      rows = studentRows.filter(row => Boolean((row.studentName || '').trim() || (row.studentCode || '').trim()));
     }
-    if (studentRows.length === 0 && students.length > 0) {
-      return students;
-    }
-    return studentRows;
-  }, [studentRows, students, existingSession, editMode]);
+
+    return applyApprovedLeaveToRows(rows, classStudents, leaveRequests, today);
+  }, [studentRows, students, studentsWithLeave, classStudents, leaveRequests, today, existingSession, editMode]);
 
   const summary = useMemo(() => {
     const rows = rowsToUse;
@@ -277,6 +286,10 @@ export default function MorningRollCallPage() {
   }, [selectedClass, selectedClassCard]);
   const isAllPresent = useMemo(() => {
     return rowsToUse.length > 0 && rowsToUse.every(r => r.status === 'present');
+  }, [rowsToUse]);
+
+  const isReadyToSubmit = useMemo(() => {
+    return rowsToUse.length > 0 && rowsToUse.every(r => r.status !== 'unmarked');
   }, [rowsToUse]);
 
   const handleToggleAllPresent = () => {
@@ -312,52 +325,48 @@ export default function MorningRollCallPage() {
     return reportSessions.filter((s) => s.date >= from && s.date <= to);
   }, [reportSessions, reportFrom, reportTo]);
 
-  const reportSummary = useMemo(() => {
-    if (filteredReportSessions.length === 0) {
-      return { sessions: 0, present: 0, absent: 0, late: 0, leave: 0, avgPresentRate: 0 };
-    }
-    const totals = filteredReportSessions.reduce(
-      (acc, s) => {
-        acc.present += s.summary.present || 0;
-        acc.absent += s.summary.absent || 0;
-        acc.late += s.summary.late || 0;
-        acc.leave += s.summary.leave || 0;
-        acc.total += s.totalStudents || 0;
-        return acc;
-      },
-      { present: 0, absent: 0, late: 0, leave: 0, total: 0 },
-    );
-    const avgPresentRate = totals.total > 0 ? Math.round((totals.present / totals.total) * 100) : 0;
-    return { sessions: filteredReportSessions.length, ...totals, avgPresentRate };
+  const reportStudentSummaries = useMemo(() => {
+    const map = new Map<string, {
+      studentId: string;
+      studentName: string;
+      studentCode: string;
+      photoURL?: string;
+      gender?: 'male' | 'female';
+      present: number;
+      absent: number;
+      late: number;
+      leave: number;
+      total: number;
+    }>();
+
+    filteredReportSessions.forEach((session) => {
+      session.attendance.forEach((student) => {
+        const key = student.studentId || `${student.studentName}-${student.studentCode}`;
+        const existing = map.get(key) ?? {
+          studentId: student.studentId,
+          studentName: student.studentName,
+          studentCode: student.studentCode,
+          photoURL: student.photoURL,
+          gender: student.gender,
+          present: 0,
+          absent: 0,
+          late: 0,
+          leave: 0,
+          total: 0,
+        };
+
+        if (student.status === 'present') existing.present += 1;
+        if (student.status === 'absent') existing.absent += 1;
+        if (student.status === 'late') existing.late += 1;
+        if (student.status === 'leave') existing.leave += 1;
+        if (student.status !== 'unmarked') existing.total += 1;
+
+        map.set(key, existing);
+      });
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.studentName.localeCompare(b.studentName, 'th'));
   }, [filteredReportSessions]);
-
-  const reportChartData = useMemo(
-    () => filteredReportSessions.map((s) => ({
-      date: s.date.slice(5),
-      มา: s.summary.present || 0,
-      ขาด: s.summary.absent || 0,
-      สาย: s.summary.late || 0,
-      ลา: s.summary.leave || 0,
-    })),
-    [filteredReportSessions],
-  );
-
-  const holidayEvent = useMemo(
-    () => calendarEvents.find((event) => (
-      event.type === 'holiday'
-      && today >= event.startDate
-      && today <= event.endDate
-    )),
-    [calendarEvents, today],
-  );
-  const isAcademicHoliday = !!holidayEvent;
-  const isWeekend = useMemo(() => {
-    const day = new Date(`${today}T00:00:00`).getDay();
-    return day === 0 || day === 6;
-  }, [today]);
-
-
-
 
   if (!isLoaded) {
     return (
@@ -394,7 +403,7 @@ export default function MorningRollCallPage() {
   }
 
   const isReadOnly = existingSession && !editMode;
-  const isRollCallLocked = Boolean(isReadOnly || isAcademicHoliday || isWeekend);
+  const isRollCallLocked = Boolean(isReadOnly || isRollCallBlocked);
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-transparent relative">
@@ -402,129 +411,50 @@ export default function MorningRollCallPage() {
         <div className="absolute -top-24 -left-16 w-72 h-72 rounded-full bg-sky-200/45 blur-3xl" />
         <div className="absolute top-24 -right-20 w-80 h-80 rounded-full bg-cyan-200/40 blur-3xl" />
       </div>
-      {selectedClassId && (
-        <>
-          {headerCenterPortalEl && createPortal(
-            <div className="flex items-center bg-white/60 backdrop-blur-xl border border-white p-1 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.04)] pointer-events-auto">
-              <button
-                onClick={() => setActiveTab('rollcall')}
-                className={`px-6 py-1.5 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${
-                  activeTab === 'rollcall' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                }`}
-              >
-                เช็กชื่อ
-              </button>
-              <button
-                onClick={() => setActiveTab('report')}
-                className={`px-6 py-1.5 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${
-                  activeTab === 'report' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                }`}
-              >
-                รายงาน
-              </button>
-            </div>,
-            headerCenterPortalEl,
-          )}
-          {headerMobileCenterPortalEl && createPortal(
-            <div className="flex items-center gap-1 h-8 p-1 rounded-full bg-white/70 backdrop-blur-xl border border-white shadow-sm pointer-events-auto">
-              <button
-                onClick={() => setActiveTab('rollcall')}
-                className={`h-6 px-4 rounded-full text-[10px] font-black transition-all whitespace-nowrap ${
-                  activeTab === 'rollcall' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                }`}
-              >
-                เช็กชื่อ
-              </button>
-              <button
-                onClick={() => setActiveTab('report')}
-                className={`h-6 px-4 rounded-full text-[10px] font-black transition-all whitespace-nowrap ${
-                  activeTab === 'report' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                }`}
-              >
-                รายงาน
-              </button>
-            </div>,
-            headerMobileCenterPortalEl,
-          )}
-        </>
-      )}
-      {headerFiltersPortalEl && !selectedClassId &&
+      {headerRightPortalEl && !selectedClassId &&
         createPortal(
-          <div className="flex items-center gap-1.5 h-10 p-1 rounded-full bg-white/60 backdrop-blur-xl border border-white shadow-[0_8px_32px_rgba(0,0,0,0.04)] pointer-events-auto">
-            <button
-              onClick={() => setFilterDept('all')}
-              className={`h-8 px-6 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${
-                filterDept === 'all'
-                  ? 'bg-slate-900 text-white shadow-md'
-                  : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-              }`}
-            >
-              ทั้งหมด
-            </button>
-            <div className="w-px h-5 bg-black/10 mx-1 shrink-0" />
+          <NativeSelect
+            value={filterDept}
+            onChange={(e) => setFilterDept(e.target.value as Department | 'all')}
+            aria-label="เลือกระดับชั้น"
+            className="pointer-events-auto min-w-[140px] w-auto [&_select]:h-9 [&_select]:rounded-xl [&_select]:border [&_select]:border-white [&_select]:bg-white/70 [&_select]:px-3 [&_select]:text-xs [&_select]:font-black [&_select]:text-slate-700"
+          >
+            <NativeSelectOption value="all">ทั้งหมด</NativeSelectOption>
             {(['early', 'primary', 'secondary'] as Department[]).map((dept) => (
-              <button
-                key={dept}
-                onClick={() => setFilterDept(dept)}
-                className={`h-8 px-6 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${
-                  filterDept === dept
-                    ? 'bg-slate-900 text-white shadow-md'
-                    : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                }`}
-              >
+              <NativeSelectOption key={dept} value={dept}>
                 {DEPARTMENT_CONFIG[dept].label}
-              </button>
+              </NativeSelectOption>
             ))}
-          </div>,
-          headerFiltersPortalEl,
+          </NativeSelect>,
+          headerRightPortalEl,
         )}
-      {headerMobileActionsPortalEl && selectedClassId && selectedClass && null}
-      {headerMobileCenterPortalEl && !selectedClassId &&
-        createPortal(
-          <div className="md:hidden mx-auto flex items-center justify-center gap-1 h-8 p-1 rounded-full bg-white/70 backdrop-blur-xl border border-white shadow-sm min-w-0 max-w-[calc(100vw-112px)] overflow-x-auto no-scrollbar pointer-events-auto">
-            <button
-              onClick={() => setFilterDept('all')}
-              className={`h-6 px-3 rounded-full text-[10px] font-black transition-all whitespace-nowrap ${
-                filterDept === 'all'
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-              }`}
-            >
-              all
-            </button>
-            {([
-              { key: 'early', label: 'ปฐมวัย' },
-              { key: 'primary', label: 'ประถม' },
-              { key: 'secondary', label: 'มัธยม' },
-            ] as const).map((item) => (
-              <button
-                key={item.key}
-                onClick={() => setFilterDept(item.key)}
-                className={`h-6 px-3 rounded-full text-[10px] font-black transition-all whitespace-nowrap ${
-                  filterDept === item.key
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>,
-          headerMobileCenterPortalEl,
-        )}
-
       <div className="flex-1 overflow-y-auto flex flex-col">
         {/* Class Selection Dropdown */}
         {!selectedClassId && (
           <div className="flex-1 pb-4 min-h-0">
+            <NativeSelect
+              value={filterDept}
+              onChange={(e) => setFilterDept(e.target.value as Department | 'all')}
+              aria-label="เลือกระดับชั้น"
+              className="lg:hidden mb-3 w-full [&_select]:h-9 [&_select]:rounded-xl [&_select]:border [&_select]:border-white [&_select]:bg-white/70 [&_select]:px-3 [&_select]:text-xs [&_select]:font-black [&_select]:text-slate-700"
+            >
+              <NativeSelectOption value="all">ทั้งหมด</NativeSelectOption>
+              {(['early', 'primary', 'secondary'] as Department[]).map((dept) => (
+                <NativeSelectOption key={dept} value={dept}>
+                  {DEPARTMENT_CONFIG[dept].label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {filteredHomeRoomClasses.map((cls: any) => {
-                const classStudentCount = getStudentIdsForClass(cls).length;
-                const dept = (cls.departmentId as Department) || 'secondary';
-                const theme = CLASS_DEPT_THEMES[dept] ?? CLASS_DEPT_THEMES.secondary;
                 const cardTeacher = classMgr.classCards?.find((card: any) => card.classRoom?.id === cls.id)?.homeroomTeacher;
-                const teacherName = cardTeacher?.name || 'ไม่ระบุครู';
+                const teacherRawName = cardTeacher?.name || 'ไม่ระบุครู';
+                const teacherName = stripThaiPrefix(teacherRawName);
                 const teacherInitial = teacherName.trim().charAt(0) || '?';
+                const formattedClassCode = cls.className
+                  .replace(/^ม\./, 'M')
+                  .replace('/', '-')
+                  .replace(/\s/g, '');
 
                 return (
                   <motion.button
@@ -538,24 +468,22 @@ export default function MorningRollCallPage() {
                       setEditMode(false);
                       setStudentRows([]);
                     }}
-                    className="group relative w-full h-[128px] sm:h-[150px] lg:aspect-square overflow-hidden text-left"
+                    className="group relative w-full h-[110px] sm:h-[120px] lg:aspect-square overflow-hidden text-left"
                     style={{
                       borderRadius: 16,
-                      background: `linear-gradient(160deg, ${theme.from} 0%, ${theme.to} 100%)`,
+                      backgroundColor: SOLID_CLASS_CARD_COLOR,
                     }}
                   >
-                    <div
-                      className="pointer-events-none absolute inset-0"
-                      style={{
-                        background:
-                          'radial-gradient(ellipse at 75% 12%, rgba(255,255,255,0.32) 0%, transparent 58%)',
-                      }}
-                    />
-                    <div className="absolute top-2 right-2 flex items-center gap-2.5 max-w-[70%] pointer-events-none">
-                      <span className="text-[10px] text-white/90 font-semibold truncate text-right">
+                    <div className="absolute top-4 left-4 right-4">
+                      <span className="block w-full text-left text-[26px] sm:text-[30px] font-black tracking-tight leading-none text-white">
+                        {formattedClassCode}
+                      </span>
+                    </div>
+                    <div className="absolute bottom-2 right-2 flex items-center gap-2 pointer-events-none">
+                      <span className="text-[11px] font-semibold text-white text-right leading-tight whitespace-normal">
                         {teacherName}
                       </span>
-                      <div className="w-10 h-10 rounded-full overflow-hidden border border-white/70 bg-white/20 shrink-0">
+                      <div className="w-9 h-9 rounded-full overflow-hidden border border-white/70 bg-white/20 flex items-center justify-center">
                         {cardTeacher?.photoURL ? (
                           <img src={cardTeacher.photoURL} alt={teacherName} className="w-full h-full object-cover" />
                         ) : (
@@ -564,21 +492,6 @@ export default function MorningRollCallPage() {
                           </div>
                         )}
                       </div>
-                    </div>
-                    <div
-                      className="pointer-events-none absolute inset-0"
-                      style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.42) 0%, transparent 55%)' }}
-                    />
-                    <div className="absolute bottom-0 left-0 right-0 p-2 pointer-events-none">
-                      <h4
-                        className="text-white font-semibold leading-tight line-clamp-2"
-                        style={{ fontSize: 'clamp(18px, 3.8vw, 22px)', textShadow: '0 1px 3px rgba(0,0,0,0.3)' }}
-                      >
-                        {cls.className}
-                      </h4>
-                      <span className="text-[14px] text-white/90 font-medium mt-1 block">
-                        นักเรียน {classStudentCount} คน
-                      </span>
                     </div>
                   </motion.button>
                 );
@@ -631,16 +544,20 @@ export default function MorningRollCallPage() {
                     />
                   </label>
                 )}
+
+                {/* View Report Button */}
+                <button
+                  onClick={() => setActiveTab('report')}
+                  className="h-9 pl-2.5 pr-3 rounded-full bg-white shadow-sm flex items-center gap-1.5 border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all text-slate-600 cursor-pointer shrink-0"
+                  title="ดูรายงานการเช็กชื่อ"
+                >
+                  <FileText size={15} />
+                  <span className="text-xs font-bold">ดูรายงาน</span>
+                </button>
               </div>
 
               {/* Right Group: Summary Chips */}
-              {isRollCallLocked ? (
-                <div className="flex-1 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800 text-sm font-semibold">
-                  {isWeekend
-                    ? 'วันนี้เป็นวันหยุดสุดสัปดาห์ จึงไม่สามารถเช็กชื่อเข้าแถวได้'
-                    : `วันนี้เป็นวันหยุดจากปฏิทินการศึกษา${holidayEvent?.title ? ` (${holidayEvent.title})` : ''} จึงไม่สามารถเช็กชื่อเข้าแถวได้`}
-                </div>
-              ) : (
+              {!isRollCallLocked && (
               <div className="flex items-center gap-4">
                 <div className="h-[78px] px-1 py-1 flex flex-col justify-center min-w-[132px]">
                   <p className="text-[28px] leading-none font-semibold text-slate-800">
@@ -699,7 +616,7 @@ export default function MorningRollCallPage() {
                 })()}
 
                 {/* Edit Button if read-only */}
-                {existingSession && !editMode && !isAcademicHoliday && !isWeekend && (
+                {existingSession && !editMode && !isRollCallBlocked && (
                   <button
                     onClick={() => setEditMode(true)}
                     className="ml-2 w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all text-slate-600 cursor-pointer shrink-0"
@@ -713,82 +630,132 @@ export default function MorningRollCallPage() {
             </div>
 
             {/* Mobile Class Info & Summary */}
-            <div className="flex md:hidden flex-shrink-0 justify-between items-center gap-2 overflow-x-auto no-scrollbar py-1">
-              {/* Left Column: ปุ่มกลับ, icon ชั้นเรียน, ห้อง, check box */}
-              <div className="flex items-center gap-1.5 bg-white/30 rounded-xl p-1 border border-white/30 backdrop-blur-md shrink-0">
-                {/* Back Button */}
-                <button
-                  onClick={() => {
-                    setSelectedClassId(null);
-                    setEditMode(false);
-                  }}
-                  className="w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100 hover:bg-slate-50 text-slate-600 cursor-pointer transition-all active:scale-95 shrink-0"
-                  title="เปลี่ยนห้องเรียน"
-                >
-                  <ArrowLeft size={16} />
-                </button>
-
-                {existingSession && !editMode && !isAcademicHoliday && !isWeekend ? (
+            <div className="md:hidden flex-shrink-0 rounded-[24px] border border-slate-100 bg-white p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setEditMode(true)}
-                    className="w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100 hover:bg-slate-50 text-slate-600 cursor-pointer transition-all active:scale-95 shrink-0"
-                    title="แก้ไข"
+                    onClick={() => {
+                      setSelectedClassId(null);
+                      setEditMode(false);
+                    }}
+                    className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-200 hover:bg-slate-50 text-slate-600 cursor-pointer transition-all active:scale-95 shrink-0"
+                    title="เปลี่ยนห้องเรียน"
                   >
-                    <Edit2 size={14} />
+                    <ArrowLeft size={15} />
                   </button>
-                ) : (
-                  !isRollCallLocked && (
-                    <label 
-                      className="w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all cursor-pointer select-none shrink-0" 
-                      title="เช็กมาเรียนทุกคน"
+
+                  {existingSession && !editMode && !isRollCallBlocked ? (
+                    <button
+                      onClick={() => setEditMode(true)}
+                      className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-200 hover:bg-slate-50 text-slate-600 cursor-pointer transition-all active:scale-95 shrink-0"
+                      title="แก้ไข"
                     >
-                      <input
-                        type="checkbox"
-                        checked={isAllPresent}
-                        onChange={handleToggleAllPresent}
-                        className="w-3.5 h-3.5 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
-                      />
-                    </label>
-                  )
-                )}
+                      <Edit2 size={13} />
+                    </button>
+                  ) : (
+                    !isRollCallLocked && (
+                      <label
+                        className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-200 hover:bg-slate-50 active:scale-95 transition-all cursor-pointer select-none shrink-0"
+                        title="เช็กมาเรียนทุกคน"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isAllPresent}
+                          onChange={handleToggleAllPresent}
+                          className="w-3.5 h-3.5 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
+                        />
+                      </label>
+                    )
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileSummaryCollapsed(prev => !prev)}
+                    className="w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm flex items-center justify-center active:scale-95 transition shrink-0"
+                    title={isMobileSummaryCollapsed ? 'แสดงสรุป' : 'หุบสรุป'}
+                    aria-label={isMobileSummaryCollapsed ? 'แสดงสรุปการมาเรียน' : 'หุบสรุปการมาเรียน'}
+                  >
+                    {isMobileSummaryCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('report')}
+                    className="w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm flex items-center justify-center active:scale-95 transition shrink-0"
+                    title="ดูรายงานการเช็กชื่อ"
+                    aria-label="ดูรายงานการเช็กชื่อ"
+                  >
+                    <FileText size={14} />
+                  </button>
+                </div>
+
+                <div className="text-right">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                    Morning Roll Call
+                  </p>
+                  <p className="text-[12px] font-semibold text-slate-700">
+                    {selectedClass?.className ?? 'เช็กชื่อเข้าแถว'}
+                  </p>
+                </div>
               </div>
 
-              {/* Right Column: สรุป ยอด รวม ขาด ลา มา สาย (5 Colored Summary Cards) */}
-              <div className="flex items-center gap-1 shrink-0">
-                {/* รวม (Total Card) */}
-                <div className="p-0.5 w-9 h-9 rounded-xl bg-slate-100 text-slate-600 text-[8px] font-black flex flex-col items-center justify-center border border-slate-200/50 shadow-sm shrink-0">
-                  <span className="opacity-75 leading-none">รวม</span>
-                  <span className="text-[11px] font-semibold mt-0.5 leading-none">{summary.total}</span>
+              {!isMobileSummaryCollapsed && (
+                <>
+                <div className="mt-4 text-center">
+                  <div className="flex items-start justify-center gap-1">
+                    <span className="text-[38px] leading-none font-black text-slate-950">{summary.total}</span>
+                    <span className="mt-1 text-[11px] font-semibold text-slate-400">คน</span>
+                  </div>
+                  <p className="mt-0.5 text-sm font-semibold text-blue-600">สรุปการมาเรียน</p>
                 </div>
 
-                {/* มา (Green Card) */}
-                <div className="p-0.5 w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 text-[8px] font-black flex flex-col items-center justify-center border border-emerald-100/50 shadow-sm shrink-0">
-                  <span className="opacity-75 leading-none">มา</span>
-                  <span className="text-[11px] font-semibold mt-0.5 leading-none">{summary.present}</span>
-                </div>
+              {(() => {
+                const total = Math.max(summary.total, 1);
+                const segments = [
+                  { key: 'present', label: 'มา', count: summary.present, color: 'bg-emerald-400', dot: 'bg-emerald-400', text: 'text-emerald-600' },
+                  { key: 'absent', label: 'ขาด', count: summary.absent, color: 'bg-rose-400', dot: 'bg-rose-400', text: 'text-rose-600' },
+                  { key: 'late', label: 'สาย', count: summary.late, color: 'bg-amber-400', dot: 'bg-amber-400', text: 'text-amber-600' },
+                  { key: 'leave', label: 'ลา', count: summary.leave, color: 'bg-violet-500', dot: 'bg-violet-500', text: 'text-violet-600' },
+                ];
 
-                {/* ขาด (Rose Card) */}
-                <div className="p-0.5 w-9 h-9 rounded-xl bg-rose-50 text-rose-600 text-[8px] font-black flex flex-col items-center justify-center border border-rose-100/50 shadow-sm shrink-0">
-                  <span className="opacity-75 leading-none">ขาด</span>
-                  <span className="text-[11px] font-semibold mt-0.5 leading-none">{summary.absent}</span>
-                </div>
+                return (
+                  <div className="mt-5 rounded-[24px] bg-slate-50 p-3 shadow-inner">
+                    <div className="flex h-10 gap-1 overflow-hidden rounded-xl">
+                      {segments.map((segment) => (
+                        <div
+                          key={segment.key}
+                          className={`${segment.color} min-w-[18px] rounded-2xl transition-all`}
+                          style={{ width: `${Math.max((segment.count / total) * 100, segment.count > 0 ? 12 : 8)}%` }}
+                        />
+                      ))}
+                    </div>
 
-                {/* สาย (Amber Card) */}
-                <div className="p-0.5 w-9 h-9 rounded-xl bg-amber-50 text-amber-600 text-[8px] font-black flex flex-col items-center justify-center border border-amber-100/50 shadow-sm shrink-0">
-                  <span className="opacity-75 leading-none">สาย</span>
-                  <span className="text-[11px] font-semibold mt-0.5 leading-none">{summary.late}</span>
-                </div>
-
-                {/* ลา (Violet Card) */}
-                <div className="p-0.5 w-9 h-9 rounded-xl bg-violet-50 text-violet-600 text-[8px] font-black flex flex-col items-center justify-center border border-violet-100/50 shadow-sm shrink-0">
-                  <span className="opacity-75 leading-none">ลา</span>
-                  <span className="text-[11px] font-semibold mt-0.5 leading-none">{summary.leave}</span>
-                </div>
-              </div>
+                    <div className="mt-3 grid grid-cols-4 gap-2">
+                      {segments.map((segment) => (
+                        <div key={segment.key} className="min-w-0">
+                          <div className="flex items-center gap-1">
+                            <span className={`w-2 h-2 rounded-full ${segment.dot}`} />
+                            <span className={`text-[11px] font-black ${segment.text}`}>{segment.label}</span>
+                          </div>
+                          <p className="mt-1 text-[15px] leading-none font-black text-slate-900">
+                            {segment.count}
+                            <span className="ml-0.5 text-[10px] font-bold text-slate-400">คน</span>
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+                </>
+              )}
             </div>
 
             {/* Student List */}
             <div className="flex-1 overflow-y-auto no-scrollbar min-h-0">
+              {loadingClassStudents && rowsToUse.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-sm font-semibold text-slate-500">
+                  กำลังโหลดรายชื่อนักเรียน...
+                </div>
+              ) : (
               <AnimatePresence mode="popLayout">
                 {rowsToUse.map((row, i) => {
                   const statusConfig = {
@@ -818,6 +785,18 @@ export default function MorningRollCallPage() {
                     },
                   };
 
+                  const rowStatusStyle = row.status === 'present'
+                    ? 'bg-emerald-100/60 border-emerald-200'
+                    : row.status === 'absent'
+                      ? 'bg-rose-100/60 border-rose-200'
+                      : row.status === 'late'
+                        ? 'bg-amber-100/60 border-amber-200'
+                        : row.status === 'leave'
+                          ? 'bg-violet-100/60 border-violet-200'
+                          : i % 2 === 0
+                            ? 'bg-white border-slate-100 hover:bg-slate-50'
+                            : 'bg-slate-50/60 border-slate-100 hover:bg-slate-100/60';
+
                   return (
                     <motion.div
                       key={`${row.studentId}-${i}`}
@@ -826,11 +805,7 @@ export default function MorningRollCallPage() {
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -6 }}
                       transition={{ delay: i * 0.01 }}
-                      className={`flex items-center justify-between py-3 px-4 rounded-xl border border-transparent transition-all mb-1 ${
-                        i % 2 === 0
-                          ? 'bg-white hover:bg-slate-50 hover:border-slate-100'
-                          : 'bg-slate-50/60 hover:bg-slate-100/60 hover:border-slate-100'
-                      }`}
+                      className={`flex items-center justify-between py-3 px-4 rounded-xl border transition-all mb-1 ${rowStatusStyle}`}
                     >
                       <div className="flex-1 min-w-0 mr-3 flex items-center gap-3">
                         <div className="hidden sm:block">
@@ -884,6 +859,7 @@ export default function MorningRollCallPage() {
                   );
                 })}
               </AnimatePresence>
+              )}
             </div>
 
             {/* Save Button */}
@@ -898,15 +874,15 @@ export default function MorningRollCallPage() {
                 <button
                   disabled={isSaving}
                   onClick={() => {
-                    if (existingSession && !editMode && !isAcademicHoliday && !isWeekend) {
+                    if (existingSession && !editMode && !isRollCallBlocked) {
                       setEditMode(true);
                       return;
                     }
-                    if (isWeekend || isAcademicHoliday) {
+                    if (isRollCallBlocked) {
                       setSaveError(
                         isWeekend
                           ? 'วันนี้เป็นวันหยุดสุดสัปดาห์ ไม่สามารถเช็กชื่อเข้าแถวได้'
-                          : `วันนี้เป็นวันหยุด${holidayEvent?.title ? ` (${holidayEvent.title})` : ''} ไม่สามารถเช็กชื่อเข้าแถวได้`,
+                          : `วันนี้เป็นวันหยุด${holidayTitle ? ` (${holidayTitle})` : ''} ไม่สามารถเช็กชื่อเข้าแถวได้`,
                       );
                       return;
                     }
@@ -941,10 +917,12 @@ export default function MorningRollCallPage() {
                       },
                     );
                   }}
-                  className={`w-full px-4 py-3 rounded-2xl font-black flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg ${
+                  className={`w-full px-4 py-3 rounded-2xl font-black flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed ${
                     existingSession && !editMode
-                      ? 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-emerald-600/25'
-                      : 'bg-slate-900 text-white hover:bg-slate-700 shadow-slate-900/20'
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-[0_8px_18px_rgba(16,185,129,0.12)]'
+                      : isReadyToSubmit
+                        ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-[0_8px_18px_rgba(59,130,246,0.25)]'
+                        : 'bg-slate-900 text-white hover:bg-slate-700 shadow-[0_8px_18px_rgba(15,23,42,0.12)]'
                   }`}
                 >
                   {existingSession && !editMode ? <Edit2 size={18} /> : <Save size={18} />}
@@ -955,20 +933,28 @@ export default function MorningRollCallPage() {
               </>
             ) : (
               <div className="flex-1 min-h-0 flex flex-col gap-3">
-                <div className="bg-white/30 border border-white/40 rounded-xl p-3 backdrop-blur-md flex flex-col gap-3">
+                <div className="bg-white/90 border border-slate-200 rounded-[26px] p-3 backdrop-blur-md flex flex-col gap-3 ring-1 ring-white/60">
                   <div className="flex items-center gap-2 overflow-x-auto no-scrollbar w-full pb-1">
+                    <button
+                      onClick={() => setActiveTab('rollcall')}
+                      className="shrink-0 w-8 h-8 flex items-center justify-center rounded-xl bg-white/40 text-slate-500 hover:bg-white/70 transition-colors"
+                      title="กลับไปหน้าเช็กชื่อ"
+                      aria-label="กลับไปหน้าเช็กชื่อ"
+                    >
+                      <ArrowLeft size={14} />
+                    </button>
                     <input
                       type="date"
                       value={reportFrom}
                       onChange={(e) => setReportFrom(e.target.value)}
-                      className="flex-1 w-full min-w-[100px] h-8 rounded-xl border-none bg-slate-100 px-3 text-xs font-semibold text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      className="flex-1 w-full min-w-[100px] h-8 rounded-xl border-none bg-slate-100 px-3 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                     />
                     <span className="text-slate-400 text-xs px-1">ถึง</span>
                     <input
                       type="date"
                       value={reportTo}
                       onChange={(e) => setReportTo(e.target.value)}
-                      className="flex-1 w-full min-w-[100px] h-8 rounded-xl border-none bg-slate-100 px-3 text-xs font-semibold text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      className="flex-1 w-full min-w-[100px] h-8 rounded-xl border-none bg-slate-100 px-3 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                     />
                     <button
                       onClick={() => {
@@ -978,62 +964,57 @@ export default function MorningRollCallPage() {
                         setReportTo(to.toISOString().slice(0, 10));
                         setReportFrom(from.toISOString().slice(0, 10));
                       }}
-                      className="shrink-0 w-8 h-8 ml-1 flex items-center justify-center rounded-xl bg-white/40 text-slate-500 hover:bg-white/70 transition-colors shadow-sm"
+                      className="shrink-0 w-8 h-8 ml-1 flex items-center justify-center rounded-xl bg-white/40 text-slate-500 hover:bg-white/70 transition-colors"
                       title="ล้างตัวกรองวันที่"
                     >
                       <RotateCcw size={14} />
                     </button>
                   </div>
-                  <div className="flex items-center justify-between w-full overflow-x-auto no-scrollbar gap-2 pb-1">
-                    {[
-                      { label: 'เฉลี่ย', value: `${reportSummary.avgPresentRate}%`, color: 'text-sky-700' },
-                      { label: 'มา', value: reportSummary.present, color: 'text-emerald-700' },
-                      { label: 'ขาด', value: reportSummary.absent, color: 'text-rose-700' },
-                      { label: 'สาย', value: reportSummary.late, color: 'text-amber-700' },
-                      { label: 'ลา', value: reportSummary.leave, color: 'text-violet-700' },
-                    ].map((item) => (
-                      <div key={item.label} className="py-1 px-2 shrink-0 flex flex-col justify-center min-w-[50px]">
-                        <p className="text-[11px] font-bold leading-none text-slate-500">{item.label}</p>
-                        <p className={`mt-1 text-[22px] md:text-[26px] leading-none font-semibold ${item.color}`}>{item.value}</p>
-                      </div>
-                    ))}
-                  </div>
                 </div>
 
-                <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-2 gap-3">
-                  <div className="rounded-xl bg-white/35 border border-white/40 p-3 backdrop-blur-md min-h-[280px]">
-                    {isLoadingReport ? (
-                      <div className="h-full flex items-center justify-center text-sm text-slate-400">กำลังโหลดรายงาน...</div>
-                    ) : reportChartData.length === 0 ? (
-                      <div className="h-full flex items-center justify-center text-sm text-slate-400">ไม่มีข้อมูลย้อนหลัง</div>
-                    ) : (
-                      <ResponsiveContainer width="100%" height={260}>
-                        <AreaChart data={reportChartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                          <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#64748b' }} />
-                          <YAxis tick={{ fontSize: 11, fill: '#64748b' }} />
-                          <Tooltip />
-                          <Area type="monotone" dataKey="มา" stroke="#10b981" fill="#10b98133" strokeWidth={2} />
-                          <Area type="monotone" dataKey="ขาด" stroke="#f43f5e" fill="#f43f5e26" strokeWidth={2} />
-                          <Area type="monotone" dataKey="สาย" stroke="#f59e0b" fill="#f59e0b26" strokeWidth={2} />
-                          <Area type="monotone" dataKey="ลา" stroke="#8b5cf6" fill="#8b5cf626" strokeWidth={2} />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    )}
-                  </div>
-
+                <div className="flex-1 min-h-0">
                   <div className="rounded-xl bg-white/35 border border-white/40 p-3 backdrop-blur-md overflow-y-auto min-h-[280px]">
-                    <p className="text-xs font-black text-slate-600 mb-2">รายการย้อนหลัง</p>
                     <div className="space-y-2">
-                      {filteredReportSessions.slice().reverse().map((s) => (
-                        <div key={s.id} className="rounded-lg bg-white/70 border border-slate-100 px-3 py-2">
-                          <p className="text-xs font-black text-slate-700">{s.date}</p>
-                          <p className="text-[11px] text-slate-500 mt-1">
-                            มา {s.summary.present} | ขาด {s.summary.absent} | สาย {s.summary.late} | ลา {s.summary.leave}
-                          </p>
+                      {reportStudentSummaries.map((student) => (
+                        <div
+                          key={student.studentId || `${student.studentName}-${student.studentCode}`}
+                          className="rounded-xl border border-slate-100 bg-white/70 px-3 py-2.5"
+                        >
+                          <div className="flex items-center gap-2">
+                            <StudentAvatar
+                              photoURL={student.photoURL}
+                              studentId={student.studentId}
+                              name={student.studentName}
+                              gender={student.gender}
+                              className="w-8 h-8 rounded-lg shrink-0"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[12px] font-semibold text-slate-800 truncate">{student.studentName}</p>
+                              <p className="text-[10px] text-slate-500 truncate">{student.studentCode}</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 grid grid-cols-4 gap-1.5">
+                            <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1">
+                              <p className="text-[10px] font-bold text-emerald-700">มา</p>
+                              <p className="text-sm leading-none font-black text-emerald-700 mt-1">{student.present}</p>
+                            </div>
+                            <div className="rounded-lg border border-rose-100 bg-rose-50 px-2 py-1">
+                              <p className="text-[10px] font-bold text-rose-700">ขาด</p>
+                              <p className="text-sm leading-none font-black text-rose-700 mt-1">{student.absent}</p>
+                            </div>
+                            <div className="rounded-lg border border-amber-100 bg-amber-50 px-2 py-1">
+                              <p className="text-[10px] font-bold text-amber-700">สาย</p>
+                              <p className="text-sm leading-none font-black text-amber-700 mt-1">{student.late}</p>
+                            </div>
+                            <div className="rounded-lg border border-violet-100 bg-violet-50 px-2 py-1">
+                              <p className="text-[10px] font-bold text-violet-700">ลา</p>
+                              <p className="text-sm leading-none font-black text-violet-700 mt-1">{student.leave}</p>
+                            </div>
+                          </div>
                         </div>
                       ))}
-                      {!isLoadingReport && filteredReportSessions.length === 0 && (
+                      {!isLoadingReport && reportStudentSummaries.length === 0 && (
                         <p className="text-xs text-slate-400">ไม่พบข้อมูลในช่วงวันที่ที่เลือก</p>
                       )}
                     </div>

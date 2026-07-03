@@ -1,13 +1,15 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Coffee, Timer, X, Check, PlusCircle, Clock, Pencil, Trash2, BookOpen, User, MapPin, ArrowRight, Users, Layout, AlertTriangle } from 'lucide-react';
+import { Plus, Coffee, Timer, X, Check, PlusCircle, Clock, Pencil, Trash2, BookOpen, User, MapPin, ArrowRight, Users, Layout, AlertTriangle, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   SCHOOL_DAYS, DAY_LABELS, DAY_SHORT,
   type SchoolDay, type ScheduleEntry,
 } from '@/types/schedule';
 import { useScheduleSettings, DEFAULT_SETTINGS } from '@/hooks/useScheduleSettings';
-import { subjectColorByName } from '../constants/colors';
+import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
+import { subjectColorByName, subjectGradient, withAlpha } from '../constants/colors';
+import { isJointClassGroup, formatClassLabels } from '../utils/jointClass';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Carousel,
@@ -68,17 +70,23 @@ interface ScheduleGridProps {
   grid: Record<number, Record<number, ScheduleEntry[]>>;
   viewMode: 'class' | 'teacher';
   classId?: string;
+  filterDept?: 'all' | 'early' | 'primary' | 'secondary';
+  setFilterDept?: (v: 'all' | 'early' | 'primary' | 'secondary') => void;
+  filterGrade?: string;
+  setFilterGrade?: (v: string) => void;
+  filteredClasses?: { id: string; gradeLevel: string; department: string; label: string }[];
   settingsId?: string;
   readOnly?: boolean;
   onSlotClick: (day: SchoolDay, period: number, entry: ScheduleEntry | null) => void;
   onDeleteEntry: (id: string) => void;
   onMoveEntry?: (id: string, day: SchoolDay, period: number) => void;
-  onDropSubject?: (day: SchoolDay, period: number, subjectId: string, teacherId: string) => void;
+  onDropSubject?: (day: SchoolDay, period: number, subjectId: string, teacherId: string, classId?: string) => void;
   isEditMode?: boolean;
   setIsEditMode?: (val: boolean) => void;
   allClasses?: { id: string; gradeLevel: string; department: string; label: string }[];
   teachers?: { id: string; department: string; name: string; photoURL?: string }[];
   excessEntryIds?: Set<string>;
+  onClassSelect?: (classId: string) => void;
   draggableSubjects?: {
     id: string;
     code: string;
@@ -87,8 +95,14 @@ interface ScheduleGridProps {
     subjectGroup?: string;
     assignedTeacherId?: string;
     className?: string;
+    classId?: string;
   }[];
   dragTeacherId?: string;
+  mobileHeaderContent?: ReactNode;
+  selectedTeacherId?: string;
+  setSelectedTeacherId?: (id: string) => void;
+  jointClassEntryIds?: Set<string>;
+  jointClassPartnersByEntryId?: Map<string, string[]>;
 }
 
 interface ClassScheduleSettings {
@@ -98,26 +112,36 @@ interface ClassScheduleSettings {
   lunchPeriods?: number[];
 }
 
-function withAlpha(color: string, alpha: number): string {
-  const m = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)/i);
-  if (!m) return color;
-  const [, r, g, b] = m;
-  return `rgba(${r},${g},${b},${alpha})`;
+function normalizeCategoryKey(raw?: string) {
+  const c = String(raw || '').trim().toLowerCase();
+  if (!c) return '';
+  if (c === 'core' || c === 'basic' || c.includes('พื้นฐาน')) return 'basic';
+  if (c === 'added' || c === 'additional' || c.includes('เพิ่มเติม')) return 'additional';
+  if (c === 'activity' || c.includes('กิจกรรม')) return 'activity';
+  return c;
 }
 
-function subjectGradient(
-  color: { bg: string; border: string; text: string; accent: string },
-  isCurrent = false,
-): string {
-  const strong = withAlpha(color.accent, isCurrent ? 0.94 : 0.9);
-  const mid = withAlpha(color.accent, isCurrent ? 0.82 : 0.76);
-  const soft = withAlpha(color.bg, isCurrent ? 0.88 : 0.82);
-  const sheen = withAlpha(color.accent, isCurrent ? 0.38 : 0.28);
-  return [
-    `radial-gradient(120% 130% at 100% 100%, ${sheen} 0%, transparent 56%)`,
-    'radial-gradient(140% 120% at 0% 0%, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 52%)',
-    `linear-gradient(160deg, ${strong} 0%, ${mid} 46%, ${soft} 100%)`,
-  ].join(', ');
+function categoryBadgeStyle(raw?: string) {
+  const key = normalizeCategoryKey(raw);
+  if (key === 'additional') {
+    return {
+      label: 'เพิ่มเติม',
+      className: 'bg-amber-50 text-amber-700 border-amber-100',
+      dotClassName: 'bg-amber-400',
+    };
+  }
+  if (key === 'activity') {
+    return {
+      label: 'กิจกรรม',
+      className: 'bg-violet-50 text-violet-700 border-violet-100',
+      dotClassName: 'bg-violet-400',
+    };
+  }
+  return {
+    label: 'พื้นฐาน',
+    className: 'bg-sky-50 text-sky-700 border-sky-100',
+    dotClassName: 'bg-sky-400',
+  };
 }
 
 function restGradient(isEditing: boolean): string {
@@ -138,6 +162,11 @@ export default function ScheduleGrid({
   grid: gridProp,
   viewMode,
   classId,
+  filterDept = 'all',
+  setFilterDept,
+  filterGrade = 'all',
+  setFilterGrade,
+  filteredClasses,
   settingsId,
   readOnly = false,
   onSlotClick,
@@ -151,6 +180,12 @@ export default function ScheduleGrid({
   excessEntryIds,
   draggableSubjects = [],
   dragTeacherId = '',
+  onClassSelect,
+  mobileHeaderContent,
+  selectedTeacherId = '',
+  setSelectedTeacherId,
+  jointClassEntryIds,
+  jointClassPartnersByEntryId,
 }: ScheduleGridProps) {
   const settingsTargetId = settingsId ?? classId;
   const {
@@ -301,15 +336,61 @@ export default function ScheduleGrid({
   const [isCopying, setIsCopying] = useState(false);
 
   const [dragOverSlot, setDragOverSlot] = useState<{ day: SchoolDay; period: number } | null>(null);
+  const [touchDragData, setTouchDragData] = useState<{ subjectId: string; teacherId: string; classId?: string } | null>(null);
 
   const currentPeriod = useCurrentPeriod(displayPeriodTimes);
   const [detailEntry, setDetailEntry] = useState<ScheduleEntry | null>(null);
   const [mobileDay, setMobileDay] = useState<SchoolDay>(1);
+  const [mobileSubjectPickerSlot, setMobileSubjectPickerSlot] = useState<{ day: SchoolDay; period: number } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+
+  const filterDepts = useMemo(() => {
+    if (!allClasses) return [];
+    return Array.from(new Set(allClasses.map(c => c.department))).sort();
+  }, [allClasses]);
+
+  const filterGrades = useMemo(() => {
+    if (!allClasses) return [];
+    const base = filterDept !== 'all' ? allClasses.filter(c => c.department === filterDept) : allClasses;
+    return Array.from(new Set(base.map(c => c.gradeLevel))).sort();
+  }, [allClasses, filterDept]);
+
+  const filterClasses = useMemo(() => {
+    const baseSource = filteredClasses && filteredClasses.length > 0 ? filteredClasses : (allClasses || []);
+    let base = baseSource;
+    if (filterDept !== 'all') base = base.filter(c => c.department === filterDept);
+    if (filterGrade !== 'all') base = base.filter(c => c.gradeLevel === filterGrade);
+    const seen = new Set<string>();
+    return base.filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
+  }, [allClasses, filteredClasses, filterDept, filterGrade]);
+
+  const filterTeacherDepts = useMemo(() => {
+    if (!teachers) return [];
+    return Array.from(new Set(teachers.map(t => t.department).filter(Boolean))).sort();
+  }, [teachers]);
+
+  const filterTeachers = useMemo(() => {
+    if (!teachers) return [];
+    const base = filterDept !== 'all'
+      ? teachers.filter(t => t.department === filterDept)
+      : teachers;
+    return [...base].sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  }, [teachers, filterDept]);
+
+  const showClassFilter = viewMode === 'class' && !!allClasses && allClasses.length > 1;
+  const showTeacherFilter = viewMode === 'teacher';
 
   const periods = Array.from({ length: effectivePeriodCount }, (_, i) => i + 1);
   const canEdit = !readOnly && (!!classId || viewMode === 'teacher');
   const isEditing = isEditMode && canEdit;
   const showSubjectCarousel = isEditing;
+  const shouldHideGrid =
+    (viewMode === 'class' && !classId) ||
+    (viewMode === 'teacher' && (filterDept === 'all' || !selectedTeacherId));
+  const hideGridTitle = viewMode === 'teacher' ? 'กรุณาเลือกครูก่อน' : 'กรุณาเลือกห้องเรียนก่อน';
+  const hideGridHint = viewMode === 'teacher'
+    ? 'ตารางสอนจะแสดงเมื่อเลือกแผนกและครูผู้สอน'
+    : 'ตารางสอนจะแสดงเมื่อเลือกแผนก ระดับชั้น และห้องเรียนครบ';
 
   let regularCount = 0;
   const displayNumbers: Record<number, number> = {};
@@ -328,17 +409,34 @@ export default function ScheduleGrid({
     if (!readOnly) onSlotClick(day, period, entry ?? null);
   };
 
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const startMobileLongPress = (day: SchoolDay, period: number, disabled: boolean) => {
+    if (disabled) return;
+    clearLongPressTimer();
+    longPressTimerRef.current = window.setTimeout(() => {
+      setMobileSubjectPickerSlot({ day, period });
+      clearLongPressTimer();
+    }, 450);
+  };
+
   return (
     <>
       {showSubjectCarousel && (
-        <div className="mb-3 w-full py-1">
+        <div className="hidden md:block sticky top-0 z-30 mb-3 w-full overflow-hidden py-1 bg-white/80 backdrop-blur-sm rounded-xl shadow-sm">
 
           {draggableSubjects.length > 0 ? (
-            <Carousel opts={{ align: 'start', dragFree: true }} className="px-9">
+            <Carousel opts={{ align: 'start', dragFree: true, watchDrag: false }} className="px-9">
               <CarouselContent className="-ml-2">
                 {draggableSubjects.map((subject) => {
                   const color = subjectColorByName(subject.name || subject.id, subject.subjectGroup);
                   const teacherId = subject.assignedTeacherId || dragTeacherId;
+                  const badge = categoryBadgeStyle((subject as any).category);
 
                   return (
                     <CarouselItem
@@ -350,9 +448,12 @@ export default function ScheduleGrid({
                         onDragStart={(e) => {
                           e.dataTransfer.setData(
                             'application/subject-card',
-                            JSON.stringify({ subjectId: subject.id, teacherId }),
+                            JSON.stringify({ subjectId: subject.id, teacherId, classId: subject.classId ?? '' }),
                           );
                           e.dataTransfer.effectAllowed = 'copy';
+                        }}
+                        onTouchStart={() => {
+                          setTouchDragData({ subjectId: subject.id, teacherId, classId: subject.classId });
                         }}
                         className="h-full cursor-grab select-none rounded-xl p-2.5 transition-transform active:cursor-grabbing active:scale-[0.99]"
                         style={{
@@ -380,6 +481,12 @@ export default function ScheduleGrid({
                             </span>
                           )}
                           <span
+                            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[8px] font-black shrink-0 ${badge.className}`}
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClassName}`} />
+                            {badge.label}
+                          </span>
+                          <span
                             className="ml-auto text-[9px] font-bold text-white shrink-0"
                             style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
                           >
@@ -397,8 +504,8 @@ export default function ScheduleGrid({
                   );
                 })}
               </CarouselContent>
-              <CarouselPrevious className="-left-1 top-1/2 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/85 text-black/55 hover:bg-white" />
-              <CarouselNext className="-right-1 top-1/2 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/85 text-black/55 hover:bg-white" />
+              <CarouselPrevious className="left-1 top-1/2 z-10 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/85 text-black/55 shadow-sm hover:bg-white" />
+              <CarouselNext className="right-1 top-1/2 z-10 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/85 text-black/55 shadow-sm hover:bg-white" />
             </Carousel>
           ) : (
             <div className="rounded-xl border border-dashed border-rose-200 bg-white/70 px-3 py-3 text-[10px] font-bold text-rose-500/80">
@@ -408,17 +515,149 @@ export default function ScheduleGrid({
         </div>
       )}
 
-      <div className="md:hidden mb-2" id="schedule-grid-export-mobile">
-        <div
-          className="rounded-2xl overflow-hidden"
-          style={{
-            background: 'rgba(255,255,255,0.92)',
-            backdropFilter: 'blur(18px) saturate(150%)',
-            WebkitBackdropFilter: 'blur(18px) saturate(150%)',
-            border: `1px solid ${isEditing ? 'rgba(225,29,72,0.24)' : 'rgba(0,0,0,0.08)'}`,
-          }}
-        >
-          <div className="px-2.5 pt-2.5 pb-2 border-b border-black/5">
+      {/* Mobile: Sticky filter + day selector panels */}
+      <div className="md:hidden sticky top-0 z-40 -mx-3 px-3 mb-2.5 pt-1 pb-2 bg-background">
+        <div className="rounded-2xl border border-black/[0.06] bg-white/60 p-2.5 animate-in fade-in slide-in-from-top-2 duration-300">
+          {mobileHeaderContent && (
+            <div className="pb-2.5">
+              {mobileHeaderContent}
+            </div>
+          )}
+
+          {showClassFilter && (
+            <div className={`px-0.5 pb-2.5 ${mobileHeaderContent ? 'border-t border-black/[0.06] pt-2.5' : ''}`}>
+              <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2">
+                {/* แผนก */}
+                <div className="flex flex-col gap-1">
+                  <div className="relative">
+                    <select
+                      value={filterDept}
+                      onChange={e => {
+                        const next = (e.target.value || 'all') as 'all' | 'early' | 'primary' | 'secondary';
+                        setFilterDept?.(next);
+                        setFilterGrade?.('all');
+                      }}
+                      className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-blue-400 focus:bg-white transition-all cursor-pointer"
+                    >
+                      <option value="all">แผนก</option>
+                      {filterDepts.map(dept => (
+                        <option key={dept} value={dept}>
+                          {DEPARTMENT_CONFIG[dept as Department]?.label ?? dept}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
+                  </div>
+                </div>
+
+                {/* ระดับชั้น */}
+                <div className="flex flex-col gap-1">
+                  <div className="relative">
+                    <select
+                      value={filterGrade}
+                      onChange={e => setFilterGrade?.(e.target.value || 'all')}
+                      disabled={filterGrades.length === 0}
+                      className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-indigo-400 focus:bg-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <option value="all">ระดับชั้น</option>
+                      {filterGrades.map(grade => (
+                        <option key={grade} value={grade}>{grade}</option>
+                      ))}
+                    </select>
+                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
+                  </div>
+                </div>
+
+                {/* ห้อง */}
+                <div className="flex flex-col gap-1">
+                  <div className="relative">
+                    <select
+                      value={classId ?? ''}
+                      onChange={e => { if (e.target.value) onClassSelect?.(e.target.value); }}
+                      disabled={filterClasses.length === 0}
+                      className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-emerald-400 focus:bg-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <option value="">ห้อง</option>
+                      {filterClasses.map(cls => (
+                        <option key={cls.id} value={cls.id}>{cls.label}</option>
+                      ))}
+                    </select>
+                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setFilterDept?.('all');
+                    setFilterGrade?.('all');
+                    onClassSelect?.('');
+                  }}
+                  className="h-full min-h-[38px] w-10 rounded-xl border border-black/[0.08] bg-black/[0.03] text-black/45 flex items-center justify-center hover:bg-black/[0.06] hover:text-black/65 transition-all"
+                  title="ล้างฟิลเตอร์"
+                >
+                  <RotateCcw size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showTeacherFilter && (
+            <div className={`px-0.5 pb-2.5 ${mobileHeaderContent ? 'border-t border-black/[0.06] pt-2.5' : ''}`}>
+              <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                <div className="relative min-w-0">
+                  <select
+                    value={filterDept}
+                    onChange={(e) => {
+                      const next = (e.target.value || 'all') as 'all' | 'early' | 'primary' | 'secondary';
+                      setFilterDept?.(next);
+                      setSelectedTeacherId?.('');
+                    }}
+                    className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-blue-400 focus:bg-white transition-all cursor-pointer"
+                  >
+                    <option value="all">แผนก</option>
+                    {filterTeacherDepts.map((dept) => (
+                      <option key={dept} value={dept}>
+                        {DEPARTMENT_CONFIG[dept as Department]?.label ?? dept}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
+                </div>
+
+                <div className="relative min-w-0">
+                  <select
+                    value={selectedTeacherId}
+                    onChange={(e) => setSelectedTeacherId?.(e.target.value || '')}
+                    disabled={filterDept === 'all'}
+                    className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-indigo-400 focus:bg-white transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <option value="">ครู</option>
+                    {filterTeachers.map((teacher) => (
+                      <option key={teacher.id} value={teacher.id}>
+                        {teacher.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterDept?.('all');
+                    setSelectedTeacherId?.('');
+                  }}
+                  className="h-full min-h-[38px] w-10 rounded-xl border border-black/[0.08] bg-black/[0.03] text-black/45 flex items-center justify-center hover:bg-black/[0.06] hover:text-black/65 transition-all shrink-0"
+                  title="ล้างฟิลเตอร์"
+                >
+                  <RotateCcw size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!shouldHideGrid && (
+          <div id="schedule-day-selector-mobile" className={showClassFilter || showTeacherFilter ? 'border-t border-black/[0.06] pt-2.5' : ''}>
             <div className="grid grid-cols-5 gap-1 rounded-xl bg-black/[0.04] p-1">
               {SCHOOL_DAYS.map((day) => {
                 const active = mobileDay === day;
@@ -426,10 +665,10 @@ export default function ScheduleGrid({
                   <button
                     key={day}
                     onClick={() => setMobileDay(day)}
-                    className={`h-8 rounded-lg text-[11px] font-black transition-all ${
+                    className={`h-9 rounded-lg text-xs font-black transition-all duration-200 ${
                       active
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : 'text-black/55 hover:bg-white/70'
+                        ? 'bg-blue-600 text-white shadow-md scale-[1.02]'
+                        : 'text-black/55 hover:bg-white/50 active:scale-95'
                     }`}
                   >
                     {MOBILE_DAY_LABELS[day]}
@@ -438,62 +677,236 @@ export default function ScheduleGrid({
               })}
             </div>
           </div>
+          )}
+        </div>
+      </div>
 
-          <div className="divide-y divide-black/[0.05]">
-            {periods.map((period) => {
-              const isLunch = lunchPeriods.includes(period);
-              const isBreak = breakPeriods.includes(period);
-              const isAnyBreak = isLunch || isBreak;
-              const isCurrent = currentPeriod === period && !isAnyBreak;
-              const entries = grid[mobileDay]?.[period] ?? [];
-              const isOver = dragOverSlot?.day === mobileDay && dragOverSlot?.period === period;
-
-              return (
-                <div
-                  key={`mobile-${mobileDay}-${period}`}
-                  className="grid grid-cols-[70px_1fr] gap-2 px-2 py-2"
-                  style={{
-                    background: isCurrent ? 'rgba(251,191,36,0.08)' : undefined,
-                  }}
+      {/* Mobile: Schedule List / Subject Picker */}
+      <div className="md:hidden mb-4" id="schedule-grid-export-mobile">
+        {shouldHideGrid ? (
+          <div className="rounded-2xl border border-black/[0.08] bg-white/85 px-4 py-6 text-center">
+            <p className="text-[12px] font-black text-red-600">{hideGridTitle}</p>
+            <p className="mt-1 text-[10px] font-medium text-red-500">{hideGridHint}</p>
+          </div>
+        ) : mobileSubjectPickerSlot ? (
+          <div className="space-y-2.5">
+            <div className="rounded-2xl border border-black/[0.06] bg-white p-3 shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[12px] font-black text-black/80">เลือกรายวิชาที่ต้องการใส่</p>
+                  <p className="mt-0.5 text-[10px] font-medium text-black/45">
+                    {MOBILE_DAY_LABELS[mobileSubjectPickerSlot.day]} • คาบ {displayNumbers[mobileSubjectPickerSlot.period] ?? mobileSubjectPickerSlot.period}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setMobileSubjectPickerSlot(null)}
+                  className="h-8 px-3 rounded-lg text-[10px] font-black text-black/55 bg-black/[0.04] hover:bg-black/[0.07]"
                 >
-                  <div className="flex flex-col justify-center items-center text-center px-1">
-                    <span className="text-[9px] font-black text-black/75">
-                      {displayNumbers[period] ? `คาบ ${displayNumbers[period]}` : 'พัก'}
-                    </span>
-                    <span className="text-[9px] font-semibold text-black/60 leading-tight mt-0.5 whitespace-pre-line">
-                      {(displayPeriodTimes[period] || '').replace(' - ', '\n')}
-                    </span>
-                  </div>
+                  ยกเลิก
+                </button>
+              </div>
+            </div>
 
-                  {isLunch ? (
+            {draggableSubjects.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-rose-200 bg-white px-3 py-6 text-center text-[11px] font-bold text-rose-500/80">
+                ยังไม่มีรายวิชาที่พร้อมเลือกในมุมมองนี้
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2.5">
+                {draggableSubjects.map((subject) => {
+                  const color = subjectColorByName(subject.name || subject.id, subject.subjectGroup);
+                  const teacherId = subject.assignedTeacherId || dragTeacherId;
+                  const badge = categoryBadgeStyle((subject as any).category);
+                  const handleAdd = () => {
+                    if (!teacherId) {
+                      toast.error('ยังไม่สามารถใส่วิชาได้ เพราะไม่พบครูผู้สอนของวิชานี้');
+                      return;
+                    }
+                    onDropSubject?.(
+                      mobileSubjectPickerSlot.day,
+                      mobileSubjectPickerSlot.period,
+                      subject.id,
+                      teacherId,
+                      subject.classId ?? undefined,
+                    );
+                    setMobileSubjectPickerSlot(null);
+                  };
+                  return (
                     <div
-                      className="min-h-[52px] rounded-xl flex items-center justify-center gap-1.5 text-[10px] font-black text-white uppercase tracking-wide"
+                      key={`picker-${subject.id}-${subject.className ?? ''}`}
+                      className="w-full rounded-xl p-3 flex items-center gap-3"
                       style={{
-                        background: restGradient(isEditing),
-                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35)',
+                        background: subjectGradient(color),
+                        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.82), 0 12px 18px -18px ${withAlpha(color.accent, 0.58)}`,
                       }}
                     >
-                      <Coffee size={12} className="text-white" />
-                      LUNCH BREAK
+                      {/* Subject info (tappable) */}
+                      <button onClick={handleAdd} className="flex-1 min-w-0 text-left">
+                        <div className="mb-1.5 flex items-center gap-1 flex-wrap">
+                          <span
+                            className="rounded-md border px-1.5 py-0.5 text-[9px] font-black shrink-0"
+                            style={{
+                              borderColor: 'rgba(255,255,255,0.26)',
+                              background: 'rgba(0,0,0,0.14)',
+                              color: 'rgba(255,255,255,0.96)',
+                            }}
+                          >
+                            {subject.code}
+                          </span>
+                          {viewMode === 'teacher' && subject.className && (
+                            <span
+                              className="rounded-md border px-1 py-0.5 text-[8px] font-black bg-white/20 text-white shrink-0"
+                              style={{ borderColor: 'rgba(255,255,255,0.2)' }}
+                            >
+                              {subject.className}
+                            </span>
+                          )}
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[8px] font-black shrink-0 ${badge.className}`}
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClassName}`} />
+                            {badge.label}
+                          </span>
+                          <span
+                            className="ml-auto text-[9px] font-bold text-white shrink-0"
+                            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
+                          >
+                            {subject.hoursPerWeek ?? 0} คาบ
+                          </span>
+                        </div>
+                        <p
+                          className="line-clamp-2 text-[11px] font-extrabold leading-snug text-white"
+                          style={{ textShadow: '0 1px 2.5px rgba(0,0,0,0.45)' }}
+                        >
+                          {subject.name}
+                        </p>
+                      </button>
+
+                      {/* + Add button */}
+                      <button
+                        onClick={handleAdd}
+                        className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-transform active:scale-90"
+                        style={{
+                          background: 'rgba(255,255,255,0.22)',
+                          border: '1.5px solid rgba(255,255,255,0.5)',
+                        }}
+                        title="เพิ่มรายวิชานี้"
+                      >
+                        <Plus size={16} className="text-white drop-shadow" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2.5">
+            {periods.map((period) => {
+          const isLunch = lunchPeriods.includes(period);
+          const isBreak = breakPeriods.includes(period);
+          const isAnyBreak = isLunch || isBreak;
+          const isCurrent = currentPeriod === period && !isAnyBreak;
+          const entries = grid[mobileDay]?.[period] ?? [];
+          const isOver = dragOverSlot?.day === mobileDay && dragOverSlot?.period === period;
+
+          return (
+            <motion.div
+              key={`mobile-${mobileDay}-${period}`}
+              layoutId={`card-${mobileDay}-${period}`}
+              className="rounded-2xl border overflow-hidden shadow-[0_2px_12px_rgba(0,0,0,0.06)] transition-all duration-200"
+              onTouchStart={() => startMobileLongPress(mobileDay, period, isAnyBreak)}
+              onTouchEnd={clearLongPressTimer}
+              onTouchCancel={clearLongPressTimer}
+              onTouchMove={clearLongPressTimer}
+              style={{
+                background: isCurrent
+                  ? 'rgba(251,191,36,0.07)'
+                  : '#ffffff',
+                borderColor: isCurrent
+                  ? 'rgba(251,191,36,0.38)'
+                  : isOver
+                    ? '#2563eb'
+                    : isEditing
+                      ? 'rgba(225,29,72,0.18)'
+                      : 'rgba(0,0,0,0.07)',
+                outline: isOver ? '2px solid #2563eb' : undefined,
+              }}
+            >
+              <div className="flex" style={{ minHeight: isAnyBreak ? 56 : 86 }}>
+                {/* Left period column */}
+                <div className={`w-14 shrink-0 flex flex-col items-center justify-center py-3 gap-0.5 border-r ${
+                  isCurrent
+                    ? 'bg-amber-50 border-amber-100'
+                    : isLunch
+                      ? 'bg-emerald-50 border-emerald-100'
+                      : isBreak
+                        ? 'bg-yellow-50 border-yellow-100'
+                        : isEditing
+                          ? 'bg-rose-50/40 border-rose-100/60'
+                          : 'bg-black/[0.02] border-black/[0.04]'
+                }`}>
+                  {isLunch ? (
+                    <Coffee size={15} className={isEditing ? 'text-rose-500' : 'text-emerald-600'} />
+                  ) : isBreak ? (
+                    <Timer size={13} className={isEditing ? 'text-rose-400' : 'text-yellow-600'} />
+                  ) : (
+                    <>
+                      <span className={`text-lg font-black leading-none ${
+                        isCurrent ? 'text-amber-700' : isEditing ? 'text-rose-600' : 'text-black/70'
+                      }`}>
+                        {displayNumbers[period]}
+                      </span>
+                      <span className={`text-[8px] font-bold leading-none mt-0.5 ${
+                        isCurrent ? 'text-amber-500' : isEditing ? 'text-rose-400' : 'text-black/25'
+                      }`}>
+                        คาบ
+                      </span>
+                      {isCurrent && (
+                        <span className="flex h-1.5 w-1.5 mt-1 relative">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500" />
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {/* Right content */}
+                <div className="flex-1 flex flex-col p-3">
+                  {/* Time row */}
+                  <div className="flex items-center gap-1 text-[9px] font-bold text-black/38 mb-2">
+                    <Clock size={9} />
+                    <span>{displayPeriodTimes[period]}</span>
+                  </div>
+
+                  {/* Content */}
+                  {isLunch ? (
+                    <div
+                      className="flex-1 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black text-white uppercase tracking-wider py-2"
+                      style={{
+                        background: restGradient(isEditing),
+                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3)',
+                      }}
+                    >
+                      <Coffee size={13} className="text-white animate-bounce" />
+                      <span>LUNCH BREAK</span>
                     </div>
                   ) : isBreak ? (
                     <div
-                      className="min-h-[52px] rounded-xl flex items-center justify-center gap-1.5 text-[10px] font-black text-white uppercase tracking-wide"
+                      className="flex-1 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black text-white uppercase tracking-wider py-2"
                       style={{
                         background: restGradient(isEditing),
-                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35)',
+                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3)',
                       }}
                     >
-                      <Timer size={11} className="text-white" />
-                      BREAK
+                      <Timer size={12} className="text-white animate-pulse" />
+                      <span>BREAK</span>
                     </div>
                   ) : (
                     <div
-                      className="rounded-xl"
-                      style={{
-                        background: isOver ? 'rgba(37,99,235,0.08)' : undefined,
-                        transition: 'background 0.2s ease',
-                      }}
+                      className="flex-1 rounded-xl overflow-hidden"
+                      style={{ minHeight: 56 }}
                       onDragOver={(e) => {
                         e.preventDefault();
                         if (dragOverSlot?.day !== mobileDay || dragOverSlot?.period !== period) {
@@ -501,8 +914,22 @@ export default function ScheduleGrid({
                         }
                       }}
                       onDragLeave={() => setDragOverSlot(null)}
-                      onDrop={(e) => {
+                      onTouchMove={(touchE) => {
+                        if (touchDragData) {
+                          const rect = touchE.currentTarget.getBoundingClientRect();
+                          const touch = touchE.touches[0];
+                          const isInside = touch.clientX >= rect.left && touch.clientX <= rect.right &&
+                                          touch.clientY >= rect.top && touch.clientY <= rect.bottom;
+                          if (isInside && (dragOverSlot?.day !== mobileDay || dragOverSlot?.period !== period)) {
+                            setDragOverSlot({ day: mobileDay, period });
+                          } else if (!isInside) {
+                            setDragOverSlot(null);
+                          }
+                        }
+                      }}
+                      onDrop={(dropE) => {
                         setDragOverSlot(null);
+                        setTouchDragData(null);
 
                         if (!isEditMode) {
                           toast.error('กรุณาเปิดโหมดแก้ไขก่อนแล้วจึงลากวิชา', {
@@ -511,19 +938,34 @@ export default function ScheduleGrid({
                           return;
                         }
 
-                        const subjectJson = e.dataTransfer.getData('application/subject-card');
+                        const subjectJson = dropE.dataTransfer.getData('application/subject-card');
                         if (subjectJson && onDropSubject) {
                           try {
-                            const { subjectId, teacherId } = JSON.parse(subjectJson);
-                            onDropSubject(mobileDay, period, subjectId, teacherId);
+                            const { subjectId, teacherId, classId: droppedClassId } = JSON.parse(subjectJson);
+                            onDropSubject(mobileDay, period, subjectId, teacherId, droppedClassId || undefined);
                           } catch {
                             toast.error('ไม่สามารถอ่านข้อมูลรายวิชาเพื่อวางในตารางได้');
                           }
                           return;
                         }
                         if (!onMoveEntry) return;
-                        const entryId = e.dataTransfer.getData('text/plain');
+                        const entryId = dropE.dataTransfer.getData('text/plain');
                         if (entryId) onMoveEntry(entryId, mobileDay, period);
+                      }}
+                      onTouchEnd={() => {
+                        if (touchDragData && dragOverSlot?.day === mobileDay && dragOverSlot?.period === period) {
+                          if (!isEditMode) {
+                            toast.error('กรุณาเปิดโหมดแก้ไขก่อนแล้วจึงลากวิชา', {
+                              description: 'คลิกปุ่มแก้ไข (Edit) ที่หัวตารางเพื่อเปิดโหมด',
+                            });
+                            setTouchDragData(null);
+                            setDragOverSlot(null);
+                            return;
+                          }
+                          onDropSubject?.(mobileDay, period, touchDragData.subjectId, touchDragData.teacherId, touchDragData.classId || undefined);
+                        }
+                        setTouchDragData(null);
+                        setDragOverSlot(null);
                       }}
                     >
                       <SlotCell
@@ -534,19 +976,29 @@ export default function ScheduleGrid({
                         allClasses={allClasses}
                         excessEntryIds={excessEntryIds}
                         teachers={teachers}
+                        jointClassEntryIds={jointClassEntryIds}
+                        jointClassPartnersByEntryId={jointClassPartnersByEntryId}
                         onClick={(e) => handleSlotClick(mobileDay, period, e)}
                         onDelete={(id) => onDeleteEntry(id)}
                       />
                     </div>
                   )}
                 </div>
-              );
-            })}
+              </div>
+            </motion.div>
+            );
+          })}
           </div>
-        </div>
+        )}
       </div>
 
       <div className="hidden md:block overflow-x-auto pb-1" id="schedule-grid-export">
+        {shouldHideGrid ? (
+          <div className="rounded-2xl border border-black/[0.08] bg-white/85 px-5 py-8 text-center">
+            <p className="text-[13px] font-black text-red-600">{hideGridTitle}</p>
+            <p className="mt-1 text-[11px] font-medium text-red-500">{hideGridHint}</p>
+          </div>
+        ) : (
         <div
           className="rounded-2xl overflow-hidden"
           style={{
@@ -562,7 +1014,7 @@ export default function ScheduleGrid({
           <div
             className="grid"
             style={{
-              gridTemplateColumns: `${canEdit ? 90 : 76}px repeat(5, 1fr)`,
+              gridTemplateColumns: `${canEdit ? 90 : 76}px repeat(5, minmax(0, 1fr))`,
               background: isEditing ? 'rgba(225,29,72,0.04)' : 'rgba(0,0,0,0.025)',
               borderBottom: `1px solid ${isEditing ? 'rgba(225,29,72,0.2)' : 'rgba(0,0,0,0.08)'}`,
             }}
@@ -607,7 +1059,7 @@ export default function ScheduleGrid({
                 key={period}
                 className="grid group/row transition-all duration-300 overflow-hidden"
                 style={{
-                  gridTemplateColumns: `${canEdit ? 90 : 76}px repeat(5, 1fr)`,
+                  gridTemplateColumns: `${canEdit ? 90 : 76}px repeat(5, minmax(0, 1fr))`,
                   minHeight: canEdit ? 80 : (isAnyBreak ? 36 : 70),
                   borderTop: `1px solid ${isEditing ? 'rgba(225,29,72,0.2)' : 'rgba(0,0,0,0.06)'}`,
                   background: isCurrent
@@ -636,9 +1088,9 @@ export default function ScheduleGrid({
                 />
 
                 {isLunch ? (
-                  <div className="col-span-5">
+                  <div className="col-span-5 p-[3px]">
                     <div
-                      className="mx-1 my-1 h-full rounded-xl flex items-center justify-center gap-2"
+                      className="w-full h-full rounded-xl flex items-center justify-center gap-2"
                       style={{ 
                         background: restGradient(isEditing),
                         boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.34)',
@@ -649,9 +1101,9 @@ export default function ScheduleGrid({
                     </div>
                   </div>
                 ) : isBreak ? (
-                  <div className="col-span-5">
+                  <div className="col-span-5 p-[3px]">
                     <div
-                      className="mx-1 my-1 h-full rounded-xl flex items-center justify-center gap-2"
+                      className="w-full h-full rounded-xl flex items-center justify-center gap-2"
                       style={{ 
                         background: restGradient(isEditing),
                         boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.34)',
@@ -675,15 +1127,29 @@ export default function ScheduleGrid({
                           background: isOver ? 'rgba(37,99,235,0.08)' : undefined,
                           transition: 'background 0.2s ease',
                         }}
-                        onDragOver={(e) => { 
-                          e.preventDefault(); 
+                        onDragOver={(dragE) => {
+                          dragE.preventDefault();
                           if (dragOverSlot?.day !== day || dragOverSlot?.period !== period) {
                             setDragOverSlot({ day, period });
                           }
                         }}
                         onDragLeave={() => setDragOverSlot(null)}
-                        onDrop={(e) => {
+                        onTouchMove={(touchE) => {
+                          if (touchDragData) {
+                            const rect = touchE.currentTarget.getBoundingClientRect();
+                            const touch = touchE.touches[0];
+                            const isInside = touch.clientX >= rect.left && touch.clientX <= rect.right &&
+                                            touch.clientY >= rect.top && touch.clientY <= rect.bottom;
+                            if (isInside && (dragOverSlot?.day !== day || dragOverSlot?.period !== period)) {
+                              setDragOverSlot({ day, period });
+                            } else if (!isInside) {
+                              setDragOverSlot(null);
+                            }
+                          }
+                        }}
+                        onDrop={(dropE) => {
                           setDragOverSlot(null);
+                          setTouchDragData(null);
 
                           // Check if trying to drop without edit mode enabled
                           if (!isEditMode) {
@@ -693,19 +1159,34 @@ export default function ScheduleGrid({
                             return;
                           }
 
-                          const subjectJson = e.dataTransfer.getData('application/subject-card');
+                          const subjectJson = dropE.dataTransfer.getData('application/subject-card');
                           if (subjectJson && onDropSubject) {
                             try {
-                              const { subjectId, teacherId } = JSON.parse(subjectJson);
-                              onDropSubject(day, period, subjectId, teacherId);
+                              const { subjectId, teacherId, classId: droppedClassId } = JSON.parse(subjectJson);
+                              onDropSubject(day, period, subjectId, teacherId, droppedClassId || undefined);
                             } catch {
                               toast.error('ไม่สามารถอ่านข้อมูลรายวิชาเพื่อวางในตารางได้');
                             }
                             return;
                           }
                           if (!onMoveEntry) return;
-                          const entryId = e.dataTransfer.getData('text/plain');
+                          const entryId = dropE.dataTransfer.getData('text/plain');
                           if (entryId) onMoveEntry(entryId, day, period);
+                        }}
+                        onTouchEnd={() => {
+                          if (touchDragData && dragOverSlot?.day === day && dragOverSlot?.period === period) {
+                            if (!isEditMode) {
+                              toast.error('กรุณาเปิดโหมดแก้ไขก่อนแล้วจึงลากวิชา', {
+                                description: 'คลิกปุ่มแก้ไข (Edit) ที่หัวตารางเพื่อเปิดโหมด',
+                              });
+                              setTouchDragData(null);
+                              setDragOverSlot(null);
+                              return;
+                            }
+                            onDropSubject?.(day, period, touchDragData.subjectId, touchDragData.teacherId, touchDragData.classId || undefined);
+                          }
+                          setTouchDragData(null);
+                          setDragOverSlot(null);
                         }}
                       >
                         <SlotCell
@@ -716,6 +1197,8 @@ export default function ScheduleGrid({
                           allClasses={allClasses}
                           excessEntryIds={excessEntryIds}
                           teachers={teachers}
+                          jointClassEntryIds={jointClassEntryIds}
+                          jointClassPartnersByEntryId={jointClassPartnersByEntryId}
                           onClick={(e) => handleSlotClick(day, period, e)}
                           onDelete={(id) => onDeleteEntry(id)}
                         />
@@ -816,7 +1299,68 @@ export default function ScheduleGrid({
                     </button>
                     )}
 
-                    {/* NEW: Copy to Teachers */}
+                    {/* Copy current class structure → teachers (class view) */}
+                    {viewMode === 'class' && teachers && teachers.length > 0 && (
+                      <div className="h-px bg-black/[0.04] mx-2 my-1" />
+                    )}
+                    {viewMode === 'class' && teachers && teachers.length > 0 && (
+                    <button
+                      onClick={async () => {
+                        if (!classId || !allClasses || !teachers) return;
+                        setIsCopying(true);
+                        const currentClass = allClasses.find(c => c.id === classId);
+                        const currentDept = currentClass?.department;
+                        const targetIds = currentDept
+                          ? teachers.filter(t => t.department === currentDept).map(t => t.id)
+                          : teachers.map(t => t.id);
+
+                        if (targetIds.length === 0) {
+                          toast.error('ไม่พบรายชื่อครูในแผนกนี้');
+                        } else {
+                          await copyToClasses(targetIds);
+                          toast.success(`คัดลอกโครงสร้างไปยังครู ${targetIds.length} ท่านในแผนก ${currentDept ?? 'นี้'} แล้ว`);
+                        }
+                        setIsCopying(false);
+                      }}
+                      className="flex items-center gap-2.5 w-full p-2.5 rounded-xl hover:bg-orange-50 text-left transition-colors group"
+                    >
+                      <div className="w-7 h-7 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600 group-hover:bg-orange-200 transition-colors">
+                        <User size={13} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-bold text-slate-700">ครูในแผนกนี้</p>
+                        <p className="text-[9px] text-slate-400 font-medium">คัดลอกโครงสร้างเวลาไปยังตารางรายครู</p>
+                      </div>
+                    </button>
+                    )}
+                    {viewMode === 'class' && teachers && teachers.length > 0 && (
+                    <button
+                      onClick={async () => {
+                        if (!teachers) return;
+                        setIsCopying(true);
+                        const targetIds = teachers.map(t => t.id);
+
+                        if (targetIds.length === 0) {
+                          toast.error('ไม่พบรายชื่อครู');
+                        } else {
+                          await copyToClasses(targetIds);
+                          toast.success(`คัดลอกโครงสร้างไปยังครูทั้งหมด ${targetIds.length} ท่านแล้ว`);
+                        }
+                        setIsCopying(false);
+                      }}
+                      className="flex items-center gap-2.5 w-full p-2.5 rounded-xl hover:bg-indigo-50 text-left transition-colors group"
+                    >
+                      <div className="w-7 h-7 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-200 transition-colors">
+                        <Users size={13} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-bold text-slate-700">คุณครูทั้งหมด</p>
+                        <p className="text-[9px] text-slate-400 font-medium">คัดลอกโครงสร้างไปยังตารางรายครูทุกท่าน</p>
+                      </div>
+                    </button>
+                    )}
+
+                    {/* Copy to Teachers (teacher view) */}
                     {viewMode === 'teacher' && <div className="h-px bg-black/[0.04] mx-2 my-1" />}
                     
                     {viewMode === 'teacher' && (
@@ -888,6 +1432,7 @@ export default function ScheduleGrid({
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* ── Slot Detail Modal (read-only) ── */}
@@ -1098,6 +1643,8 @@ function SlotCell({
   allClasses,
   excessEntryIds,
   teachers,
+  jointClassEntryIds,
+  jointClassPartnersByEntryId,
 }: {
   entries: ScheduleEntry[];
   viewMode: 'class' | 'teacher';
@@ -1108,6 +1655,8 @@ function SlotCell({
   allClasses?: { id: string; gradeLevel: string; department: string; label: string }[];
   excessEntryIds?: Set<string>;
   teachers?: { id: string; department: string; name: string; photoURL?: string }[];
+  jointClassEntryIds?: Set<string>;
+  jointClassPartnersByEntryId?: Map<string, string[]>;
 }) {
   if (entries.length === 0) {
     return (
@@ -1127,11 +1676,121 @@ function SlotCell({
     );
   }
 
+  // Joint class: same teacher + same subject + same slot across multiple rooms
+  if (isJointClassGroup(entries)) {
+    const entry = entries[0];
+    const color = subjectColorByName(entry.subjectName || entry.subjectId, entry.subjectGroup);
+    const isExcess = entries.some((e) => excessEntryIds?.has(e.id));
+    const roomLabels = formatClassLabels(
+      entries.map((e) => e.classId),
+      allClasses,
+    );
+
+    return (
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={`joint-${entry.id}`}
+          initial={{ opacity: 0, scale: 0.93 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.93 }}
+          transition={{ duration: 0.13 }}
+          className="group relative w-full h-full overflow-hidden rounded-xl p-2.5 cursor-pointer transition-all duration-150 flex flex-col justify-between"
+          style={{
+            background: subjectGradient(color, isCurrent),
+            minHeight: 70,
+            boxShadow: isExcess
+              ? '0 0 0 2px rgba(245,158,11,0.18)'
+              : isCurrent
+              ? `0 0 0 2px ${withAlpha(color.accent, 0.26)}, inset 0 1px 0 rgba(255,255,255,0.42), 0 12px 20px -18px ${withAlpha(color.accent, 0.68)}`
+              : `inset 0 1px 0 rgba(255,255,255,0.34), 0 12px 20px -18px ${withAlpha(color.accent, 0.52)}`,
+          }}
+          onClick={() => onClick(entry)}
+          draggable={!readOnly}
+          onDragStartCapture={(e) => {
+            if (readOnly) return;
+            e.dataTransfer.setData('text/plain', entry.id);
+            e.dataTransfer.effectAllowed = 'move';
+          }}
+        >
+          <div className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-white/22 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm backdrop-blur-sm">
+            <Users size={9} />
+            เรียนรวม
+          </div>
+          {isExcess && (
+            <div className="absolute right-2 top-8 inline-flex items-center gap-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm">
+              <AlertTriangle size={9} />
+              เกิน
+            </div>
+          )}
+          <div className="select-none flex items-start justify-between gap-1.5 w-full flex-1 pt-4">
+            <div className="min-w-0 flex-1">
+              <p
+                className="text-[9px] font-black leading-none mb-1 text-white"
+                style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
+              >
+                {entry.subjectCode}
+              </p>
+              <p
+                className="text-[10.5px] font-extrabold text-white leading-tight line-clamp-2"
+                style={{ textShadow: '0 1px 2.5px rgba(0,0,0,0.45)' }}
+              >
+                {entry.subjectName}
+              </p>
+              <p
+                className="text-[8.5px] font-bold text-white/90 mt-1 leading-tight line-clamp-2"
+                style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
+              >
+                {viewMode === 'teacher' ? `ห้อง ${roomLabels}` : `กับ ${formatClassLabels(
+                  jointClassPartnersByEntryId?.get(entry.id) ?? entries.slice(1).map((e) => e.classId),
+                  allClasses,
+                )}`}
+              </p>
+            </div>
+            {viewMode === 'class' && (
+              <div className="shrink-0 text-right flex items-center gap-2 self-end mb-0.5 pl-1.5">
+                <span
+                  className="text-[8.5px] font-bold text-white leading-tight whitespace-nowrap block"
+                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
+                >
+                  {entry.teacherName || '-'}
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="absolute left-2 bottom-2 flex items-center gap-1 z-10">
+            {!readOnly && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onClick(entry); }}
+                className="w-6 h-6 rounded-lg flex items-center justify-center text-white/90 hover:text-white transition-colors bg-black/25 hover:bg-black/40 active:bg-black/50 backdrop-blur-md shadow-sm"
+                title="แก้ไข"
+              >
+                <Pencil size={11} />
+              </button>
+            )}
+            {!readOnly && onDelete && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
+                className="w-6 h-6 rounded-lg flex items-center justify-center text-white/90 hover:text-white transition-colors bg-black/25 hover:bg-black/40 active:bg-black/50 backdrop-blur-md shadow-sm"
+                title="ลบ"
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
+          </div>
+        </motion.div>
+      </AnimatePresence>
+    );
+  }
+
   // If there's only one entry, keep the original look
   if (entries.length === 1) {
     const entry = entries[0];
     const color = subjectColorByName(entry.subjectName || entry.subjectId, entry.subjectGroup);
     const isExcess = excessEntryIds?.has(entry.id) ?? false;
+    const isJoint = jointClassEntryIds?.has(entry.id) ?? false;
+    const partnerLabels = isJoint
+      ? formatClassLabels(jointClassPartnersByEntryId?.get(entry.id) ?? [], allClasses)
+      : '';
 
     return (
       <AnimatePresence mode="wait">
@@ -1177,6 +1836,18 @@ function SlotCell({
               เกิน
             </div>
           )}
+          {isJoint && !isExcess && (
+            <div className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-white/22 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm backdrop-blur-sm">
+              <Users size={9} />
+              เรียนรวม
+            </div>
+          )}
+          {isJoint && isExcess && (
+            <div className="absolute right-2 top-8 inline-flex items-center gap-1 rounded-full bg-white/22 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm backdrop-blur-sm">
+              <Users size={9} />
+              เรียนรวม
+            </div>
+          )}
           <div className="select-none flex items-start justify-between gap-1.5 w-full flex-1">
             <div className="min-w-0 flex-1">
               <p
@@ -1191,6 +1862,14 @@ function SlotCell({
               >
                 {entry.subjectName}
               </p>
+              {isJoint && partnerLabels && (
+                <p
+                  className="text-[8px] font-bold text-white/85 mt-0.5 leading-tight line-clamp-1"
+                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
+                >
+                  กับ {partnerLabels}
+                </p>
+              )}
             </div>
             
             <div className="shrink-0 text-right flex items-center gap-2 self-end mb-0.5 pl-1.5">
@@ -1260,26 +1939,26 @@ function SlotCell({
             </div>
           </div>
 
-          {!readOnly && (
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={(e) => { e.stopPropagation(); onClick(entry); }}
-                  className="w-8 h-8 rounded-xl flex items-center justify-center text-white/80 hover:text-white transition-colors bg-black/15 hover:bg-black/25 active:bg-black/30"
-                  title="แก้ไข"
-                >
-                  <Pencil size={14} />
-                </button>
-              {onDelete && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
-                  className="w-8 h-8 rounded-xl flex items-center justify-center text-white/80 hover:text-white transition-colors bg-black/15 hover:bg-black/25 active:bg-black/30"
-                  title="ลบ"
-                >
-                  <Trash2 size={14} />
-                </button>
-              )}
-            </div>
-          )}
+          <div className="absolute left-2 bottom-2 flex items-center gap-1 z-10">
+            {!readOnly && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onClick(entry); }}
+                className="w-6 h-6 rounded-lg flex items-center justify-center text-white/90 hover:text-white transition-colors bg-black/25 hover:bg-black/40 active:bg-black/50 backdrop-blur-md shadow-sm"
+                title="แก้ไข"
+              >
+                <Pencil size={11} />
+              </button>
+            )}
+            {!readOnly && onDelete && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
+                className="w-6 h-6 rounded-lg flex items-center justify-center text-white/90 hover:text-white transition-colors bg-black/25 hover:bg-black/40 active:bg-black/50 backdrop-blur-md shadow-sm"
+                title="ลบ"
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
+          </div>
         </motion.div>
       </AnimatePresence>
     );
@@ -1331,16 +2010,15 @@ function SlotCell({
                   <AlertTriangle size={9} />
                 </div>
               )}
-              {!readOnly && (
-                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDelete?.(entry.id); }}
-                    className="p-1 rounded-md text-white/70 hover:text-white hover:bg-black/20 transition-all"
-                  >
-                    <X size={10} strokeWidth={3} />
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDelete?.(entry.id); }}
+                  className="p-1.5 rounded-md text-white/90 hover:text-white bg-black/20 hover:bg-black/30 transition-all backdrop-blur-md shadow-sm"
+                  title="ลบ"
+                >
+                  <X size={10} strokeWidth={3} />
+                </button>
+              </div>
             </div>
           </div>
         );

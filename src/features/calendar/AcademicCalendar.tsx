@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { isSameDay } from 'date-fns';
 import { collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
@@ -19,6 +20,15 @@ export default function AcademicCalendar() {
   const { role } = useAuth();
   const { departments } = useSchoolStructure();
   const { activeYear } = useActiveAcademicYear();
+
+  const [headerCenterPortalEl, setHeaderCenterPortalEl] = useState<HTMLElement | null>(null);
+  const [headerMobileCenterPortalEl, setHeaderMobileCenterPortalEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setHeaderCenterPortalEl(document.getElementById('header-portal-center'));
+    setHeaderMobileCenterPortalEl(document.getElementById('header-portal-center-mobile'));
+  }, []);
 
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -204,6 +214,12 @@ export default function AcademicCalendar() {
     setSelectedDate(prev => (prev && isSameDay(prev, day) ? null : day));
   };
 
+  const handleGoToToday = () => {
+    const today = new Date();
+    setCurrentMonth(today);
+    setSelectedDate(today);
+  };
+
   const handleTypeChange = (val: string) => {
     setFilterType(val);
     if (val === 'all') {
@@ -258,7 +274,7 @@ export default function AcademicCalendar() {
   };
 
   return (
-    <div className="space-y-5 text-black">
+    <div className="space-y-3 lg:space-y-5 text-black">
       <CalendarHeader />
 
       <motion.div
@@ -276,6 +292,7 @@ export default function AcademicCalendar() {
             onChangeMonth={setCurrentMonth}
             onSelectDate={handleSelectDate}
             onMoveEvent={handleMoveEvent}
+            onGoToToday={handleGoToToday}
           />
         </div>
 
@@ -295,15 +312,27 @@ export default function AcademicCalendar() {
         </div>
       </motion.div>
 
-      <CalendarFilterCapsule
-        filterDept={filterDepartment}
-        onDeptChange={setFilterDepartment}
-        departments={departments}
-        deptIdMap={deptIdMap}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        onAddEvent={() => setModalOpen(true)}
-      />
+      {(() => {
+        const capsule = (
+          <CalendarFilterCapsule
+            filterDept={filterDepartment}
+            onDeptChange={setFilterDepartment}
+            departments={departments}
+            deptIdMap={deptIdMap}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            onAddEvent={() => setModalOpen(true)}
+            isPortal={true}
+          />
+        );
+        return (
+          <>
+            {headerCenterPortalEl && createPortal(capsule, headerCenterPortalEl)}
+            {headerMobileCenterPortalEl && createPortal(capsule, headerMobileCenterPortalEl)}
+            {!headerCenterPortalEl && !headerMobileCenterPortalEl && capsule}
+          </>
+        );
+      })()}
 
       <AddEventModal
         open={modalOpen}

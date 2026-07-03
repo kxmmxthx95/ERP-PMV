@@ -1,10 +1,9 @@
-import { useState, useMemo, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { useMemo, useSyncExternalStore } from 'react';
+import { collection, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { sessionCache } from '@/lib/sessionCache';
-
-const CACHE_SCHEDULES = 'cache:schedules';
-const CACHE_CLASSES   = 'cache:classes';
+import { getSchedulesByYearSemesterStore } from '@/lib/firestoreShared/schedulesStore';
+import { getClassesByYearStore } from '@/lib/firestoreShared/studentSummaryStore';
+import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { getSubjectCategory } from '@/features/schedule/constants/colors';
 import type {
   ScheduleEntry, SchoolDay, ConflictResult, SchoolClass,
@@ -39,7 +38,6 @@ export function detectConflicts(
         (entryCategory === candidateCategory && entryCategory !== 'other')
       );
 
-    // Teacher conflict — ครูคนเดิม สอนอยู่ที่อื่นในคาบเดียวกัน
     if (
       entry.teacherId === candidate.teacherId &&
       entry.classId !== candidate.classId &&
@@ -52,19 +50,15 @@ export function detectConflicts(
       });
     }
 
-    // Duplicate check — มีวิชานี้อยู่แล้วในห้องเดียวกัน คาบเดียวกัน
-    if (
-      entry.classId === candidate.classId &&
-      (entry.subjectId === candidate.subjectId || entry.subjectCode === candidate.subjectCode)
-    ) {
+    if (entry.classId === candidate.classId) {
       conflicts.push({
         type: 'duplicate',
-        message: `วิชานี้ (${candidate.subjectCode}) ถูกจัดลงในคาบนี้แล้วสำหรับห้อง ${getClassLabel(candidate.classId)}`,
+        message: `ห้อง ${getClassLabel(candidate.classId)} มีรายวิชาในคาบนี้แล้ว (กำหนดได้เพียง 1 วิชาต่อคาบ)`,
         conflictingEntry: entry,
       });
+      continue;
     }
 
-    // Room conflict — ห้องเรียน (room) เดียวกัน มีคาบซ้อน
     if (
       candidate.room &&
       entry.room &&
@@ -83,101 +77,72 @@ export function detectConflicts(
   return { hasConflict: conflicts.length > 0, conflicts };
 }
 
+function mapClassDoc(raw: { id: string; [key: string]: unknown }): SchoolClass {
+  const id = raw.id;
+  return {
+    id,
+    label: (raw.className as string) || (raw.label as string) || id,
+    className: (raw.className as string) || (raw.label as string) || id,
+    gradeLevel: raw.gradeLevel as string | undefined,
+    roomNumber: raw.roomNumber as string | undefined,
+    department: (raw.department as string) || (raw.departmentId as string),
+    departmentId: (raw.departmentId as string) || (raw.department as string),
+    academicYear: (raw.academicYearId as string) || (raw.academicYear as string),
+    academicYearId: (raw.academicYearId as string) || (raw.academicYear as string),
+    semester: raw.semester as number | undefined,
+    curriculumPackageId: raw.curriculumPackageId as string | undefined,
+    curriculumId: raw.curriculumId as string | undefined,
+    enrolledCourses: (raw.enrolledCourses as SchoolClass['enrolledCourses']) || [],
+    studentIds: (raw.studentIds as string[]) || [],
+  } as SchoolClass;
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export type NewScheduleEntry = Omit<ScheduleEntry, 'id'>;
 
 export function useSchedule() {
-  const [entries, setEntries] = useState<ScheduleEntry[]>(
-    () => sessionCache.get<ScheduleEntry[]>(CACHE_SCHEDULES) ?? []
+  const { year: activeYearStr, activeSemester } = useActiveAcademicYear();
+  const yearId = activeYearStr ?? '2568';
+  const semester = (activeSemester ?? 1) as 1 | 2;
+
+  const scheduleStore = getSchedulesByYearSemesterStore(yearId, semester);
+  const classesStore = getClassesByYearStore(yearId);
+
+  const entries = useSyncExternalStore(
+    scheduleStore.subscribe,
+    scheduleStore.getSnapshot,
+    scheduleStore.getSnapshot,
   );
-  const [classes, setClasses] = useState<SchoolClass[]>(
-    () => sessionCache.get<SchoolClass[]>(CACHE_CLASSES) ?? []
+  const rawClasses = useSyncExternalStore(
+    classesStore.subscribe,
+    classesStore.getSnapshot,
+    classesStore.getSnapshot,
   );
-
-  // ── ดึงข้อมูล Real-time จาก Firebase (ข้ามถ้า cache ยังใช้ได้) ──────────────────
-  useEffect(() => {
-    const cachedEntries = sessionCache.get<ScheduleEntry[]>(CACHE_SCHEDULES);
-    const cachedClasses = sessionCache.get<SchoolClass[]>(CACHE_CLASSES);
-    if (cachedEntries && cachedClasses) return;
-
-    let cancelled = false;
-    const unsubSchedules = onSnapshot(collection(db, 'schedules'), {
-      next: (snap) => {
-        if (cancelled) return;
-        const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleEntry));
-        setEntries(data);
-        sessionCache.set(CACHE_SCHEDULES, data);
-      },
-      error: () => {
-        // Silent fail for permissions
-      }
-    });
-
-    const unsubClasses = onSnapshot(collection(db, 'classes'), {
-      next: (snap) => {
-        if (cancelled) return;
-        const data = snap.docs.map(d => {
-          const raw = d.data();
-          return {
-            id: d.id,
-            label: raw.className || raw.label || raw.id,
-            className: raw.className || raw.label || raw.id,
-            gradeLevel: raw.gradeLevel,
-            roomNumber: raw.roomNumber,
-            department: raw.department || raw.departmentId,
-            departmentId: raw.departmentId || raw.department,
-            academicYear: raw.academicYearId || raw.academicYear,
-            academicYearId: raw.academicYearId || raw.academicYear,
-            semester: raw.semester,
-            curriculumPackageId: raw.curriculumPackageId,
-            curriculumId: raw.curriculumId,
-            enrolledCourses: raw.enrolledCourses || [],
-            studentIds: raw.studentIds || [],
-          } as SchoolClass;
-        });
-        setClasses(data);
-        sessionCache.set(CACHE_CLASSES, data);
-      },
-      error: () => {
-        // Silent fail for permissions
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      unsubSchedules();
-      unsubClasses();
-    };
-  }, []);
-
-  // ── CRUD ─────────────────────────────────────────────────────────────────────
+  const classes = useMemo(() => rawClasses.map(mapClassDoc), [rawClasses]);
 
   const addEntry = async (data: NewScheduleEntry): Promise<ConflictResult> => {
     const result = detectConflicts(data, entries, classes);
-    // ตรวจสอบว่ามี conflict รุนแรง (Teacher/Room/Duplicate) หรือไม่
-    const criticalConflicts = result.conflicts.filter(c => 
-      c.type === 'teacher' || c.type === 'room' || c.type === 'duplicate'
+    const criticalConflicts = result.conflicts.filter(c =>
+      c.type === 'teacher' || c.type === 'room' || c.type === 'duplicate',
     );
-    
+
     if (criticalConflicts.length === 0) {
       await addDoc(collection(db, 'schedules'), data);
-      sessionCache.invalidate(CACHE_SCHEDULES);
       return { hasConflict: false, conflicts: [] };
     }
-    
+
     return { hasConflict: true, conflicts: criticalConflicts };
   };
 
   const updateEntry = async (id: string, data: NewScheduleEntry): Promise<ConflictResult> => {
     const result = detectConflicts(data, entries, classes, id);
-    const criticalConflicts = result.conflicts.filter(c => 
-      c.type === 'teacher' || c.type === 'room' || c.type === 'duplicate'
+    const criticalConflicts = result.conflicts.filter(c =>
+      c.type === 'teacher' || c.type === 'room' || c.type === 'duplicate',
     );
-    
+
     if (criticalConflicts.length === 0) {
       await updateDoc(doc(db, 'schedules', id), data as Partial<ScheduleEntry>);
-      sessionCache.invalidate(CACHE_SCHEDULES);
       return { hasConflict: false, conflicts: [] };
     }
     return { hasConflict: true, conflicts: criticalConflicts };
@@ -186,24 +151,41 @@ export function useSchedule() {
   const deleteEntry = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'schedules', id));
-      sessionCache.invalidate(CACHE_SCHEDULES);
     } catch (err) {
       console.error('Error deleting entry:', err);
     }
   };
 
-  const deleteEntriesInSlot = async (day: SchoolDay, period: number, year: string, semester: 1 | 2, criteria: { teacherId?: string, classId?: string }) => {
-    const matches = entries.filter(e => 
-      e.day === day && 
-      e.period === period && 
-      e.year === year && 
-      e.semester === semester &&
+  const deleteEntriesInSlot = async (day: SchoolDay, period: number, year: string, sem: 1 | 2, criteria: { teacherId?: string, classId?: string }) => {
+    const matches = entries.filter(e =>
+      e.day === day &&
+      e.period === period &&
+      e.year === year &&
+      e.semester === sem &&
       (!criteria.teacherId || e.teacherId === criteria.teacherId) &&
-      (!criteria.classId || e.classId === criteria.classId)
+      (!criteria.classId || e.classId === criteria.classId),
     );
 
     await Promise.all(matches.map(e => deleteDoc(doc(db, 'schedules', e.id))));
-    sessionCache.invalidate(CACHE_SCHEDULES);
+  };
+
+  const batchUpdateTeacherFields = async (
+    updates: Array<{ id: string; teacherId: string; teacherName: string }>,
+  ) => {
+    if (updates.length === 0) return;
+    const results = await Promise.allSettled(
+      updates.map((update) =>
+        updateDoc(doc(db, 'schedules', update.id), {
+          teacherId: update.teacherId,
+          teacherName: update.teacherName,
+        }),
+      ),
+    );
+    const failed = results.filter((result) => result.status === 'rejected');
+    if (failed.length > 0) {
+      console.error('Failed to sync schedule teachers:', failed);
+      throw new Error(`อัปเดตไม่สำเร็จ ${failed.length}/${updates.length} คาบ`);
+    }
   };
 
   const moveEntry = async (id: string, toDay: SchoolDay, toPeriod: number): Promise<ConflictResult> => {
@@ -212,30 +194,26 @@ export function useSchedule() {
     const candidate = { ...entry, day: toDay, period: toPeriod };
     const result = detectConflicts(candidate, entries, classes, id);
     const criticalConflicts = result.conflicts.filter(c => c.type === 'teacher' || c.type === 'room');
-    
+
     if (criticalConflicts.length === 0) {
       await updateDoc(doc(db, 'schedules', id), { day: toDay, period: toPeriod });
-      sessionCache.invalidate(CACHE_SCHEDULES);
       return { hasConflict: false, conflicts: [] };
     }
     return { hasConflict: true, conflicts: criticalConflicts };
   };
 
-  // ── Queries ───────────────────────────────────────────────────────────────────
+  const getEntriesForClass = (classId: string, year: string, sem: 1 | 2) =>
+    entries.filter(e => e.classId === classId && e.year === year && e.semester === sem);
 
-  const getEntriesForClass = (classId: string, year: string, semester: 1 | 2) =>
-    entries.filter(e => e.classId === classId && e.year === year && e.semester === semester);
+  const getEntriesForTeacher = (teacherId: string, year: string, sem: 1 | 2) =>
+    entries.filter(e => e.teacherId === teacherId && e.year === year && e.semester === sem);
 
-  const getEntriesForTeacher = (teacherId: string, year: string, semester: 1 | 2) =>
-    entries.filter(e => e.teacherId === teacherId && e.year === year && e.semester === semester);
-
-  const getEntryAtSlot = (classId: string, day: SchoolDay, period: number, year: string, semester: 1 | 2) =>
+  const getEntryAtSlot = (classId: string, day: SchoolDay, period: number, year: string, sem: 1 | 2) =>
     entries.find(e =>
       e.classId === classId && e.day === day && e.period === period &&
-      e.year === year && e.semester === semester,
+      e.year === year && e.semester === sem,
     ) ?? null;
 
-  // สรุปจำนวนชั่วโมงรายครู
   const teacherLoadSummary = useMemo(() => {
     const map: Record<string, number> = {};
     for (const e of entries) {
@@ -246,10 +224,11 @@ export function useSchedule() {
 
   return {
     entries,
-    teachers: [], // ไม่ได้ใช้แล้ว (ดึงข้อมูลจาก useTeacherManager แทนในฝั่ง ScheduleEditor)
+    teachers: [],
     classes,
     addEntry,
     updateEntry,
+    batchUpdateTeacherFields,
     deleteEntry,
     deleteEntriesInSlot,
     moveEntry,

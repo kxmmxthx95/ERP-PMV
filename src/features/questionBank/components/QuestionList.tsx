@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { FileQuestion, Edit3, Trash2, Copy, PlayCircle } from 'lucide-react';
+import { FileQuestion, Edit3, Trash2, Copy, PlayCircle, Plus } from 'lucide-react';
 import {
   DIFFICULTY_CONFIG, TYPE_CONFIG, type Question,
 } from '@/types/questionBank';
@@ -12,24 +12,37 @@ interface Props {
   onDelete: (q: Question) => void;
   onDuplicate: (q: Question) => void;
   onSimulate: (q: Question) => void;
+  onAdd?: () => void;
   deleteTooltip?: string;
 }
 
 export default function QuestionList({
-  questions, selectedId, onSelect, onDelete, onDuplicate, onSimulate, deleteTooltip,
+  questions, selectedId, onSelect, onDelete, onDuplicate, onSimulate, onAdd, deleteTooltip,
 }: Props) {
   if (questions.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-center py-10 px-6 text-slate-400">
+      <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center text-slate-400">
         <FileQuestion size={42} className="mb-3 opacity-50" />
         <p className="text-[13px] font-bold font-sukhumvit text-slate-500">ยังไม่มีข้อสอบในชุดนี้</p>
-        <p className="text-[11px] font-sarabun mt-1">กดปุ่ม "เพิ่มข้อสอบ" เพื่อเริ่มต้น</p>
+        <p className="mt-1 font-sarabun text-[11px]">สร้างข้อสอบทีละข้อ พิมพ์โจทย์แบบ Word ได้เลย</p>
+        {onAdd && (
+          <motion.button
+            type="button"
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={onAdd}
+            className="mt-5 flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-[13px] font-black text-white shadow-lg shadow-slate-900/15 font-sukhumvit"
+          >
+            <Plus size={16} strokeWidth={3} />
+            สร้างข้อสอบข้อแรก
+          </motion.button>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto min-h-0 scrollbar-hide space-y-2 pr-1">
+    <div className="flex-1 overflow-y-auto min-h-0 scrollbar-hide space-y-2 px-1 py-2">
       {questions.map((q, i) => {
         const isActive = q.id === selectedId;
         const diff = DIFFICULTY_CONFIG[q.difficulty];
@@ -50,11 +63,11 @@ export default function QuestionList({
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.025 }}
             onClick={() => onSimulate(q)}
-            className="group relative rounded-[1.5rem] p-3 px-4 flex items-start gap-3 cursor-pointer transition-all hover:translate-x-1 duration-200"
+            className={`group relative rounded-[1.5rem] p-3 px-4 flex items-start gap-3 cursor-pointer shadow-[0_2px_8px_rgba(15,23,42,0.035)] ${
+              isActive ? 'ring-2 ring-indigo-500/25' : ''
+            }`}
             style={{
               background: isActive ? '#f8fafc' : 'white',
-              border: isActive ? '1px solid #6366f1' : '1px solid #cbd5e1',
-              boxShadow: isActive ? '0 10px 15px -3px rgba(99, 102, 241, 0.1)' : 'none'
             }}
           >
             {/* Left: index */}

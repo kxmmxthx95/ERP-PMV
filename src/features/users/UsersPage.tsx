@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Pencil, Trash2, Eye, EyeOff, Camera, LogOut, RotateCcw, Users } from 'lucide-react';
+import { HiUsers, HiChartPie, HiChevronDown } from 'react-icons/hi2';
+import type { IconType } from 'react-icons';
+import { Pencil, Trash2, Eye, EyeOff, Camera, LogOut, Key, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -24,7 +26,10 @@ import { useUserForm } from '@/hooks/useUserForm';
 import { useNamePrefix } from '@/hooks/useNamePrefix';
 import { useSchoolStructure } from '@/hooks/useSchoolStructure';
 import UserFilterCapsule from './components/UserFilterCapsule';
+import UserRoleFilterButton from './components/UserRoleFilterButton';
+import UserMobileHeaderControls from './components/UserMobileHeaderControls';
 import UserImportModal from './components/UserImportModal';
+import UsersDashboard from './components/UsersDashboard';
 import {
   collection,
   getDocs,
@@ -55,6 +60,25 @@ const getRoleStyle = (role: string) => {
   return ROLE_LABELS[role as keyof typeof ROLE_LABELS] || { label: role, color: '#64748b', bg: '#f1f5f9' };
 };
 
+function getAuthUidFromUser(user: UserData): string {
+  return String((user as { authUid?: string; uid?: string }).authUid || (user as { uid?: string }).uid || user.id);
+}
+
+function getCallableErrorMessage(error: unknown, fallback: string): string {
+  const maybe = error as { message?: unknown };
+  if (typeof maybe?.message === 'string' && maybe.message.trim()) {
+    return maybe.message;
+  }
+  return fallback;
+}
+
+type UsersPageTab = 'dashboard' | 'list';
+
+const USERS_TAB_CONFIG: Record<UsersPageTab, { label: string; icon: IconType }> = {
+  dashboard: { label: 'สรุป', icon: HiChartPie },
+  list: { label: 'รายชื่อ', icon: HiUsers },
+};
+
 export default function UsersPage() {
   const { user: currentUser } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
@@ -63,11 +87,34 @@ export default function UsersPage() {
   const [filterDepartment, setFilterDepartment] = useState('all');
   const { gradeLevels } = useSchoolStructure();
   const [users, setUsers] = useState<UserData[]>([]);
+  const [usersLoaded, setUsersLoaded] = useState(false);
+  const [pageTab, setPageTab] = useState<UsersPageTab>('dashboard');
+  const [mobileTabMenuOpen, setMobileTabMenuOpen] = useState(false);
+  const [headerCenterEl, setHeaderCenterEl] = useState<HTMLElement | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() => window.innerWidth < 1024);
+  const [headerCenterMobileEl, setHeaderCenterMobileEl] = useState<HTMLElement | null>(null);
+  const [headerHomeActionsEl, setHeaderHomeActionsEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setHeaderCenterMobileEl(document.getElementById('header-portal-center-mobile'));
+    setHeaderCenterEl(document.getElementById('header-portal-center'));
+    setHeaderHomeActionsEl(document.getElementById('header-portal-home-actions'));
+  }, []);
+
+  useEffect(() => {
+    setMobileTabMenuOpen(false);
+  }, [pageTab]);
+
+  useEffect(() => {
+    if (!mobileTabMenuOpen) return;
+    const close = () => setMobileTabMenuOpen(false);
+    window.addEventListener('scroll', close, true);
+    return () => window.removeEventListener('scroll', close, true);
+  }, [mobileTabMenuOpen]);
 
   useEffect(() => {
     const handleResize = () => setIsMdOrBelow(window.innerWidth < 1024);
@@ -132,6 +179,7 @@ export default function UsersPage() {
         ...d.data()
       })) as UserData[];
       setUsers(fetchedUsers);
+      setUsersLoaded(true);
     });
     return () => unsubscribe();
   }, []);
@@ -199,7 +247,26 @@ export default function UsersPage() {
     if (editingUserId) {
       const { password: _pw, ...updateData } = userData;
 
-      // 1. Update users collection
+      const targetUser = users.find((u) => u.id === editingUserId);
+      const authUid = targetUser ? getAuthUidFromUser(targetUser) : editingUserId;
+      const previousEmail = (targetUser?.email || '').trim().toLowerCase();
+      const nextEmail = String(updateData.email || '').trim().toLowerCase();
+
+      if (nextEmail && previousEmail !== nextEmail) {
+        try {
+          const callable = httpsCallable(cloudFunctions, 'updateAuthUserEmail');
+          await callable({
+            userId: editingUserId,
+            authUid,
+            email: nextEmail,
+          });
+        } catch (error) {
+          console.error('update auth email failed:', error);
+          toast.error(getCallableErrorMessage(error, 'อัปเดตอีเมลใน Firebase Auth ไม่สำเร็จ'));
+          throw error;
+        }
+      }
+
       await updateDoc(doc(db, 'users', editingUserId), updateData);
 
       setEditingUserId(null);
@@ -305,18 +372,6 @@ export default function UsersPage() {
     }
   };
 
-  const getAuthUidFromUser = (user: UserData): string => {
-    return String((user as any).authUid || (user as any).uid || user.id);
-  };
-
-  const getCallableErrorMessage = (error: unknown, fallback: string): string => {
-    const maybe = error as { message?: unknown };
-    if (typeof maybe?.message === 'string' && maybe.message.trim()) {
-      return maybe.message;
-    }
-    return fallback;
-  };
-
   const handleForceLogout = async (targetUser: UserData) => {
     if (!confirm(`บังคับให้ออกจากระบบทันทีสำหรับ ${targetUser.firstName || targetUser.email} ?`)) return;
 
@@ -333,12 +388,22 @@ export default function UsersPage() {
     }
   };
 
-  const handleHardReset = async (targetUser: UserData) => {
+  const handleResetPassword = async (targetUser: UserData) => {
+    const displayName = targetUser.firstName || targetUser.email || 'ผู้ใช้นี้';
     if (currentUser?.uid === targetUser.id || currentUser?.uid === getAuthUidFromUser(targetUser)) {
-      toast.error('ไม่สามารถ Hard Reset บัญชีที่กำลังใช้งานอยู่');
+      toast.error('ไม่สามารถรีเซ็ตรหัสผ่านของบัญชีที่กำลังใช้งานอยู่');
       return;
     }
-    if (!confirm(`Hard Reset ผู้ใช้ ${targetUser.firstName || targetUser.email} ?\nระบบจะรีเซ็ตรหัสผ่านและบังคับออกจากระบบทันที`)) return;
+    if (
+      !confirm(
+        `รีเซ็ตรหัสผ่านของ ${displayName}?\n\n` +
+          '• ระบบจะสร้างรหัสผ่านชั่วคราวใหม่\n' +
+          '• ผู้ใช้จะถูกบังคับออกจากระบบทันที\n' +
+          '• เมื่อเข้าสู่ระบบครั้งถัดไป ต้องตั้งรหัสผ่านใหม่ก่อนใช้งาน'
+      )
+    ) {
+      return;
+    }
 
     try {
       const callable = httpsCallable(cloudFunctions, 'hardResetUser');
@@ -351,13 +416,16 @@ export default function UsersPage() {
       const tempPassword = payload?.tempPassword;
       if (typeof tempPassword === 'string' && tempPassword) {
         await navigator.clipboard.writeText(tempPassword).catch(() => {});
-        toast.success(`Hard Reset สำเร็จ — รหัสผ่านชั่วคราว: ${tempPassword} (คัดลอกแล้ว)`, { duration: 10000 });
+        toast.success(
+          `รีเซ็ตรหัสผ่านสำเร็จ — รหัสชั่วคราว: ${tempPassword} (คัดลอกแล้ว)\nแจ้งผู้ใช้ให้เข้าสู่ระบบด้วยรหัสนี้แล้วตั้งรหัสผ่านใหม่`,
+          { duration: 12000 }
+        );
       } else {
-        toast.success('Hard Reset สำเร็จ');
+        toast.success('รีเซ็ตรหัสผ่านสำเร็จ — ผู้ใช้ต้องตั้งรหัสผ่านใหม่เมื่อเข้าสู่ระบบครั้งถัดไป');
       }
     } catch (error) {
-      console.error('hard reset failed:', error);
-      toast.error(getCallableErrorMessage(error, 'Hard Reset ไม่สำเร็จ'));
+      console.error('reset password failed:', error);
+      toast.error(getCallableErrorMessage(error, 'รีเซ็ตรหัสผ่านไม่สำเร็จ'));
     }
   };
 
@@ -378,40 +446,150 @@ export default function UsersPage() {
     setIsAddOpen(true);
   };
 
-  const capsuleElement = (
-    <UserFilterCapsule
-      filterRole={filterRole}
-      onRoleChange={(role) => {
-        setFilterRole(role);
-        setFilterDepartment('all');
-      }}
-      filterDepartment={filterDepartment}
-      onDepartmentChange={setFilterDepartment}
-      onAdd={handleAddNewUserClick}
-      onImport={() => setIsImportModalOpen(true)}
-      onForceLogout={handleForceLogoutAll}
-      searchTerm={searchTerm}
-      onSearchChange={setSearchTerm}
-      isSearchMode={isSearchMode}
-      onSearchModeChange={setIsSearchMode}
-    />
+  const headerHomePortal = !isMdOrBelow && pageTab === 'list' && headerHomeActionsEl && createPortal(
+    <div className="flex items-center gap-1.5">
+      <UserRoleFilterButton
+        filterRole={filterRole}
+        filterDepartment={filterDepartment}
+        onRoleChange={(role) => {
+          setFilterRole(role);
+          setFilterDepartment('all');
+        }}
+        onDepartmentChange={setFilterDepartment}
+      />
+      <UserFilterCapsule
+        onAdd={handleAddNewUserClick}
+        onImport={() => setIsImportModalOpen(true)}
+        onForceLogout={handleForceLogoutAll}
+        searchTerm={searchTerm}
+        onSearchChange={setSearchTerm}
+        isSearchMode={isSearchMode}
+        onSearchModeChange={setIsSearchMode}
+      />
+    </div>,
+    headerHomeActionsEl,
+  );
+
+  const userTabs = Object.entries(USERS_TAB_CONFIG) as [UsersPageTab, typeof USERS_TAB_CONFIG[UsersPageTab]][];
+  const activeTabConfig = USERS_TAB_CONFIG[pageTab];
+  const ActiveTabIcon = activeTabConfig.icon;
+
+  const handleDashboardRoleSelect = (role: string) => {
+    setFilterRole(role);
+    setFilterDepartment('all');
+    setSearchTerm('');
+    setPageTab('list');
+  };
+
+  const handleDashboardDepartmentSelect = (department: string) => {
+    setFilterDepartment(department);
+    setFilterRole('all');
+    setSearchTerm('');
+    setPageTab('list');
+  };
+
+  const desktopTabPortal = !isMdOrBelow && headerCenterEl && createPortal(
+    <div className="pointer-events-auto flex items-center rounded-full border border-white bg-white/60 p-1 shadow-[0_8px_32px_rgba(0,0,0,0.04)] backdrop-blur-xl">
+      {userTabs.map(([key, cfg]) => {
+        const isActive = pageTab === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setPageTab(key)}
+            className={`flex h-8 items-center whitespace-nowrap rounded-full px-4 text-[11px] font-bold transition-all ${
+              isActive
+                ? 'border border-blue-700 bg-blue-600 text-white'
+                : 'text-black/45 hover:bg-black/5'
+            }`}
+          >
+            <span>{cfg.label}</span>
+          </button>
+        );
+      })}
+    </div>,
+    headerCenterEl,
+  );
+
+  const mobileTabPortal = isMdOrBelow && !isSearchMode && headerCenterMobileEl && createPortal(
+    <div className="pointer-events-auto relative flex min-w-0 max-w-[calc(100vw-112px)] items-center justify-center lg:hidden">
+      <button
+        type="button"
+        onClick={() => setMobileTabMenuOpen((open) => !open)}
+        className="flex min-w-0 items-center gap-1.5 text-black/80 transition-colors hover:text-black/60"
+        aria-label="เปิดเมนูแท็บ"
+        aria-expanded={mobileTabMenuOpen}
+      >
+        <ActiveTabIcon className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate font-sukhumvit text-[12px] font-black">
+          {activeTabConfig.label}
+        </span>
+        <HiChevronDown
+          className={`h-3.5 w-3.5 shrink-0 text-black/45 transition-transform ${mobileTabMenuOpen ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {mobileTabMenuOpen && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-[90] bg-black/20"
+            aria-label="ปิดเมนูแท็บ"
+            onClick={() => setMobileTabMenuOpen(false)}
+          />
+          <div className="fixed left-1/2 top-14 z-[100] w-[min(280px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+            <p className="px-3 py-1.5 font-sukhumvit text-[10px] font-black uppercase tracking-widest text-slate-400">
+              ผู้ใช้งานในระบบ
+            </p>
+            {userTabs.map(([key, cfg]) => {
+              const Icon = cfg.icon;
+              const isActive = pageTab === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setPageTab(key)}
+                  className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left font-sukhumvit text-[13px] font-bold transition-colors ${
+                    isActive
+                      ? 'bg-blue-600 text-white'
+                      : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                  <span>{cfg.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>,
+    headerCenterMobileEl,
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0 relative">
-      {/* Desktop (lg+): inject capsule into header portal */}
-      {!isMdOrBelow && createPortal(
-        capsuleElement,
-        document.getElementById('header-portal-filters') || document.body
-      )}
+    <div className="relative flex flex-1 flex-col min-h-0 w-full">
+      {desktopTabPortal}
+      {mobileTabPortal}
+      {headerHomePortal}
 
-      {/* Tablet/Mobile (< lg): render capsule as floating bottom bar */}
       {isMdOrBelow && (
-        <div className="fixed bottom-6 left-0 right-0 z-50 flex justify-center pointer-events-none">
-          <div className="pointer-events-auto">
-            {capsuleElement}
-          </div>
-        </div>
+        <UserMobileHeaderControls
+          filterRole={filterRole}
+          filterDepartment={filterDepartment}
+          onRoleChange={(role) => {
+            setFilterRole(role);
+            setFilterDepartment('all');
+          }}
+          onDepartmentChange={setFilterDepartment}
+          onAdd={handleAddNewUserClick}
+          onImport={() => setIsImportModalOpen(true)}
+          onForceLogout={handleForceLogoutAll}
+          searchTerm={searchTerm}
+          onSearchChange={setSearchTerm}
+          isSearchMode={isSearchMode}
+          onSearchModeChange={setIsSearchMode}
+        />
       )}
 
       <UserImportModal
@@ -422,8 +600,15 @@ export default function UsersPage() {
         }}
       />
 
-      {isFiltered ? (
-        <ScrollArea className="flex-1 min-h-0 pb-20">
+      {pageTab === 'dashboard' ? (
+        <UsersDashboard
+          users={users}
+          isLoading={!usersLoaded}
+          onRoleSelect={handleDashboardRoleSelect}
+          onDepartmentSelect={handleDashboardDepartmentSelect}
+        />
+      ) : isFiltered ? (
+        <ScrollArea className="flex-1 min-h-0 pb-6">
           <div 
             className="grid gap-4 sm:gap-6 pt-4 px-1"
             style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}
@@ -494,11 +679,12 @@ export default function UsersPage() {
                           </Button>
                           <Button
                             size="icon"
-                            title="Hard Reset"
-                            onClick={() => handleHardReset(user)}
+                            title="รีเซ็ตรหัสผ่าน"
+                            aria-label="รีเซ็ตรหัสผ่าน"
+                            onClick={() => handleResetPassword(user)}
                             className="w-8 h-8 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 shadow-xl"
                           >
-                            <RotateCcw className="w-4 h-4" />
+                            <Key className="w-4 h-4" />
                           </Button>
                         </motion.div>
                       )}
@@ -521,7 +707,7 @@ export default function UsersPage() {
           </div>
         </ScrollArea>
       ) : (
-        <div className="flex-1 flex flex-col items-center justify-center text-slate-400 gap-4 opacity-60">
+        <div className="flex flex-1 w-full flex-col items-center justify-center gap-4 text-slate-400 opacity-60 min-h-[calc(100dvh-11rem)]">
           <div className="w-20 h-20 rounded-full bg-slate-100 flex items-center justify-center">
             <Users size={40} className="text-slate-300" />
           </div>

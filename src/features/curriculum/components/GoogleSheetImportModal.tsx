@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Download, FileSpreadsheet, Link, AlertCircle, CheckCircle2, Loader2, ExternalLink } from 'lucide-react';
+import { HiXMark, HiArrowDownTray, HiTableCells, HiLink, HiExclamationCircle, HiCheckCircle, HiArrowPath, HiArrowTopRightOnSquare } from 'react-icons/hi2';
 import type { NewCurriculumCourse } from '@/types/curriculum';
 
 interface Props {
@@ -257,14 +257,14 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
             {/* Header */}
             <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-100">
               <div className="w-9 h-9 rounded-xl bg-emerald-500/10 flex items-center justify-center">
-                <FileSpreadsheet size={18} className="text-emerald-600" />
+                <HiTableCells size={18} className="text-emerald-600" />
               </div>
               <div className="flex-1">
                 <h2 className="text-sm font-black text-slate-800 font-sarabun">นำเข้าวิชาจาก CSV / Google Sheet</h2>
                 <p className="text-[11px] text-slate-400 font-sarabun mt-0.5">โหลด template หรือเชื่อมต่อ Google Sheet</p>
               </div>
               <button onClick={handleClose} className="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center transition-colors">
-                <X size={16} className="text-slate-400" />
+                <HiXMark size={16} className="text-slate-400" />
               </button>
             </div>
 
@@ -275,7 +275,7 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
               {done ? (
                 <div className="flex flex-col items-center gap-4 py-8">
                   <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center">
-                    <CheckCircle2 size={32} className="text-emerald-500" />
+                    <HiCheckCircle size={32} className="text-emerald-500" />
                   </div>
                   <p className="text-sm font-black text-slate-700 font-sarabun">นำเข้า {preview?.length} วิชาสำเร็จ</p>
                   <button onClick={handleClose} className="px-6 py-2 bg-slate-900 text-white text-xs font-black rounded-full font-sarabun">ปิด</button>
@@ -285,8 +285,8 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
                   {/* Tabs */}
                   <div className="flex items-center bg-slate-100 rounded-xl p-1 gap-1">
                     {[
-                      { id: 'template' as const, label: 'อัปโหลด CSV', icon: Download },
-                      { id: 'sheet' as const, label: 'Google Sheet URL', icon: Link },
+                      { id: 'template' as const, label: 'อัปโหลด CSV', icon: HiArrowDownTray },
+                      { id: 'sheet' as const, label: 'Google Sheet URL', icon: HiLink },
                     ].map(({ id, label, icon: Icon }) => (
                       <button
                         key={id}
@@ -306,7 +306,7 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
                         className="rounded-xl border-2 border-dashed border-slate-200 p-5 flex flex-col items-center gap-3 cursor-pointer hover:border-emerald-300 hover:bg-emerald-50/30 transition-all"
                         onClick={() => document.getElementById('csv-file-input')?.click()}
                       >
-                        <FileSpreadsheet size={28} className="text-slate-300" />
+                        <HiTableCells size={28} className="text-slate-300" />
                         <div className="text-center">
                           <p className="text-xs font-black text-slate-600 font-sarabun">{csvFile ? csvFile.name : 'คลิกเพื่อเลือกไฟล์ CSV'}</p>
                           <p className="text-[10px] text-slate-400 font-sarabun mt-1">รองรับ .csv เท่านั้น</p>
@@ -318,7 +318,7 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
                         onClick={downloadTemplate}
                         className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-[11px] font-black text-slate-600 transition-all font-sarabun"
                       >
-                        <Download size={13} />
+                        <HiArrowDownTray size={13} />
                         ดาวน์โหลด Template CSV
                       </button>
                     </div>
@@ -343,7 +343,7 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-sky-500 hover:underline font-black mt-1"
                         >
-                          <ExternalLink size={11} />
+                          <HiArrowTopRightOnSquare size={11} />
                           เปิด Google Sheets
                         </a>
                       </div>
@@ -361,7 +361,7 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
                           disabled={!sheetUrl.trim() || loading}
                           className="px-4 py-2.5 rounded-xl bg-sky-500 text-white text-[11px] font-black disabled:opacity-40 hover:bg-sky-600 transition-all font-sarabun flex items-center gap-1.5"
                         >
-                          {loading ? <Loader2 size={13} className="animate-spin" /> : <Link size={13} />}
+                          {loading ? <HiArrowPath size={13} className="animate-spin" /> : <HiLink size={13} />}
                           {loading ? 'กำลังดึง...' : 'ดึงข้อมูล'}
                         </button>
                       </div>
@@ -371,7 +371,7 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
                   {/* Error */}
                   {error && (
                     <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-50 border border-rose-100">
-                      <AlertCircle size={14} className="text-rose-500 mt-0.5 flex-shrink-0" />
+                      <HiExclamationCircle size={14} className="text-rose-500 mt-0.5 flex-shrink-0" />
                       <p className="text-[11px] text-rose-600 font-sarabun">{error}</p>
                     </div>
                   )}
@@ -469,7 +469,7 @@ export default function GoogleSheetImportModal({ open, onClose, onImport }: Prop
                   disabled={!preview || preview.length === 0 || importing}
                   className="px-6 py-2 rounded-full bg-emerald-500 text-white text-[11px] font-black disabled:opacity-40 hover:bg-emerald-600 transition-all font-sarabun flex items-center gap-2"
                 >
-                  {importing ? <Loader2 size={13} className="animate-spin" /> : <FileSpreadsheet size={13} />}
+                  {importing ? <HiArrowPath size={13} className="animate-spin" /> : <HiTableCells size={13} />}
                   {importing ? 'กำลังนำเข้า...' : `นำเข้า ${preview ? preview.length : 0} วิชา`}
                 </button>
               </div>

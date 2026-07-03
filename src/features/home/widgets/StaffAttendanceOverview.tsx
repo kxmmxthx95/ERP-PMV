@@ -1,4 +1,3 @@
-import { Users } from 'lucide-react';
 import { WIDGET_GLASS } from '../widgetStyles';
 
 const MOCK = { present: 38, absent: 4, late: 2, total: 44 };
@@ -7,13 +6,8 @@ export default function StaffAttendanceOverview() {
   const presentPct = Math.round((MOCK.present / MOCK.total) * 100);
 
   return (
-    <div style={WIDGET_GLASS} className="rounded-3xl p-5 flex flex-col gap-3 w-full">
-      <div className="flex items-center gap-2">
-        <div className="w-8 h-8 rounded-xl bg-emerald-400/20 flex items-center justify-center">
-          <Users size={16} className="text-emerald-600" />
-        </div>
-        <span className="font-bold text-sm text-slate-700">การมาทำงานวันนี้</span>
-      </div>
+    <div style={WIDGET_GLASS} className="rounded-2xl p-3 flex flex-col gap-2 w-full">
+      <span className="font-bold text-sm text-slate-700">การมาทำงานวันนี้</span>
 
       <div className="flex items-end justify-between">
         <div>

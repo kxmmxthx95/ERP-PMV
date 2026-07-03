@@ -1,5 +1,5 @@
 // src/components/layouts/PortalLayout.tsx
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { memo, useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LayoutDashboard, Search, LogOut, Plus, ChevronLeft, Home } from 'lucide-react';
@@ -13,9 +13,17 @@ import {
   HiOutlineClock,
   HiOutlineMegaphone,
   HiUser,
+  HiCpuChip,
 } from 'react-icons/hi2';
 import { useAuth } from '@/hooks/useAuth';
+import { PermissionVisible } from '@/components/PermissionGate';
 import { authService } from '@/features/auth/authService';
+import { colors } from '@/lib/designTokens';
+import { cn } from '@/lib/utils';
+
+function isUserLineConnected(userData: { lineUid?: string; lineToken?: string } | null | undefined): boolean {
+  return Boolean((userData?.lineUid || userData?.lineToken || '').trim());
+}
 
 // ── Role config ─────────────────────────────────────────────────────────────
 const ROLE_CONFIG: Record<string, { label: string; gradient: string }> = {
@@ -68,11 +76,53 @@ const BOTTOM_TAB_CONFIG: Record<string, Array<{ label: string; icon: React.React
   ],
 };
 
-// ── Glass style (exported so pages can also use it) ───────────────────────────
 export const GLASS: React.CSSProperties = {
   background: '#ffffff',
   border: '1px solid rgba(0,0,0,0.05)',
 };
+
+function formatPortalDate(date: Date) {
+  return new Intl.DateTimeFormat('th-TH', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(date);
+}
+
+function formatPortalTime(date: Date) {
+  return new Intl.DateTimeFormat('th-TH', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
+/** Isolated 1s tick — re-renders only this block, not PortalLayout / Outlet. */
+const PortalHeaderClock = memo(function PortalHeaderClock() {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -10 }}
+      animate={{ opacity: 1, x: 0 }}
+      className="hidden lg:flex flex-col items-start px-4 border-l border-slate-200/50 py-0.5"
+    >
+      <p className="text-[13px] font-black text-slate-800 tracking-tight leading-none mb-1 uppercase font-sukhumvit">
+        {formatPortalTime(now)}
+      </p>
+      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-none">
+        {formatPortalDate(now)}
+      </p>
+    </motion.div>
+  );
+});
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 interface PortalLayoutProps {
@@ -99,6 +149,9 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
   }, []);
 
   const isHome = location.pathname === '/portal' || location.pathname === '/portal/';
+  const isAiAgentsPage = location.pathname.startsWith('/portal/ai-agents');
+  /** AI Agent shortcut — portal home (dashboard + menu) only */
+  const showAiAgentButton = isHome;
   const cfg = ROLE_CONFIG[role ?? ''] ?? ROLE_CONFIG.student;
   const isExecutiveRole = role === 'admin' || role === 'sysadmin';
   const mobileHeaderTabs = useMemo(() => {
@@ -120,12 +173,7 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
     return '?';
   }, [user, userData]);
 
-  const [currentTime, setCurrentTime] = useState(new Date());
-
-  React.useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+  const isLineConnected = isUserLineConnected(userData);
 
   useEffect(() => {
     if (!showProfilePopup) return;
@@ -144,12 +192,111 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
     setShowProfilePopup(prev => !prev);
   };
 
+  const renderDesktopHomeMenuButtons = () => (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          setView('dashboard');
+          navigate('/portal');
+        }}
+        className={`h-9 w-9 flex items-center justify-center rounded-full transition-all duration-300 shrink-0 ${(!isHome || view === 'dashboard')
+          ? 'bg-white/40 text-slate-800 border border-slate-300 shadow-xs'
+          : 'text-slate-600 border border-transparent'
+          }`}
+        title="หน้าหลัก"
+      >
+        <Home size={16} />
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setView('menu');
+          navigate('/portal');
+        }}
+        className={`h-9 w-9 flex items-center justify-center rounded-full transition-all duration-300 shrink-0 ${(isHome && view === 'menu')
+          ? 'bg-white/40 text-slate-800 border border-slate-300 shadow-xs'
+          : 'text-slate-600 border border-transparent'
+          }`}
+        title="เมนู"
+      >
+        <LayoutDashboard size={16} />
+      </button>
+    </>
+  );
+
+  const renderMobileHeaderTabButton = (tab: (typeof mobileHeaderTabs)[number], idx: number) => (
+    <motion.button
+      key={`${tab.label}-${idx}`}
+      whileHover={{ scale: 1.05 }}
+      whileTap={{ scale: 0.95 }}
+      onClick={() => {
+        if (tab.label === 'ออกระบบ') {
+          authService.logout();
+        } else if (tab.label === 'เมนู') {
+          setView('menu');
+          if (!isHome) navigate('/portal');
+        } else {
+          setView('dashboard');
+          navigate(tab.path || '/portal');
+        }
+      }}
+      className={`flex-shrink-0 flex items-center justify-center w-8 h-8 lg:w-9 lg:h-9 rounded-full transition-all ${
+        (tab.label === 'เมนู' && view === 'menu')
+        || (tab.label === 'หน้าหลัก' && view === 'dashboard' && isHome)
+        || (!isHome && location.pathname.startsWith(tab.path) && tab.path !== '/portal')
+          ? 'text-slate-800 border border-slate-300 shadow-sm bg-white/40 backdrop-blur-sm'
+          : tab.label === 'ออกระบบ'
+            ? 'text-rose-500 border border-transparent bg-transparent hover:bg-rose-50'
+            : 'text-slate-500 border border-transparent bg-transparent'
+      }`}
+      title={tab.label}
+    >
+      {React.isValidElement(tab.icon)
+        ? React.cloneElement(tab.icon as React.ReactElement<{ size?: number }>, { size: 18 })
+        : tab.icon}
+    </motion.button>
+  );
+
+  const mobilePrimaryNavTabs = useMemo(
+    () => mobileHeaderTabs.filter((tab) => tab.label === 'หน้าหลัก' || tab.label === 'เมนู'),
+    [mobileHeaderTabs],
+  );
+  const mobileSecondaryNavTabs = useMemo(
+    () => mobileHeaderTabs.filter((tab) => tab.label !== 'หน้าหลัก' && tab.label !== 'เมนู'),
+    [mobileHeaderTabs],
+  );
+  const renderAiAgentHeaderButton = (size: 'sm' | 'md' = 'md') => (
+    <PermissionVisible featureKey="aiAgents" require="view-only">
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        type="button"
+        onClick={() => navigate('/portal/ai-agents')}
+        className={cn(
+          'flex items-center justify-center rounded-full transition-all duration-300',
+          size === 'sm' ? 'h-8 w-8 lg:h-9 lg:w-9' : 'h-9 w-9',
+          isAiAgentsPage
+            ? 'bg-violet-600 text-white border border-violet-500 shadow-sm'
+            : 'text-violet-600 border border-transparent hover:bg-violet-50 hover:border-violet-200',
+        )}
+        title="AI Agent Command"
+        aria-label="AI Agent Command"
+      >
+        <HiCpuChip size={size === 'sm' ? 18 : 16} />
+      </motion.button>
+    </PermissionVisible>
+  );
+
   const renderMobileAvatar = (alignRight: boolean) => (
     <div className="relative flex items-center gap-2">
       {!alignRight && (
         <button
           type="button"
-          className="w-8 h-8 lg:w-9 lg:h-9 rounded-full flex-shrink-0 cursor-pointer overflow-hidden border border-slate-200 shadow-sm"
+          className={cn(
+            'w-8 h-8 lg:w-9 lg:h-9 rounded-full flex-shrink-0 cursor-pointer overflow-hidden border-2 shadow-sm',
+            isLineConnected ? 'border-[#06c755] ring-2 ring-[#06c755]/30' : 'border-slate-200',
+          )}
           onClick={openProfilePopup}
         >
           {userData?.photoURL || user?.photoURL ? (
@@ -189,7 +336,10 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
       {alignRight && (
         <button
           type="button"
-          className="w-8 h-8 lg:w-9 lg:h-9 rounded-full flex-shrink-0 cursor-pointer overflow-hidden border border-slate-200 shadow-sm"
+          className={cn(
+            'w-8 h-8 lg:w-9 lg:h-9 rounded-full flex-shrink-0 cursor-pointer overflow-hidden border-2 shadow-sm',
+            isLineConnected ? 'border-[#06c755] ring-2 ring-[#06c755]/30' : 'border-slate-200',
+          )}
           onClick={openProfilePopup}
         >
           {userData?.photoURL || user?.photoURL ? (
@@ -210,47 +360,29 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
     </div>
   );
 
-  const formatDate = (date: Date) => {
-    return new Intl.DateTimeFormat('th-TH', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    }).format(date);
-  };
-
-  const formatTime = (date: Date) => {
-    return new Intl.DateTimeFormat('th-TH', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }).format(date);
-  };
-
-
+  const headerShellBg =
+    showProfilePopup && isMobile ? '#121212' : colors.palette.shell;
 
   return (
-    <div className="h-[100dvh] min-h-[100svh] w-full relative flex flex-col overflow-hidden">
+    <div className="h-[100dvh] min-h-[100svh] min-h-[-webkit-fill-available] w-full relative flex flex-col overflow-hidden pt-safe pb-safe px-safe">
 
-      {/* ── Background (Pure White / Fluid Image globally on all pages) ── */}
-      <div className="absolute inset-0 z-0 bg-white" />
-
-      {/* Background image removed to keep pure white canvas */}
+      {/* ── Background shell (fixed = ทะลุ safe-area / notch / แถบสายโทร iOS) ── */}
+      <div
+        className="fixed inset-0 z-0"
+        style={{ background: colors.palette.shell }}
+        aria-hidden
+      />
 
       {/* ── Top Bar ── */}
-      <div className="relative z-20 transition-all duration-300 border-none"
+      <div
+        className="relative z-20 transition-all duration-300 border-none"
         style={{
-          background: (showProfilePopup && isMobile)
-            ? '#121212'
-            : 'transparent',
+          background: headerShellBg,
           backdropFilter: 'none',
           WebkitBackdropFilter: 'none',
         }}
       >
-        <div className="max-w-[1600px] mx-auto flex items-center justify-between px-4 lg:px-6 pb-2 lg:pb-2.5"
-          style={{ paddingTop: 'max(8px, env(safe-area-inset-top))' }}
-        >
+        <div className="max-w-[1600px] mx-auto relative flex items-center justify-between px-4 lg:px-6 pb-2 lg:pb-2.5 pt-2">
 
         {/* LEFT: Avatar + Name/Role Capsule + Date/Time + Settings */}
         <div className="flex items-center gap-3 flex-1 lg:flex-none">
@@ -265,7 +397,12 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
                   onClick={() => setShowProfilePopup(false)}
                   className="flex items-center gap-2 cursor-pointer text-left focus:outline-none"
                 >
-                  <div className="w-8 h-8 lg:w-9 lg:h-9 rounded-full flex-shrink-0 overflow-hidden border border-slate-700 shadow-sm">
+                  <div
+                    className={cn(
+                      'w-8 h-8 lg:w-9 lg:h-9 rounded-full flex-shrink-0 overflow-hidden border-2 shadow-sm',
+                      isLineConnected ? 'border-[#06c755] ring-2 ring-[#06c755]/40' : 'border-slate-700',
+                    )}
+                  >
                     {userData?.photoURL || user?.photoURL ? (
                       <img
                         src={userData?.photoURL || user?.photoURL}
@@ -328,64 +465,37 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
 
                 {/* Right side: Navigation Tabs */}
                 <div className="flex items-center gap-1 min-h-10">
-                  {mobileHeaderTabs.map((tab, idx) => (
-                    <motion.button
-                      key={idx}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => {
-                        if (tab.label === 'ออกระบบ') {
-                          authService.logout();
-                        } else if (tab.label === 'เมนู') {
-                          setView('menu');
-                          if (!isHome) navigate('/portal');
-                        } else {
-                          setView('dashboard');
-                          navigate(tab.path || '/portal');
-                        }
-                      }}
-                      className={`flex-shrink-0 flex items-center justify-center w-8 h-8 lg:w-9 lg:h-9 rounded-full transition-all ${
-                        (tab.label === 'เมนู' && view === 'menu') || 
-                        (tab.label === 'หน้าหลัก' && view === 'dashboard' && isHome) ||
-                        (!isHome && location.pathname.startsWith(tab.path) && tab.path !== '/portal')
-                          ? 'text-slate-800 border border-slate-300 shadow-sm bg-white/40 backdrop-blur-sm'
-                          : tab.label === 'ออกระบบ'
-                            ? 'text-rose-500 border border-transparent bg-transparent hover:bg-rose-50'
-                            : 'text-slate-500 border border-transparent bg-transparent'
-                      }`}
-                      title={tab.label}
-                    >
-                      {React.isValidElement(tab.icon) 
-                        ? React.cloneElement(tab.icon as React.ReactElement<any>, { size: 18 }) 
-                        : tab.icon}
-                    </motion.button>
-                  ))}
+                  {mobileSecondaryNavTabs.map((tab, idx) => renderMobileHeaderTabButton(tab, idx))}
+                  {showAiAgentButton && renderAiAgentHeaderButton('sm')}
+                  {mobilePrimaryNavTabs.map((tab, idx) => renderMobileHeaderTabButton(tab, idx))}
                 </div>
               </>
             ) : (
               <>
                 {/* Left side: Back Button */}
                 <div className="relative flex items-center justify-between w-full min-h-10">
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => {
-                      setView('menu');
-                      navigate('/portal');
-                    }}
-                    className="flex-shrink-0 flex h-9 w-9 lg:h-9 lg:w-9 rounded-full items-center justify-center text-slate-700 transition-colors border border-slate-200 bg-white shadow-sm hover:bg-slate-50 relative z-10"
-                    title="กลับเมนู"
-                  >
-                    <ChevronLeft size={20} />
-                  </motion.button>
+                  <div id="header-portal-mobile-back" className="flex-shrink-0 relative z-10">
+                    <motion.button
+                      id="portal-default-mobile-back"
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => {
+                        setView('menu');
+                        navigate('/portal');
+                      }}
+                      className="flex h-9 w-9 lg:h-9 lg:w-9 rounded-full items-center justify-center text-slate-700 transition-colors border border-slate-200 bg-white shadow-sm hover:bg-slate-50"
+                      title="กลับเมนู"
+                    >
+                      <ChevronLeft size={20} />
+                    </motion.button>
+                  </div>
                   <div
                     id="header-portal-center-mobile"
                     className="absolute inset-x-0 top-0 bottom-0 flex items-center justify-center pointer-events-none"
                   />
-                  <div
-                    id="header-portal-mobile-actions"
-                    className="flex items-center justify-end relative z-10 min-w-0 ml-2"
-                  />
+                  <div className="flex items-center justify-end relative z-10 shrink-0 gap-1">
+                    <div id="header-portal-mobile-actions" className="flex items-center justify-end" />
+                  </div>
                 </div>
               </>
             )}
@@ -396,8 +506,12 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
             {/* Desktop: Avatar (clickable → Profile popup) */}
             <button
               type="button"
-              className="w-11 h-11 rounded-full flex-shrink-0 cursor-pointer overflow-hidden border-2 border-white shadow-sm ring-1 ring-slate-200/50"
+              className={cn(
+                'w-11 h-11 rounded-full flex-shrink-0 cursor-pointer overflow-hidden border-2 border-white shadow-sm',
+                isLineConnected ? 'ring-2 ring-[#06c755]' : 'ring-1 ring-slate-200/50',
+              )}
               onClick={openProfilePopup}
+              title={isLineConnected ? 'เชื่อม LINE แล้ว' : undefined}
             >
               {userData?.photoURL || user?.photoURL ? (
                 <img
@@ -442,7 +556,12 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
                 className="absolute top-[52px] left-0 z-50 w-[320px] rounded-2xl border border-slate-200 bg-white shadow-2xl p-4"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full overflow-hidden ring-1 ring-slate-200">
+                  <div
+                    className={cn(
+                      'w-12 h-12 rounded-full overflow-hidden',
+                      isLineConnected ? 'ring-2 ring-[#06c755]' : 'ring-1 ring-slate-200',
+                    )}
+                  >
                     {userData?.photoURL || user?.photoURL ? (
                       <img
                         src={userData?.photoURL || user?.photoURL}
@@ -489,25 +608,8 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
             )}
           </div>
 
-          {/* Time & Date Display (Dashboard only) */}
-          {isHome && view === 'dashboard' && (
-            <motion.div
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="hidden lg:flex flex-col items-start px-4 border-l border-slate-200/50 py-0.5"
-            >
-              <p
-                className="text-[13px] font-black text-slate-800 tracking-tight leading-none mb-1 uppercase font-sukhumvit"
-              >
-                {formatTime(currentTime)}
-              </p>
-              <p
-                className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-none"
-              >
-                {formatDate(currentTime)}
-              </p>
-            </motion.div>
-          )}
+          {/* Time & Date Display (Dashboard only) — isolated tick, no Outlet re-render */}
+          {isHome && view === 'dashboard' && <PortalHeaderClock />}
 
 
 
@@ -520,58 +622,34 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
           )}
         </div>
 
-        {/* CENTER: Portal Center + Filters */}
+        {/* CENTER: Filters (desktop) */}
         <div className="hidden lg:flex flex-1 justify-center px-4 gap-4 items-center">
-          <div id="header-portal-center" className="flex items-center justify-center" />
-
           <div id="header-portal-filters" className="flex items-center justify-center" />
         </div>
 
-        {/* RIGHT: Portal Actions + Search + Home/Toggle + Logout */}
-        <div className="flex items-center gap-3">
-          <div id="header-portal-right-actions" className="flex items-center gap-2" />
+        {/* CENTER: Fixed viewport-centered portal (desktop) */}
+        <div
+          id="header-portal-center"
+          className="pointer-events-none absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 lg:flex items-center justify-center"
+        />
 
-          {/* Dashboard/Menu Toggle (Right aligned) */}
-          <div
-            className="hidden lg:flex items-center rounded-full p-1 gap-1 bg-transparent"
-          >
-            <button
-              onClick={() => {
-                setView('dashboard');
-                navigate('/portal');
-              }}
-              className={`h-9 w-9 flex items-center justify-center rounded-full transition-all duration-300 ${(!isHome || view === 'dashboard')
-                ? 'bg-white/40 text-slate-800 border border-slate-300 shadow-xs'
-                : 'text-slate-600 border border-transparent'
-                }`}
-              title="หน้าหลัก"
-            >
-              <Home size={16} />
-            </button>
-            <button
-              onClick={() => {
-                setView('menu');
-                navigate('/portal');
-              }}
-              className={`h-9 w-9 flex items-center justify-center rounded-full transition-all duration-300 ${(isHome && view === 'menu')
-                ? 'bg-white/40 text-slate-800 border border-slate-300 shadow-xs'
-                : 'text-slate-600 border border-transparent'
-                }`}
-              title="เมนู"
-            >
-              <LayoutDashboard size={16} />
-            </button>
+        {/* RIGHT: Portal Actions + Home/Menu + Logout (logout after menu) */}
+        <div className="flex items-center gap-3">
+          <div className="hidden lg:flex items-center rounded-full p-1 gap-1 bg-transparent">
+            <div id="header-portal-right-actions" className="flex items-center gap-1" />
+            {showAiAgentButton && renderAiAgentHeaderButton()}
           </div>
 
+          <div className="hidden lg:flex items-center gap-1 shrink-0">
+            <div id="header-portal-home-actions" className="flex items-center gap-1.5" />
+            {renderDesktopHomeMenuButtons()}
+          </div>
 
-
-
-
-          {/* Logout button - only show on home/dashboard */}
           {isHome && (
             <button
+              type="button"
               onClick={() => authService.logout()}
-              className="hidden lg:flex h-9 w-9 rounded-full items-center justify-center text-rose-500"
+              className="hidden lg:flex h-9 w-9 rounded-full items-center justify-center text-rose-500 shrink-0"
               style={GLASS}
               title="ออกจากระบบ"
             >
@@ -629,10 +707,13 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
       </AnimatePresence>
 
       {/* ── Page Content (child routes rendered here) ── */}
-      <div className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          <div className="max-w-[1600px] mx-auto w-full px-3 lg:px-6 pt-3 lg:pt-4 pb-3 lg:pb-10 flex-1 flex flex-col min-h-0 overflow-y-auto">
-            <Outlet context={{ view, showSearch }} />
+      <div className="relative flex-1 flex flex-col min-h-0 min-w-0">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide overscroll-y-contain">
+          <div className="max-w-[1600px] mx-auto w-full px-4 sm:px-5 lg:px-8 pt-2 lg:pt-3 pb-5 lg:pb-12 min-h-full flex flex-col">
+            {/* Inner gutter so card shadows are not clipped by the scroll edges */}
+            <div className="px-1.5 py-3 sm:px-2 sm:py-4 flex flex-col flex-1 min-h-0 w-full">
+              <Outlet context={{ view, showSearch }} />
+            </div>
           </div>
         </div>
       </div>

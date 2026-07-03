@@ -1,41 +1,44 @@
 // src/hooks/useLeaveRequests.ts
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import {
-  collection, addDoc, updateDoc, doc, query,
-  where, orderBy, serverTimestamp, onSnapshot
+  collection, addDoc, updateDoc, doc, serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { syncStudentLeaveAttendanceById } from '@/lib/attendance/syncStudentLeaveAttendance';
+import {
+  getApproverLeaveRequestsStore,
+  getLeaveRequestsSinceStore,
+  getMyLeaveRequestsStore,
+  getStudentLeaveRequestsSinceStore,
+} from '@/lib/firestoreShared/leaveRequestsStore';
+import { createSharedStore } from '@/lib/firestoreShared/createSharedStore';
 import type { LeaveRequest, CreateLeaveRequest, LeaveStatus, RequesterType } from '@/types/leave';
+import { validateLeaveSubmissionDates } from '@/lib/leave/leaveSubmissionRules';
 
 const COL = 'leave_requests';
 
+type LeaveStore = ReturnType<typeof createSharedStore<LeaveRequest[]>>;
+
+const noopSubscribe = () => () => {};
+const EMPTY_LEAVE_REQUESTS: LeaveRequest[] = [];
+const emptySnapshot = (): LeaveRequest[] => EMPTY_LEAVE_REQUESTS;
+const readySnapshot = () => true;
+
+function useLeaveRequestStore(store: LeaveStore | null) {
+  const subscribe = store?.subscribe ?? noopSubscribe;
+  const getSnapshot = store ? store.getSnapshot : emptySnapshot;
+  const getReady = store ? store.getReady : readySnapshot;
+
+  const requests = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const loading = !useSyncExternalStore(subscribe, getReady, getReady);
+
+  return { requests, loading };
+}
+
 // ── Requester hook (student / staff submitting own requests) ──────────────────
 export function useMyLeaveRequests(userId: string, requesterType: RequesterType) {
-  const [requests, setRequests] = useState<LeaveRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!userId) {
-      setLoading(false);
-      return;
-    }
-
-    const q = query(
-      collection(db, COL),
-      where('requesterId', '==', userId),
-      orderBy('createdAt', 'desc'),
-    );
-
-    const unsubscribe = onSnapshot(q, (snap) => {
-      setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() } as LeaveRequest)));
-      setLoading(false);
-    }, (err) => {
-      console.error("Error in useMyLeaveRequests:", err);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [userId]);
+  const store = userId ? getMyLeaveRequestsStore(userId) : null;
+  const { requests, loading } = useLeaveRequestStore(store);
 
   const submit = useCallback(async (
     data: CreateLeaveRequest,
@@ -45,6 +48,9 @@ export function useMyLeaveRequests(userId: string, requesterType: RequesterType)
     approverId: string,
     approverName: string,
   ) => {
+    const validationError = validateLeaveSubmissionDates(data.startDate, data.endDate);
+    if (validationError) throw new Error(validationError);
+
     await addDoc(collection(db, COL), {
       requesterId: userId,
       requesterName,
@@ -70,31 +76,8 @@ export function useMyLeaveRequests(userId: string, requesterType: RequesterType)
 
 // ── Approver hook (teacher / admin reviewing requests) ───────────────────────
 export function useApproverLeaveRequests(approverId: string) {
-  const [requests, setRequests] = useState<LeaveRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!approverId) {
-      setLoading(false);
-      return;
-    }
-
-    const q = query(
-      collection(db, COL),
-      where('approverId', '==', approverId),
-      orderBy('createdAt', 'desc'),
-    );
-
-    const unsubscribe = onSnapshot(q, (snap) => {
-      setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() } as LeaveRequest)));
-      setLoading(false);
-    }, (err) => {
-      console.error("Error in useApproverLeaveRequests:", err);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [approverId]);
+  const store = approverId ? getApproverLeaveRequestsStore(approverId) : null;
+  const { requests, loading } = useLeaveRequestStore(store);
 
   const updateStatus = useCallback(async (
     requestId: string,
@@ -106,33 +89,20 @@ export function useApproverLeaveRequests(approverId: string) {
       approverNote: approverNote ?? null,
       updatedAt: serverTimestamp(),
     });
+    if (status === 'approved') {
+      void syncStudentLeaveAttendanceById(requestId).catch((err) => {
+        console.error('[useApproverLeaveRequests] syncStudentLeaveAttendance failed', err);
+      });
+    }
   }, []);
 
   return { requests, loading, updateStatus };
 }
 
 // ── Teacher hook (student leave requests only) ────────────────────────────────
-export function useStudentLeaveRequests() {
-  const [requests, setRequests] = useState<LeaveRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const q = query(
-      collection(db, COL),
-      where('requesterType', '==', 'student'),
-      orderBy('createdAt', 'desc'),
-    );
-
-    const unsubscribe = onSnapshot(q, (snap) => {
-      setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() } as LeaveRequest)));
-      setLoading(false);
-    }, (err) => {
-      console.error("Error in useStudentLeaveRequests:", err);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, []);
+export function useStudentLeaveRequests(sinceDate: string) {
+  const store = useMemo(() => getStudentLeaveRequestsSinceStore(sinceDate), [sinceDate]);
+  const { requests, loading } = useLeaveRequestStore(store);
 
   const updateStatus = useCallback(async (
     requestId: string,
@@ -144,29 +114,20 @@ export function useStudentLeaveRequests() {
       approverNote: approverNote ?? null,
       updatedAt: serverTimestamp(),
     });
+    if (status === 'approved') {
+      void syncStudentLeaveAttendanceById(requestId).catch((err) => {
+        console.error('[useStudentLeaveRequests] syncStudentLeaveAttendance failed', err);
+      });
+    }
   }, []);
 
   return { requests, loading, updateStatus };
 }
 
-// ── Admin hook (all requests) ─────────────────────────────────────────────────
-export function useAllLeaveRequests() {
-  const [requests, setRequests] = useState<LeaveRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const q = query(collection(db, COL), orderBy('createdAt', 'desc'));
-
-    const unsubscribe = onSnapshot(q, (snap) => {
-      setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() } as LeaveRequest)));
-      setLoading(false);
-    }, (err) => {
-      console.error("Error in useAllLeaveRequests:", err);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, []);
+/** Recent leave requests only — lighter for Home widgets (endDate >= sinceDate). */
+export function useLeaveRequestsSince(sinceDate: string) {
+  const store = useMemo(() => getLeaveRequestsSinceStore(sinceDate), [sinceDate]);
+  const { requests, loading } = useLeaveRequestStore(store);
 
   const updateStatus = useCallback(async (
     requestId: string,
@@ -178,6 +139,11 @@ export function useAllLeaveRequests() {
       approverNote: approverNote ?? null,
       updatedAt: serverTimestamp(),
     });
+    if (status === 'approved') {
+      void syncStudentLeaveAttendanceById(requestId).catch((err) => {
+        console.error('[useLeaveRequestsSince] syncStudentLeaveAttendance failed', err);
+      });
+    }
   }, []);
 
   return { requests, loading, updateStatus };
@@ -194,3 +160,10 @@ export function formatDate(dateStr: string): string {
     day: 'numeric', month: 'short', year: 'numeric',
   });
 }
+
+export {
+  getEarliestLeaveStartDate,
+  isSameDayLeaveCutoffPassed,
+  LEAVE_SAME_DAY_CUTOFF_MESSAGE,
+  validateLeaveSubmissionDates,
+} from '@/lib/leave/leaveSubmissionRules';

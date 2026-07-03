@@ -9,7 +9,7 @@ const STATS = [
 
 export default function SchoolStatWidget() {
   return (
-    <div style={WIDGET_GLASS} className="rounded-3xl p-5 flex flex-col gap-3 w-full">
+    <div style={WIDGET_GLASS} className="rounded-2xl p-3 flex flex-col gap-2 w-full">
       <span className="font-bold text-sm text-slate-700">สถิติโรงเรียน</span>
       <div className="grid grid-cols-3 gap-2">
         {STATS.map(s => {

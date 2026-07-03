@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, GripVertical, User } from 'lucide-react';
+import { ArrowLeft, GripVertical } from 'lucide-react';
 import ScheduleGrid from '../components/ScheduleGrid';
 import { subjectColorByName as subjectColor } from '../constants/colors';
 import type { ConflictResult, ScheduleEntry, SchoolDay, SchoolClass, Teacher } from '@/types/schedule';
@@ -9,12 +9,15 @@ import type { Department, Subject } from '@/types/curriculum';
 
 interface TeacherViewProps {
   selectedTeacherId: string;
+  setSelectedTeacherId: (id: string) => void;
+  filterDept: 'all' | 'early' | 'primary' | 'secondary';
+  setFilterDept: (v: 'all' | 'early' | 'primary' | 'secondary') => void;
   isEditMode: boolean;
   grid: Record<number, Record<number, ScheduleEntry[]>>;
   openSlotModal: (day: SchoolDay, period: number, entry?: ScheduleEntry | null) => void;
   deleteEntry: (id: string) => Promise<void>;
   moveEntry: (id: string, day: SchoolDay, period: number) => Promise<ConflictResult>;
-  handleSubjectDrop: (day: SchoolDay, period: number, subjectId: string, teacherId: string) => void;
+  handleSubjectDrop: (day: SchoolDay, period: number, subjectId: string, teacherId: string, classId?: string) => void;
   setIsEditMode: (val: boolean) => void;
   teachers: Teacher[];
   allClasses?: SchoolClass[];
@@ -26,7 +29,11 @@ interface TeacherViewProps {
     subjectGroup?: string;
     assignedTeacherId?: string;
     className?: string;
+    classId?: string;
   }[];
+  mobileHeaderContent?: React.ReactNode;
+  jointClassEntryIds?: Set<string>;
+  jointClassPartnersByEntryId?: Map<string, string[]>;
 }
 
 
@@ -47,6 +54,9 @@ function avatarColor(name: string): React.CSSProperties {
 
 export function TeacherView({
   selectedTeacherId,
+  setSelectedTeacherId,
+  filterDept,
+  setFilterDept,
   isEditMode,
   grid,
   openSlotModal,
@@ -57,39 +67,37 @@ export function TeacherView({
   teachers,
   allClasses,
   draggableSubjects,
+  mobileHeaderContent,
+  jointClassEntryIds,
+  jointClassPartnersByEntryId,
 }: TeacherViewProps) {
   return (
-    !selectedTeacherId ? (
-      <div className="flex flex-col items-center justify-center h-[60vh] text-center px-4 animate-in fade-in zoom-in duration-500">
-        <div className="w-16 h-16 rounded-3xl bg-blue-50 flex items-center justify-center mb-4 border border-blue-100 shadow-sm">
-          <User size={32} className="text-blue-400" />
-        </div>
-        <h3 className="text-[13px] font-black text-slate-800 mb-1">ยังไม่ได้เลือกครู</h3>
-        <p className="text-[11px] text-slate-500 max-w-[200px] leading-relaxed font-medium">
-          กรุณาเลือกรายชื่อคุณครูจากฟิลเตอร์ด้านบนเพื่อดูภาระงานและตารางสอน
-        </p>
-      </div>
-    ) : (
-      <ScheduleGrid
-        grid={grid}
-        viewMode="teacher"
-        settingsId={selectedTeacherId}
-        readOnly={!isEditMode}
-        isEditMode={isEditMode}
-        setIsEditMode={setIsEditMode}
-        onSlotClick={(day, period, entry) => isEditMode && openSlotModal(day, period, entry)}
-        onDeleteEntry={async (id) => await deleteEntry(id)}
-        onMoveEntry={async (id, day, period) => {
-          const res = await moveEntry(id, day, period);
-          if (res.hasConflict) alert('ไม่สามารถย้ายได้: ' + res.conflicts[0].message);
-        }}
-        onDropSubject={handleSubjectDrop}
-        teachers={teachers}
-        allClasses={allClasses}
-        draggableSubjects={draggableSubjects}
-        dragTeacherId={selectedTeacherId}
-      />
-    )
+    <ScheduleGrid
+      grid={grid}
+      viewMode="teacher"
+      settingsId={selectedTeacherId}
+      readOnly={!isEditMode}
+      isEditMode={isEditMode}
+      setIsEditMode={setIsEditMode}
+      onSlotClick={(day, period, entry) => isEditMode && openSlotModal(day, period, entry)}
+      onDeleteEntry={async (id) => await deleteEntry(id)}
+      onMoveEntry={async (id, day, period) => {
+        const res = await moveEntry(id, day, period);
+        if (res.hasConflict) alert('ไม่สามารถย้ายได้: ' + res.conflicts[0].message);
+      }}
+      onDropSubject={handleSubjectDrop}
+      filterDept={filterDept}
+      setFilterDept={setFilterDept}
+      teachers={teachers}
+      allClasses={allClasses}
+      draggableSubjects={draggableSubjects}
+      dragTeacherId={selectedTeacherId}
+      mobileHeaderContent={mobileHeaderContent}
+      selectedTeacherId={selectedTeacherId}
+      setSelectedTeacherId={setSelectedTeacherId}
+      jointClassEntryIds={jointClassEntryIds}
+      jointClassPartnersByEntryId={jointClassPartnersByEntryId}
+    />
   );
 }
 

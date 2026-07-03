@@ -1,8 +1,9 @@
 // src/features/grades/components/GradeConfigPanel.tsx
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Settings2, Plus, Trash2, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, AlertCircle } from 'lucide-react';
 import type { GradeWeightConfig, GradeThreshold, GradeLetter } from '@/types/grades';
+import { GPA_GRADE_OPTIONS, formatGpa, gpaStyle } from '@/types/grades';
 import { GLASS } from '@/components/layouts/PortalLayout';
 
 interface Props {
@@ -10,22 +11,6 @@ interface Props {
   onSave: (updated: GradeWeightConfig) => Promise<void>;
   onRecalculate: (updated: GradeWeightConfig) => void;
 }
-
-const GRADE_OPTIONS: GradeLetter[] = ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D', 'F'];
-
-const GRADE_COLORS: Record<GradeLetter, string> = {
-  'A':   '#059669',
-  'B+':  '#0891b2',
-  'B':   '#2563eb',
-  'C+':  '#7c3aed',
-  'C':   '#db2777',
-  'D+':  '#d97706',
-  'D':   '#ea580c',
-  'F':   '#dc2626',
-  '0':   '#94a3b8',
-  'ร':   '#94a3b8',
-  'มส':  '#94a3b8',
-};
 
 export default function GradeConfigPanel({ config, onSave, onRecalculate }: Props) {
   const [local, setLocal] = useState<GradeWeightConfig>({ ...config });
@@ -36,12 +21,6 @@ export default function GradeConfigPanel({ config, onSave, onRecalculate }: Prop
 
   const updateWeight = (field: keyof typeof local.weights, val: number) => {
     const updated = { ...local, weights: { ...local.weights, [field]: val } };
-    setLocal(updated);
-    onRecalculate(updated);
-  };
-
-  const updateMaxScore = (field: keyof typeof local.maxScores, val: number) => {
-    const updated = { ...local, maxScores: { ...local.maxScores, [field]: val } };
     setLocal(updated);
     onRecalculate(updated);
   };
@@ -84,19 +63,11 @@ export default function GradeConfigPanel({ config, onSave, onRecalculate }: Prop
     >
       {/* Header */}
       <div className="flex items-center gap-2">
-        <div className="w-8 h-8 rounded-xl bg-violet-100 flex items-center justify-center">
-          <Settings2 size={15} className="text-violet-600" />
-        </div>
-        <div>
-          <p className="text-[13px] font-black text-slate-800 font-sukhumvit">ตั้งค่าการตัดเกรด</p>
-          <p className="text-[11px] text-slate-400 font-sarabun">กำหนดสัดส่วนคะแนนและเกณฑ์</p>
-        </div>
+        <p className="text-[13px] font-black text-slate-800 font-sukhumvit">ตั้งค่าการตัดเกรด</p>
       </div>
 
       {/* สัดส่วนคะแนน */}
       <div className="flex flex-col gap-3">
-        <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest font-sukhumvit">สัดส่วนคะแนน</p>
-
         {!weightOk && (
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-rose-50 border border-rose-200">
             <AlertCircle size={12} className="text-rose-500 shrink-0" />
@@ -126,16 +97,6 @@ export default function GradeConfigPanel({ config, onSave, onRecalculate }: Prop
                 />
                 <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-sarabun">%</span>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[9px] text-slate-400 font-sarabun">คะแนนเต็ม</label>
-                <input
-                  type="number" min={1}
-                  value={local.maxScores[key]}
-                  onChange={e => updateMaxScore(key, Number(e.target.value))}
-                  className="w-full h-8 rounded-2xl px-3 text-xs font-medium text-center outline-none border font-sarabun"
-                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.3)' }}
-                />
-              </div>
             </div>
           ))}
         </div>
@@ -158,10 +119,10 @@ export default function GradeConfigPanel({ config, onSave, onRecalculate }: Prop
         </div>
       </div>
 
-      {/* เกณฑ์ตัดเกรด */}
+      {/* เกณฑ์ตัดเกรด (GPA 0–4) */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest font-sukhumvit">เกณฑ์ตัดเกรด</p>
+          <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest font-sukhumvit">เกณฑ์ตัดเกรด (GPA 0–4)</p>
           <button onClick={addThreshold}
             className="flex items-center gap-1 text-[10px] font-bold text-violet-600 font-sukhumvit">
             <Plus size={11} /> เพิ่มเกณฑ์
@@ -173,11 +134,13 @@ export default function GradeConfigPanel({ config, onSave, onRecalculate }: Prop
             .sort((a, b) => b.minScore - a.minScore)
             .map((t, idx) => {
               const realIdx = local.thresholds.indexOf(t);
+              const gpa = GPA_GRADE_OPTIONS.find(o => o.letter === t.grade)?.gpa ?? 0;
+              const gStyle = gpaStyle(gpa);
               return (
                 <div key={idx} className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[9px] font-black"
-                    style={{ background: (GRADE_COLORS[t.grade] ?? '#94a3b8') + '22', color: GRADE_COLORS[t.grade] ?? '#94a3b8' }}>
-                    {t.grade}
+                  <div className="w-8 h-6 rounded-lg flex items-center justify-center text-[9px] font-black tabular-nums"
+                    style={{ background: gStyle.bg, color: gStyle.text }}>
+                    {formatGpa(gpa)}
                   </div>
                   <span className="text-[10px] text-slate-400 font-sarabun">คะแนน ≥</span>
                   <input
@@ -191,11 +154,11 @@ export default function GradeConfigPanel({ config, onSave, onRecalculate }: Prop
                   <select
                     value={t.grade}
                     onChange={e => updateThreshold(realIdx, 'grade', e.target.value)}
-                    className="flex-1 h-7 rounded-xl px-2 text-xs font-bold outline-none border font-sukhumvit appearance-none"
-                    style={{ background: 'rgba(255,255,255,0.7)', borderColor: 'rgba(200,180,255,0.4)', color: GRADE_COLORS[t.grade] ?? '#94a3b8' }}
+                    className="flex-1 h-7 rounded-xl px-2 text-xs font-bold outline-none border font-sukhumvit appearance-none tabular-nums"
+                    style={{ background: 'rgba(255,255,255,0.7)', borderColor: 'rgba(200,180,255,0.4)', color: gStyle.text }}
                   >
-                    {GRADE_OPTIONS.map(g => (
-                      <option key={g} value={g}>{g}</option>
+                    {GPA_GRADE_OPTIONS.map(({ letter, gpa: gpaVal }) => (
+                      <option key={letter} value={letter}>{formatGpa(gpaVal)}</option>
                     ))}
                   </select>
                   {local.thresholds.length > 1 && (

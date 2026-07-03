@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Search, Check } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Search, Check, X } from 'lucide-react';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -12,6 +12,16 @@ import type { Department } from '@/types/curriculum';
 
 import type { TeacherProfile } from '@/types/teacher';
 import { useSchoolStructure } from '@/hooks/useSchoolStructure';
+import { toast } from 'sonner';
+import {
+  buildHomeroomTeacherUpdate,
+  isHomeroomTeacherSelected,
+  MAX_HOMEROOM_TEACHERS,
+  resolveHomeroomTeacherIds,
+  resolveHomeroomTeachers,
+  toggleHomeroomTeacherIds,
+} from '@/features/classes/utils/homeroomTeachers';
+import { cn } from '@/lib/utils';
 
 interface ClassFormModalProps {
   open: boolean;
@@ -55,18 +65,31 @@ export default function ClassFormModal({
   const [teacherSearch, setTeacherSearch] = useState('');
   const [showTeacherResults, setShowTeacherResults] = useState(false);
 
+  const activeTeachers = useMemo(
+    () => teachers.filter((t) => t.status === 'active'),
+    [teachers],
+  );
+
+  const selectedHomeroomTeachers = useMemo(
+    () => resolveHomeroomTeachers(form, activeTeachers),
+    [form, activeTeachers],
+  );
+
   useEffect(() => {
     if (!open) return;
     if (editingClass) {
       const { id: _id, createdAt: _ca, ...rest } = editingClass;
-      setForm(rest);
-      const teacher = teachers.find(t => t.id === rest.homeroomTeacherId);
-      setTeacherSearch(teacher?.name || '');
+      const normalizedIds = resolveHomeroomTeacherIds(rest, activeTeachers);
+      setForm({
+        ...rest,
+        homeroomTeacherIds: normalizedIds,
+        homeroomTeacherId: normalizedIds[0] ?? '',
+      });
     } else {
       setForm({ ...DEFAULT, academicYearId: yearId, semester });
-      setTeacherSearch('');
     }
-  }, [open, editingClass, yearId, semester, teachers]);
+    setTeacherSearch('');
+  }, [open, editingClass, yearId, semester, activeTeachers]);
 
   const set = <K extends keyof NewClassRoom>(k: K, v: NewClassRoom[K]) =>
     setForm(prev => ({ ...prev, [k]: v }));
@@ -79,18 +102,33 @@ export default function ClassFormModal({
     set('gradeLevel', grades.length > 0 ? grades[0].shortLabel : '');
   };
 
-  const filteredTeachers = teachers.filter(t =>
+  const filteredTeachers = activeTeachers.filter(t =>
     t.name.toLowerCase().includes(teacherSearch.toLowerCase())
   );
 
-
-  const selectTeacher = (t: TeacherProfile) => {
-    set('homeroomTeacherId', t.id);
-    setTeacherSearch(t.name);
+  const toggleTeacher = (teacher: TeacherProfile) => {
+    const { nextIds, changed, atLimit } = toggleHomeroomTeacherIds(teacher, form, activeTeachers);
+    if (atLimit) {
+      toast.error(`กำหนดครูประจำชั้นได้สูงสุด ${MAX_HOMEROOM_TEACHERS} คน`);
+      return;
+    }
+    if (!changed) return;
+    setForm((prev) => ({
+      ...prev,
+      ...buildHomeroomTeacherUpdate(nextIds),
+    }));
     setShowTeacherResults(false);
   };
 
-  const isValid = form.academicYearId && form.gradeLevel && form.roomNumber.trim() && form.homeroomTeacherId;
+  const removeTeacher = (teacherId: string) => {
+    const nextIds = resolveHomeroomTeacherIds(form, activeTeachers).filter((id) => id !== teacherId);
+    setForm((prev) => ({
+      ...prev,
+      ...buildHomeroomTeacherUpdate(nextIds),
+    }));
+  };
+
+  const isValid = !!(form.academicYearId && form.gradeLevel && form.roomNumber.trim());
   const isEdit = !!editingClass;
 
   const handleSubmit = () => {
@@ -99,7 +137,8 @@ export default function ClassFormModal({
       const generatedClassName = `${form.gradeLevel}/${form.roomNumber}`;
       const finalForm = {
         ...form,
-        className: generatedClassName
+        className: generatedClassName,
+        ...buildHomeroomTeacherUpdate(resolveHomeroomTeacherIds(form, activeTeachers)),
       };
 
       if (isEdit && editingClass) {
@@ -210,9 +249,32 @@ export default function ClassFormModal({
         />
       </div>
 
-      {/* 6. Homeroom Teacher */}
+      {/* 6. Homeroom Teachers */}
       <div className="space-y-1.5 relative">
-        <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">ครูประจำชั้น <span className="text-red-400">*</span></Label>
+        <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+          ครูประจำชั้น <span className="text-slate-400 font-medium normal-case">(สูงสุด {MAX_HOMEROOM_TEACHERS} คน)</span>
+        </Label>
+
+        {selectedHomeroomTeachers.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {selectedHomeroomTeachers.map((t) => (
+              <div
+                key={t.id}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700"
+              >
+                <span>{t.name}</span>
+                <button
+                  type="button"
+                  onClick={() => removeTeacher(t.id)}
+                  className="text-blue-400 hover:text-blue-700"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <Input
@@ -229,16 +291,29 @@ export default function ClassFormModal({
 
         {showTeacherResults && teacherSearch && (
           <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto">
-            {filteredTeachers.map(t => (
-              <button
-                key={t.id}
-                onClick={() => selectTeacher(t)}
-                className="w-full px-4 py-2 text-left hover:bg-blue-50 text-sm flex items-center justify-between"
-              >
-                <span>{t.name}</span>
-                {form.homeroomTeacherId === t.id && <Check size={14} className="text-blue-500" />}
-              </button>
-            ))}
+            {filteredTeachers.length === 0 ? (
+              <p className="px-4 py-3 text-sm text-slate-400">ไม่พบรายชื่อครู</p>
+            ) : (
+              filteredTeachers.map(t => {
+                const isSelected = isHomeroomTeacherSelected(t, form, activeTeachers);
+                const atLimit = selectedHomeroomTeachers.length >= MAX_HOMEROOM_TEACHERS && !isSelected;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={atLimit}
+                    onClick={() => toggleTeacher(t)}
+                    className={cn(
+                      'w-full px-4 py-2 text-left text-sm flex items-center justify-between',
+                      atLimit ? 'opacity-40 cursor-not-allowed' : 'hover:bg-blue-50',
+                    )}
+                  >
+                    <span>{t.name}</span>
+                    {isSelected && <Check size={14} className="text-blue-500" />}
+                  </button>
+                );
+              })
+            )}
           </div>
         )}
       </div>

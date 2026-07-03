@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Bell, ChevronRight, Pin, X } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useAnnouncements } from '@/hooks/useAnnouncements';
-import { WIDGET_GLASS } from '../widgetStyles';
+import { WIDGET_CARD, WIDGET_GLASS } from '../widgetStyles';
+import { WidgetSkeleton } from '../components/WidgetSkeleton';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 
 function formatDate(ts: unknown): string {
@@ -22,57 +23,40 @@ export default function AnnouncementWidget() {
   const { announcements, loading } = useAnnouncements(role ?? undefined);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<any>(null);
 
-  const top3 = useMemo(() => announcements.slice(0, 3), [announcements]);
+  const top1 = useMemo(() => announcements.slice(0, 1), [announcements]);
+
+  if (loading) return <WidgetSkeleton variant="list" />;
 
   return (
     <>
       <div
         style={WIDGET_GLASS}
-        className="rounded-3xl p-5 flex flex-col gap-3 cursor-pointer group w-full"
+        className={`${WIDGET_CARD} cursor-pointer group`}
         onClick={() => navigate('/portal/announcements')}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center">
-              <Bell size={14} />
-            </div>
-            <span className="font-bold text-sm text-slate-700">ประกาศข่าวสาร</span>
-          </div>
-          <ChevronRight size={14} className="text-slate-400 group-hover:text-slate-600 transition-colors" />
+        <div className="flex items-center justify-between shrink-0">
+          <span className="font-bold text-sm text-slate-700 truncate">ประกาศข่าวสาร</span>
+          <ChevronRight size={14} className="text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" />
         </div>
 
-        <div className="flex flex-col gap-2">
-          {loading && (
-            <div className="py-3 flex items-center justify-center">
-              <div className="w-5 h-5 border-2 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
-            </div>
-          )}
-
-          {!loading && top3.length === 0 && (
-            <div className="py-3 text-center text-[11px] text-slate-400 font-bold">
+        <div className="flex flex-col flex-1 min-h-0 justify-center overflow-hidden">
+          {top1.length === 0 && (
+            <p className="text-center text-[11px] text-slate-400 font-bold">
               ยังไม่มีประกาศ
-            </div>
+            </p>
           )}
 
-          {!loading && top3.map((a) => (
-            <div 
-              key={a.id} 
-              className="flex items-start justify-between gap-2 p-1.5 -mx-1.5 rounded-xl hover:bg-white/50 transition-colors"
+          {top1.map((a) => (
+            <div
+              key={a.id}
+              className="min-w-0 p-1 -mx-1 rounded-xl hover:bg-white/50 transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
                 setSelectedAnnouncement(a);
               }}
             >
-              <div className="flex flex-col min-w-0">
-                <span className="text-xs font-semibold text-slate-700 leading-snug break-words">{a.title}</span>
-                <span className="text-[10px] text-slate-400">{formatDate(a.createdAt)}</span>
-              </div>
-              {a.isPinned && (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-600 shrink-0 inline-flex items-center gap-1">
-                  <Pin size={9} />
-                  ปักหมุด
-                </span>
-              )}
+              <p className="text-xs font-semibold text-slate-700 leading-snug line-clamp-2">{a.title}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">{formatDate(a.createdAt)}</p>
             </div>
           ))}
         </div>

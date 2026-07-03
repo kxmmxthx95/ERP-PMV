@@ -1,16 +1,13 @@
 import { onRequest } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
-import { getFirestore } from "firebase-admin/firestore";
 import * as crypto from "crypto";
+import { getAdminFirestore, getFirestoreDatabaseId } from "./getAdminFirestore";
 
 const REGION = "asia-southeast1";
 const LINK_KEYWORD = "PMV";
 const LEGACY_LINK_KEYWORD = "PMV-LINK";
 const LINK_SESSION_TTL_MINUTES = 10;
-const DATABASE_ID = (process.env.FIRESTORE_DATABASE_ID ?? "").trim();
-const db = DATABASE_ID && DATABASE_ID !== "(default)"
-  ? getFirestore(DATABASE_ID)
-  : getFirestore();
+const db = getAdminFirestore();
 
 function getLineSecret(): string {
   return process.env.LINE_CHANNEL_SECRET || "";
@@ -55,7 +52,14 @@ async function createLinkSession(lineUid: string): Promise<string> {
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     expiresAt: admin.firestore.Timestamp.fromMillis(expiresMs),
     source: "line_webhook_v2",
+    databaseId: getFirestoreDatabaseId(),
   }, { merge: true });
+
+  console.log("[lineWebhook] created link session", {
+    databaseId: getFirestoreDatabaseId(),
+    tokenPrefix: token.slice(0, 8),
+    lineUidPrefix: lineUid.slice(0, 8),
+  });
 
   return token;
 }

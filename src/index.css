@@ -2,13 +2,20 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/inter";
+@import "@fontsource/sarabun/400.css";
+@import "@fontsource/sarabun/500.css";
+@import "@fontsource/sarabun/600.css";
+@import "@fontsource/sarabun/700.css";
+@import "./styles/fonts.css";
+@import "./features/questionBank/components/fraction.css";
+@import "./features/questionBank/components/examQuestionContent.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter Variable", "Sukhumvit Set", "Sarabun", sans-serif;
-    --font-sukhumvit: "Sukhumvit Set", "SF Pro Display", sans-serif;
+    --font-sans: "Sukhumvit Set", "Sarabun", "Inter Variable", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-sukhumvit: "Sukhumvit Set", "Sarabun", sans-serif;
     --font-sarabun: 'Sarabun', sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
@@ -51,7 +58,7 @@
 }
 
 :root {
-    --background: oklch(1 0 0);
+    --background: #f5f5f5;
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.145 0 0);
@@ -124,16 +131,46 @@
     @apply border-border outline-ring/50;
     }
   html {
-    @apply font-sans;
+    @apply font-sans bg-background;
+    height: 100%;
+    height: -webkit-fill-available;
     overscroll-behavior: none;
     }
   body {
     @apply bg-background text-foreground;
+    min-height: 100dvh;
+    min-height: -webkit-fill-available;
     overscroll-behavior: none;
+    }
+  #root {
+    min-height: 100dvh;
+    min-height: -webkit-fill-available;
     }
 }
 
 @layer utilities {
+  /* iOS safe area — ใช้คู่กับ viewport-fit=cover */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
+  .px-safe {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .py-safe {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
@@ -153,6 +190,14 @@
 
   sup {
     font-size: 0.65em;
+    vertical-align: super;
+    line-height: 0;
+  }
+
+  /* เลขชี้กำลังแบบเศษส่วน — ไม่ย่อซ้ำ เช่น 27^(2/3) */
+  sup.rte-sup-fraction,
+  sup:has(.rte-fraction-wrap) {
+    font-size: 1em;
     vertical-align: super;
     line-height: 0;
   }

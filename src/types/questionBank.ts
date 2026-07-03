@@ -18,6 +18,8 @@ export interface MultipleChoicePayload {
 export interface EssayPayload {
   rubric: string;
   maxScore: number;
+  /** เฉลยข้อสั้น (PDF exam) — ใช้ตรวจคำตอบอัตโนมัติ */
+  expectedAnswer?: string;
 }
 
 export type QuestionPayload = MultipleChoicePayload | EssayPayload;
@@ -57,8 +59,13 @@ export type NewQuestion = Omit<
 // ไม่เก็บ questionIds array — ใช้ subcollection แทน เพื่อรองรับชุดขนาดใหญ่
 // questionCount update โดย CRUD operations ใน useSetQuestions
 
+export type QuestionSetKind = 'exam' | 'exercise';
+
 export interface QuestionSet {
   id: string;
+  setCode?: string;           // รหัสชุดข้อสอบ auto-gen เช่น 69P04MAMB001
+  /** exam = คลังข้อสอบ (default) · exercise = แบบฝึกหัดใน Grade Book */
+  setKind?: QuestionSetKind;
   title: string;
   description?: string;
   coverImage?: string;
@@ -67,9 +74,23 @@ export interface QuestionSet {
   curriculumYear: string;
   department?: string;
   gradeLevel?: string;
+  /** บริบท Grade Book — ใช้เมื่อ setKind === 'exercise' */
+  academicYearId?: string;
+  semester?: 1 | 2;
+  departmentId?: string;
+  classId?: string;
+  className?: string;
+  subjectId?: string;
+  subjectName?: string;
   questionType?: QuestionType;  // ประเภทข้อสอบหลักของชุดนี้ (optional)
   questionCount: number;        // denormalized counter — อัปเดตทุกครั้ง add/remove
   isPublished: boolean;
+  /** ชุดข้อสอบจากไฟล์ PDF — นักเรียนดู PDF แล้วกรอกคำตอบ */
+  examPdfUrl?: string;
+  examPdfFileName?: string;
+  pdfOptionCount?: 4 | 5 | 6;
+  /** หมายเลขหน้า PDF (1-based) ที่ซ่อนในห้องสอบออนไลน์ — ครูยังดู preview ได้ครบ */
+  examPdfHiddenPages?: number[];
   createdBy: string;
   createdByName?: string;
   createdAt: number;
@@ -103,8 +124,8 @@ export const TYPE_CONFIG: Record<QuestionType, {
   color: string;
   bg: string;
 }> = {
-  multiple_choice: { label: 'ปรนัย (เลือกตอบ)', shortLabel: 'ปรนัย', color: '#6366f1', bg: 'rgba(99,102,241,0.10)' },
-  essay:           { label: 'อัตนัย (เขียนตอบ)', shortLabel: 'อัตนัย', color: '#8b5cf6', bg: 'rgba(139,92,246,0.10)' },
+  multiple_choice: { label: 'ปรนัย (เลือกตอบ)', shortLabel: 'ปรนัย', color: '#2563eb', bg: 'rgba(37,99,235,0.10)' },
+  essay:           { label: 'อัตนัย (เขียนตอบ)', shortLabel: 'อัตนัย', color: '#2563eb', bg: 'rgba(37,99,235,0.10)' },
 };
 
 // Type guards

@@ -24,9 +24,9 @@ export default function TeacherCard({
       initial={{ opacity: 0, scale: 0.9 }}
       animate={{ opacity: 1, scale: 1 }}
       onClick={() => onSelect(teacher.id)}
-      className={`group relative aspect-square rounded-[2rem] cursor-pointer transition-all duration-300 border-2 overflow-hidden ${isSelected
-        ? 'border-blue-500 bg-white shadow-xl z-10'
-        : 'border-white bg-white/95 hover:bg-white hover:shadow-lg hover:border-blue-100'
+      className={`group relative aspect-square rounded-[2rem] cursor-pointer transition-all duration-300 overflow-hidden ${isSelected
+        ? 'border-2 border-blue-500 bg-white shadow-xl z-10'
+        : 'bg-white/95 hover:bg-white hover:shadow-lg'
         }`}
       style={{
         backdropFilter: 'blur(20px)',

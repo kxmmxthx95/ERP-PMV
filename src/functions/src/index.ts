@@ -1,101 +1,37 @@
 import * as functions from "firebase-functions/v1";
 import * as admin from "firebase-admin";
-import { getFirestore } from "firebase-admin/firestore";
-import * as crypto from "crypto";
+import { onDocumentUpdated } from "firebase-functions/v2/firestore";
+import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { getAdminFirestore, getFirestoreDatabaseId } from "./getAdminFirestore";
+import { CALLABLE_CORS, CALLABLE_REGION } from "./callableOptions";
 
 admin.initializeApp();
-const DATABASE_ID = (process.env.FIRESTORE_DATABASE_ID ?? "").trim();
-const db = DATABASE_ID && DATABASE_ID !== "(default)"
-  ? getFirestore(DATABASE_ID)
-  : getFirestore();
+const db = getAdminFirestore();
 
 export { sendLineReport } from "./sendLineReport";
+export { reportDailyScheduled } from "./reportDailyScheduled";
 export { processLineLinkRequest } from "./processLineLinkRequest";
 export { lineWebhook } from "./lineWebhook";
 export { lineWebhookV2 } from "./lineWebhookV2";
-
-type LineLinkSessionDoc = {
-  token?: string;
-  lineUid?: string;
-  status?: string;
-  expiresAt?: unknown;
-  usedBy?: string;
-};
-
-export const completeLineLinkWithToken = functions
-  .region("asia-southeast1")
-  .https.onCall(async (data: any, context: functions.https.CallableContext) => {
-    if (!context.auth) {
-      throw new functions.https.HttpsError("unauthenticated", "Must be authenticated");
-    }
-
-    const token = typeof data?.token === "string" ? data.token.trim() : "";
-    if (!/^[a-fA-F0-9]{24,128}$/.test(token)) {
-      throw new functions.https.HttpsError("invalid-argument", "Invalid link token");
-    }
-
-    const sessionRef = db.collection("line_link_sessions").doc(token);
-    const now = Date.now();
-
-    const result = await db.runTransaction(async (tx) => {
-      const sessionSnap = await tx.get(sessionRef);
-      if (!sessionSnap.exists) {
-        throw new functions.https.HttpsError("not-found", "Link session not found");
-      }
-
-      const session = sessionSnap.data() as LineLinkSessionDoc;
-      const status = String(session.status || "pending");
-      const lineUid = typeof session.lineUid === "string" ? session.lineUid.trim() : "";
-      const usedBy = typeof session.usedBy === "string" ? session.usedBy.trim() : "";
-      const expiresAtMs = tsMillis(session.expiresAt);
-
-      if (!lineUid) {
-        throw new functions.https.HttpsError("failed-precondition", "Session missing lineUid");
-      }
-      if (status !== "pending") {
-        if (status === "used" && usedBy === context.auth!.uid) {
-          return { lineUid };
-        }
-        throw new functions.https.HttpsError("failed-precondition", "Link session already used");
-      }
-      if (expiresAtMs > 0 && now > expiresAtMs) {
-        tx.update(sessionRef, {
-          status: "expired",
-          expiredAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        throw new functions.https.HttpsError("deadline-exceeded", "Link session expired");
-      }
-
-      const userId = context.auth!.uid;
-      const userRef = db.collection("users").doc(userId);
-      const lineReqRef = db.collection("line_link_requests").doc(lineUid);
-
-      tx.set(userRef, {
-        lineToken: lineUid,
-        lineLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-
-      tx.set(lineReqRef, {
-        lineUid,
-        userId,
-        status: "linked",
-        keyword: "PMV",
-        linkedAt: admin.firestore.FieldValue.serverTimestamp(),
-        linkedVia: "line_connect_token",
-      }, { merge: true });
-
-      tx.update(sessionRef, {
-        status: "used",
-        usedBy: userId,
-        usedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      return { lineUid };
-    });
-
-    return { success: true, lineUid: result.lineUid };
-  });
+export { completeLineLinkWithToken } from "./completeLineLinkWithToken";
+export { lineStaffAttendance } from "./lineStaffAttendance";
+export {
+  forceLogoutUser,
+  hardResetUser,
+  forceLogoutAllUsers,
+} from "./userAdminCallables";
+export { resetPasswordByNationalId } from "./authCallables";
+export { qbAnalystChat } from "./qbAnalystChat";
+export { deviceFingerprintAttendance } from "./deviceFingerprintAttendance";
+export { horoscopeDaily } from "./horoscopeDaily";
+export { examPdfBytes } from "./examPdfBytes";
+export {
+  wordGameCreateRoom,
+  wordGameJoinRoom,
+  wordGameStart,
+  wordGameSubmitGuess,
+  wordGameLeaveRoom,
+} from "./wordGame";
 
 const STAFF_MIGRATION_BATCH_LIMIT = 450;
 
@@ -179,6 +115,7 @@ type ExamRoundConfig = {
   questionSetId?: string;
   questionIds?: string[];
   questionSetByQuestionId?: Record<string, string>;
+  questionPoints?: Record<string, number>;
   totalPoints?: number;
 };
 
@@ -191,14 +128,76 @@ type ExamRoomDoc = {
 type QuestionDoc = {
   type?: string;
   points?: number;
+  orderIndex?: number;
   correctOptionId?: string;
   payload?: {
     options?: Array<{
       id?: string;
       isCorrect?: boolean;
     }>;
+    expectedAnswer?: string;
   };
 };
+
+function orderQuestionIdsFromMap(questionMap: Map<string, QuestionDoc>): string[] {
+  return Array.from(questionMap.entries())
+    .sort(([, a], [, b]) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0))
+    .map(([id]) => id);
+}
+
+function resolveEffectiveQuestionIds(
+  selectedQuestionIds: string[],
+  questionMap: Map<string, QuestionDoc>,
+): string[] {
+  if (selectedQuestionIds.length > 0) {
+    const resolved = selectedQuestionIds.filter((qid) => questionMap.has(qid));
+    if (resolved.length > 0) return resolved;
+    if (questionMap.size > 0) return orderQuestionIdsFromMap(questionMap);
+    return [];
+  }
+  return orderQuestionIdsFromMap(questionMap);
+}
+
+function normalizeTextAnswer(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function getExpectedTextAnswer(questionData: QuestionDoc): string | null {
+  const expected = questionData.payload?.expectedAnswer;
+  if (typeof expected === "string" && expected.trim()) {
+    return expected.trim();
+  }
+  return null;
+}
+
+function resolveQuestionPoints(
+  questionId: string,
+  questionData: QuestionDoc,
+  questionPoints: Record<string, number>,
+): number {
+  const overridePts = questionPoints[questionId];
+  const docPts = Number(questionData.points || 0);
+  if (typeof overridePts === "number" && overridePts >= 0) return overridePts;
+  if (docPts > 0) return docPts;
+  return 1;
+}
+
+function addQuestionScore(
+  totalScore: number,
+  questionId: string,
+  questionData: QuestionDoc,
+  questionPoints: Record<string, number>,
+): number {
+  const overridePts = questionPoints[questionId];
+  const docPts = Number(questionData.points || 0);
+  if (typeof overridePts === "number" && overridePts >= 0) {
+    return totalScore + overridePts;
+  }
+  if (docPts > 0) {
+    return totalScore + docPts;
+  }
+  return totalScore + 1;
+}
 
 function normalizeRound(value: unknown): number {
   const n = Number(value);
@@ -208,6 +207,7 @@ function normalizeRound(value: unknown): number {
 function resolveRoundConfig(roomData: ExamRoomDoc, round: number): {
   selectedQuestionIds: string[];
   questionSetByQuestionId: Record<string, string>;
+  questionPoints: Record<string, number>;
   fallbackQuestionSetId?: string;
 } {
   const roundKey = String(round);
@@ -220,6 +220,7 @@ function resolveRoundConfig(roomData: ExamRoomDoc, round: number): {
   return {
     selectedQuestionIds: cfg?.questionIds || roomData.selectedQuestionIds || [],
     questionSetByQuestionId: cfg?.questionSetByQuestionId || {},
+    questionPoints: cfg?.questionPoints || {},
     fallbackQuestionSetId: cfg?.questionSetId || roomData.questionSetId,
   };
 }
@@ -230,8 +231,69 @@ function getCorrectOptionId(questionData: QuestionDoc): string | null {
   }
   const options = questionData.payload?.options;
   if (!Array.isArray(options)) return null;
-  const correct = options.find((opt) => opt?.isCorrect === true && typeof opt.id === "string");
-  return correct?.id?.trim() || null;
+  const correctIndex = options.findIndex((opt) => opt?.isCorrect === true);
+  if (correctIndex < 0) return null;
+  const correct = options[correctIndex];
+  if (typeof correct?.id === "string" && correct.id.trim()) return correct.id.trim();
+  return String(correctIndex + 1);
+}
+
+function legacyOptionKey(id: string): string {
+  const trimmed = id.trim();
+  const legacy = /^opt-(\d+)$/.exec(trimmed);
+  return legacy ? legacy[1] : trimmed;
+}
+
+function isSelectedOptionCorrect(
+  selectedOptionId: string,
+  correctOptionId: string,
+  options: Array<{ id?: string; isCorrect?: boolean }>,
+): boolean {
+  if (!selectedOptionId.trim()) return false;
+  const sel = legacyOptionKey(selectedOptionId);
+  const cor = legacyOptionKey(correctOptionId);
+  if (sel === cor) return true;
+
+  const correctIndex = options.findIndex((opt) => opt?.isCorrect === true);
+  if (correctIndex < 0) return false;
+
+  const selectedIndex = options.findIndex((opt, index) => {
+    const oid = typeof opt.id === "string" && opt.id.trim()
+      ? opt.id.trim()
+      : String(index + 1);
+    return legacyOptionKey(oid) === sel || oid === selectedOptionId.trim();
+  });
+
+  return selectedIndex >= 0 && selectedIndex === correctIndex;
+}
+
+function resolveStudentAnswer(
+  questionId: string,
+  questionIndex: number,
+  effectiveIds: string[],
+  answers: Record<string, string>,
+): string {
+  const direct = answers[questionId];
+  if (typeof direct === "string" && direct.trim()) return direct;
+
+  const ordinalKey = String(questionIndex + 1);
+  const ordinalAnswer = answers[ordinalKey];
+  if (typeof ordinalAnswer === "string" && ordinalAnswer.trim()) return ordinalAnswer;
+
+  const answerKeys = Object.keys(answers).filter((k) => (answers[k] ?? "").trim());
+  const overlap = answerKeys.some((k) => effectiveIds.includes(k));
+  if (!overlap && answerKeys.length === effectiveIds.length) {
+    const sortedKeys = [...answerKeys].sort((a, b) => {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+      return a.localeCompare(b);
+    });
+    const mapped = answers[sortedKeys[questionIndex]];
+    if (typeof mapped === "string") return mapped;
+  }
+
+  return "";
 }
 
 async function autoGradeAttempt(
@@ -240,19 +302,10 @@ async function autoGradeAttempt(
   attemptData: ExamAttemptDoc,
   roomData: ExamRoomDoc,
   attemptId: string,
-): Promise<"graded" | "skipped_essay" | "skipped_no_questions" | "skipped_no_set_ids"> {
+): Promise<"graded" | "partial_graded" | "skipped_no_questions" | "skipped_no_set_ids"> {
   const roomId = typeof attemptData.roomId === "string" ? attemptData.roomId.trim() : "";
   const round = normalizeRound(attemptData.round);
-  const { selectedQuestionIds, questionSetByQuestionId, fallbackQuestionSetId } = resolveRoundConfig(roomData, round);
-
-  if (selectedQuestionIds.length === 0) {
-    await attemptRef.update({
-      score: 0,
-      status: "graded",
-      gradedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    return "graded";
-  }
+  const { selectedQuestionIds, questionSetByQuestionId, questionPoints, fallbackQuestionSetId } = resolveRoundConfig(roomData, round);
 
   const candidateSetIds = new Set<string>();
   selectedQuestionIds.forEach((qid) => {
@@ -280,39 +333,75 @@ async function autoGradeAttempt(
     }),
   );
 
+  const effectiveQuestionIds = resolveEffectiveQuestionIds(selectedQuestionIds, questionMap);
+  if (effectiveQuestionIds.length === 0) {
+    console.warn("[autoGradeAttempt] no questions found for grading", { attemptId, roomId, round });
+    return "skipped_no_questions";
+  }
+
   const answers = (attemptData.answers && typeof attemptData.answers === "object") ? attemptData.answers : {};
   let totalScore = 0;
-  let hasEssayQuestion = false;
+  let autoGradableMaxPoints = 0;
+  let manualEssayCount = 0;
 
-  selectedQuestionIds.forEach((questionId) => {
+  effectiveQuestionIds.forEach((questionId, questionIndex) => {
     const q = questionMap.get(questionId);
     if (!q) return;
+
+    const questionPointsValue = resolveQuestionPoints(questionId, q, questionPoints);
+
     if (q.type === "essay") {
-      hasEssayQuestion = true;
+      const expected = getExpectedTextAnswer(q);
+      if (expected) {
+        autoGradableMaxPoints += questionPointsValue;
+        const studentAnswer = resolveStudentAnswer(questionId, questionIndex, effectiveQuestionIds, answers);
+        if (normalizeTextAnswer(studentAnswer) === normalizeTextAnswer(expected)) {
+          totalScore = addQuestionScore(totalScore, questionId, q, questionPoints);
+        }
+        return;
+      }
+      manualEssayCount += 1;
       return;
     }
+
+    autoGradableMaxPoints += questionPointsValue;
 
     const correctOptionId = getCorrectOptionId(q);
     if (!correctOptionId) return;
 
-    const selectedOptionId = typeof answers[questionId] === "string" ? answers[questionId] : "";
-    if (selectedOptionId && selectedOptionId === correctOptionId) {
-      totalScore += Number(q.points || 0);
+    const selectedOptionId = resolveStudentAnswer(questionId, questionIndex, effectiveQuestionIds, answers);
+    const mcOptions = q.payload?.options ?? [];
+    if (isSelectedOptionCorrect(selectedOptionId, correctOptionId, mcOptions)) {
+      totalScore = addQuestionScore(totalScore, questionId, q, questionPoints);
     }
   });
 
-  if (hasEssayQuestion) {
-    console.info("[autoGradeAttempt] skipped auto-grading due to essay question", {
+  if (manualEssayCount > 0) {
+    console.info("[autoGradeAttempt] partial grading — manual essay pending", {
       attemptId,
       roomId,
       round,
+      manualEssayCount,
+      totalScore,
+      autoGradableMaxPoints,
     });
-    return "skipped_essay";
+    await attemptRef.update({
+      score: totalScore,
+      status: "submitted",
+      objectiveScore: totalScore,
+      objectiveMaxPoints: autoGradableMaxPoints,
+      pendingManualGrading: true,
+      manualEssayCount,
+    });
+    return "partial_graded";
   }
 
   await attemptRef.update({
     score: totalScore,
     status: "graded",
+    objectiveMaxPoints: autoGradableMaxPoints,
+    pendingManualGrading: false,
+    manualEssayCount: 0,
     gradedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
   return "graded";
@@ -320,51 +409,126 @@ async function autoGradeAttempt(
 
 /**
  * Trigger: auto-grade attempt when student submits.
- * Path: exam_rooms/{roomId}/attempts/{attemptId}
- * Flow:
- * - student submits -> status: submitted, score: null
- * - function calculates score from selected question set/IDs
- * - writes score + status: graded back to the same document
+ * Gen2 + database pmv1 — Gen1 triggers only listen to (default) DB.
  */
-export const gradeSubmittedExamAttempt = functions
-  .region("asia-southeast1")
-  .runWith({ timeoutSeconds: 120, memory: "512MB" })
-  .firestore.document("exam_rooms/{roomId}/attempts/{attemptId}")
-  .onUpdate(async (change, context) => {
+export const gradeSubmittedExamAttempt = onDocumentUpdated(
+  {
+    document: "exam_rooms/{roomId}/attempts/{attemptId}",
+    region: CALLABLE_REGION,
+    database: getFirestoreDatabaseId(),
+    timeoutSeconds: 120,
+    memory: "512MiB",
+  },
+  async (event) => {
+    const change = event.data;
+    if (!change) return;
+
     const before = change.before.data() as ExamAttemptDoc;
     const after = change.after.data() as ExamAttemptDoc;
 
-    // Run only when attempt transitions into submitted and has no score yet.
     const beforeStatus = String(before?.status || "");
     const afterStatus = String(after?.status || "");
-    const afterScore = after?.score;
-    const justSubmitted = beforeStatus !== "submitted" && beforeStatus !== "graded" && afterStatus === "submitted";
+    const justSubmitted =
+      beforeStatus !== "submitted"
+      && beforeStatus !== "graded"
+      && afterStatus === "submitted";
 
-    if (!justSubmitted || afterScore !== null) {
-      return null;
+    if (!justSubmitted || typeof after?.score === "number") {
+      return;
     }
 
-    const roomId = String(context.params.roomId);
+    const roomId = String(event.params.roomId);
+    const attemptId = String(event.params.attemptId);
     const roomSnap = await db.collection("exam_rooms").doc(roomId).get();
     if (!roomSnap.exists) {
-      console.warn("[gradeSubmittedExamAttempt] room not found", { attemptId: context.params.attemptId, roomId });
-      return null;
+      console.warn("[gradeSubmittedExamAttempt] room not found", { attemptId, roomId });
+      return;
     }
 
     const roomData = roomSnap.data() as ExamRoomDoc;
-    await autoGradeAttempt(db, change.after.ref, after, roomData, String(context.params.attemptId));
-    return null;
-  });
+    await autoGradeAttempt(db, change.after.ref, after, roomData, attemptId);
+  },
+);
+
+/**
+ * Callable fallback — client invokes after submit (also recovers stuck attempts).
+ */
+export const requestExamAttemptGrading = onCall(
+  {
+    region: CALLABLE_REGION,
+    cors: CALLABLE_CORS,
+    invoker: "public",
+    timeoutSeconds: 120,
+    memory: "512MiB",
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+
+    const roomId = typeof request.data?.roomId === "string" ? request.data.roomId.trim() : "";
+    const attemptId = typeof request.data?.attemptId === "string" ? request.data.attemptId.trim() : "";
+    if (!roomId || !attemptId) {
+      throw new HttpsError("invalid-argument", "roomId and attemptId are required");
+    }
+
+    const attemptRef = db.collection("exam_rooms").doc(roomId).collection("attempts").doc(attemptId);
+    const attemptSnap = await attemptRef.get();
+    if (!attemptSnap.exists) {
+      throw new HttpsError("not-found", "Attempt not found");
+    }
+
+    const attemptData = attemptSnap.data() as ExamAttemptDoc & { studentId?: string; pendingManualGrading?: boolean };
+    if (attemptData.studentId !== request.auth.uid) {
+      throw new HttpsError("permission-denied", "Not your attempt");
+    }
+
+    const status = String(attemptData.status || "");
+    if (status !== "submitted" && status !== "graded") {
+      throw new HttpsError("failed-precondition", "Attempt is not submitted yet");
+    }
+
+    if (typeof attemptData.score === "number" && attemptData.pendingManualGrading !== true) {
+      return { status: "already_graded", score: attemptData.score };
+    }
+
+    const roomSnap = await db.collection("exam_rooms").doc(roomId).get();
+    if (!roomSnap.exists) {
+      throw new HttpsError("not-found", "Exam room not found");
+    }
+
+    const result = await autoGradeAttempt(
+      db,
+      attemptRef,
+      attemptData,
+      roomSnap.data() as ExamRoomDoc,
+      attemptId,
+    );
+    const refreshed = await attemptRef.get();
+    const score = refreshed.data()?.score;
+    return {
+      status: result,
+      score: typeof score === "number" ? score : undefined,
+    };
+  },
+);
 
 /**
  * Trigger: when a round is closed, finalize in-progress attempts and auto-grade.
- * This ensures score summary table updates immediately after teacher closes exam.
+ * Gen2 + database pmv1.
  */
-export const finalizeExamRoundOnClose = functions
-  .region("asia-southeast1")
-  .runWith({ timeoutSeconds: 180, memory: "512MB" })
-  .firestore.document("exam_rooms/{roomId}")
-  .onUpdate(async (change, context) => {
+export const finalizeExamRoundOnClose = onDocumentUpdated(
+  {
+    document: "exam_rooms/{roomId}",
+    region: CALLABLE_REGION,
+    database: getFirestoreDatabaseId(),
+    timeoutSeconds: 180,
+    memory: "512MiB",
+  },
+  async (event) => {
+    const change = event.data;
+    if (!change) return;
+
     const before = change.before.data() as {
       status?: string;
       currentRound?: number;
@@ -378,17 +542,17 @@ export const finalizeExamRoundOnClose = functions
 
     const wasActive = before?.status === "active";
     const isActive = after?.status === "active";
-    if (!wasActive || isActive) return null;
+    if (!wasActive || isActive) return;
 
     const closedRound = normalizeRound(before?.currentRound);
-    const roomId = String(context.params.roomId);
+    const roomId = String(event.params.roomId);
     const attemptsSnap = await db
       .collection("exam_rooms").doc(roomId)
       .collection("attempts")
       .where("round", "==", closedRound)
       .get();
 
-    if (attemptsSnap.empty) return null;
+    if (attemptsSnap.empty) return;
 
     for (const attemptDoc of attemptsSnap.docs) {
       const data = attemptDoc.data() as ExamAttemptDoc;
@@ -407,13 +571,12 @@ export const finalizeExamRoundOnClose = functions
       }
 
       if (String(data.status || "") !== "submitted") continue;
-      if (data.score !== null) continue;
+      if (typeof data.score === "number") continue;
 
       await autoGradeAttempt(db, attemptDoc.ref, data, after, attemptDoc.id);
     }
-
-    return null;
-  });
+  },
+);
 
 /**
  * Callable Function: ตั้ง custom claim (role) บน anonymous user หลัง login
@@ -563,83 +726,40 @@ async function assertAdminCaller(
   }
 }
 
-function generateTempPassword(length = 12): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
-  const bytes = crypto.randomBytes(length);
-  let out = "";
-  for (let i = 0; i < length; i += 1) {
-    out += alphabet[bytes[i] % alphabet.length];
-  }
-  return out;
-}
-
-export const forceLogoutUser = functions
+export const updateAuthUserEmail = functions
   .region("asia-southeast1")
   .https.onCall(async (data: any, context: functions.https.CallableContext) => {
     await assertAdminCaller(context, db);
 
     const userId = typeof data?.userId === "string" ? data.userId.trim() : "";
     const authUid = typeof data?.authUid === "string" && data.authUid.trim() ? data.authUid.trim() : userId;
-    if (!userId || !authUid) {
-      throw new functions.https.HttpsError("invalid-argument", "userId and authUid are required");
+    const email = typeof data?.email === "string" ? data.email.trim().toLowerCase() : "";
+
+    if (!userId || !authUid || !email) {
+      throw new functions.https.HttpsError("invalid-argument", "userId, authUid, and email are required");
     }
 
-    await admin.auth().revokeRefreshTokens(authUid);
-    await db.collection("users").doc(userId).set({
-      forceLogoutAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    return { success: true, userId, authUid };
-  });
-
-export const hardResetUser = functions
-  .region("asia-southeast1")
-  .https.onCall(async (data: any, context: functions.https.CallableContext) => {
-    await assertAdminCaller(context, db);
-
-    const userId = typeof data?.userId === "string" ? data.userId.trim() : "";
-    const authUid = typeof data?.authUid === "string" && data.authUid.trim() ? data.authUid.trim() : userId;
-    if (!userId || !authUid) {
-      throw new functions.https.HttpsError("invalid-argument", "userId and authUid are required");
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      throw new functions.https.HttpsError("invalid-argument", "รูปแบบอีเมลไม่ถูกต้อง");
     }
 
-    const tempPassword = generateTempPassword(12);
+    try {
+      await admin.auth().updateUser(authUid, {
+        email,
+        emailVerified: false,
+      });
+    } catch (error: any) {
+      if (error?.code === "auth/email-already-exists") {
+        throw new functions.https.HttpsError("already-exists", "อีเมลนี้มีในระบบแล้ว");
+      }
+      if (error?.code === "auth/user-not-found") {
+        throw new functions.https.HttpsError("not-found", "ไม่พบบัญชี Firebase Auth ของผู้ใช้นี้");
+      }
+      throw new functions.https.HttpsError("internal", error?.message || "อัปเดตอีเมลใน Firebase Auth ไม่สำเร็จ");
+    }
 
-    await admin.auth().updateUser(authUid, {
-      password: tempPassword,
-      disabled: false,
-    });
-    await admin.auth().revokeRefreshTokens(authUid);
-
-    await db.collection("users").doc(userId).set({
-      mustChangePassword: true,
-      status: "active",
-      hardResetAt: admin.firestore.FieldValue.serverTimestamp(),
-      sessionInvalidatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    return {
-      success: true,
-      userId,
-      authUid,
-      tempPassword,
-    };
-  });
-
-export const forceLogoutAllUsers = functions
-  .region("asia-southeast1")
-  .https.onCall(async (_data: any, context: functions.https.CallableContext) => {
-    await assertAdminCaller(context, db);
-
-    await db.collection("system_config").doc("auth_controls").set({
-      forceLogoutAllAt: admin.firestore.FieldValue.serverTimestamp(),
-      forcedByUid: context.auth?.uid ?? null,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    return { success: true };
+    return { success: true, userId, authUid, email };
   });
 
 /**

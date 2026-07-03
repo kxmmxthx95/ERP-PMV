@@ -1,86 +1,48 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.migrateStaffAttendanceByDate = exports.forceLogoutAllUsers = exports.hardResetUser = exports.forceLogoutUser = exports.setUserClaims = exports.deleteAuthUser = exports.setAnonymousUserRole = exports.finalizeExamRoundOnClose = exports.gradeSubmittedExamAttempt = exports.completeLineLinkWithToken = exports.lineWebhookV2 = exports.lineWebhook = exports.processLineLinkRequest = exports.sendLineReport = void 0;
+exports.migrateStaffAttendanceByDate = exports.updateAuthUserEmail = exports.setUserClaims = exports.deleteAuthUser = exports.setAnonymousUserRole = exports.finalizeExamRoundOnClose = exports.requestExamAttemptGrading = exports.gradeSubmittedExamAttempt = exports.wordGameLeaveRoom = exports.wordGameSubmitGuess = exports.wordGameStart = exports.wordGameJoinRoom = exports.wordGameCreateRoom = exports.examPdfBytes = exports.horoscopeDaily = exports.deviceFingerprintAttendance = exports.qbAnalystChat = exports.resetPasswordByNationalId = exports.forceLogoutAllUsers = exports.hardResetUser = exports.forceLogoutUser = exports.lineStaffAttendance = exports.completeLineLinkWithToken = exports.lineWebhookV2 = exports.lineWebhook = exports.processLineLinkRequest = exports.reportDailyScheduled = exports.sendLineReport = void 0;
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
-const firestore_1 = require("firebase-admin/firestore");
-const crypto = require("crypto");
+const firestore_1 = require("firebase-functions/v2/firestore");
+const https_1 = require("firebase-functions/v2/https");
+const getAdminFirestore_1 = require("./getAdminFirestore");
+const callableOptions_1 = require("./callableOptions");
 admin.initializeApp();
-const DATABASE_ID = (process.env.FIRESTORE_DATABASE_ID ?? "").trim();
-const db = DATABASE_ID && DATABASE_ID !== "(default)"
-    ? (0, firestore_1.getFirestore)(DATABASE_ID)
-    : (0, firestore_1.getFirestore)();
+const db = (0, getAdminFirestore_1.getAdminFirestore)();
 var sendLineReport_1 = require("./sendLineReport");
 Object.defineProperty(exports, "sendLineReport", { enumerable: true, get: function () { return sendLineReport_1.sendLineReport; } });
+var reportDailyScheduled_1 = require("./reportDailyScheduled");
+Object.defineProperty(exports, "reportDailyScheduled", { enumerable: true, get: function () { return reportDailyScheduled_1.reportDailyScheduled; } });
 var processLineLinkRequest_1 = require("./processLineLinkRequest");
 Object.defineProperty(exports, "processLineLinkRequest", { enumerable: true, get: function () { return processLineLinkRequest_1.processLineLinkRequest; } });
 var lineWebhook_1 = require("./lineWebhook");
 Object.defineProperty(exports, "lineWebhook", { enumerable: true, get: function () { return lineWebhook_1.lineWebhook; } });
 var lineWebhookV2_1 = require("./lineWebhookV2");
 Object.defineProperty(exports, "lineWebhookV2", { enumerable: true, get: function () { return lineWebhookV2_1.lineWebhookV2; } });
-exports.completeLineLinkWithToken = functions
-    .region("asia-southeast1")
-    .https.onCall(async (data, context) => {
-    if (!context.auth) {
-        throw new functions.https.HttpsError("unauthenticated", "Must be authenticated");
-    }
-    const token = typeof data?.token === "string" ? data.token.trim() : "";
-    if (!/^[a-fA-F0-9]{24,128}$/.test(token)) {
-        throw new functions.https.HttpsError("invalid-argument", "Invalid link token");
-    }
-    const sessionRef = db.collection("line_link_sessions").doc(token);
-    const now = Date.now();
-    const result = await db.runTransaction(async (tx) => {
-        const sessionSnap = await tx.get(sessionRef);
-        if (!sessionSnap.exists) {
-            throw new functions.https.HttpsError("not-found", "Link session not found");
-        }
-        const session = sessionSnap.data();
-        const status = String(session.status || "pending");
-        const lineUid = typeof session.lineUid === "string" ? session.lineUid.trim() : "";
-        const usedBy = typeof session.usedBy === "string" ? session.usedBy.trim() : "";
-        const expiresAtMs = tsMillis(session.expiresAt);
-        if (!lineUid) {
-            throw new functions.https.HttpsError("failed-precondition", "Session missing lineUid");
-        }
-        if (status !== "pending") {
-            if (status === "used" && usedBy === context.auth.uid) {
-                return { lineUid };
-            }
-            throw new functions.https.HttpsError("failed-precondition", "Link session already used");
-        }
-        if (expiresAtMs > 0 && now > expiresAtMs) {
-            tx.update(sessionRef, {
-                status: "expired",
-                expiredAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-            throw new functions.https.HttpsError("deadline-exceeded", "Link session expired");
-        }
-        const userId = context.auth.uid;
-        const userRef = db.collection("users").doc(userId);
-        const lineReqRef = db.collection("line_link_requests").doc(lineUid);
-        tx.set(userRef, {
-            lineToken: lineUid,
-            lineLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-        tx.set(lineReqRef, {
-            lineUid,
-            userId,
-            status: "linked",
-            keyword: "PMV",
-            linkedAt: admin.firestore.FieldValue.serverTimestamp(),
-            linkedVia: "line_connect_token",
-        }, { merge: true });
-        tx.update(sessionRef, {
-            status: "used",
-            usedBy: userId,
-            usedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        return { lineUid };
-    });
-    return { success: true, lineUid: result.lineUid };
-});
+var completeLineLinkWithToken_1 = require("./completeLineLinkWithToken");
+Object.defineProperty(exports, "completeLineLinkWithToken", { enumerable: true, get: function () { return completeLineLinkWithToken_1.completeLineLinkWithToken; } });
+var lineStaffAttendance_1 = require("./lineStaffAttendance");
+Object.defineProperty(exports, "lineStaffAttendance", { enumerable: true, get: function () { return lineStaffAttendance_1.lineStaffAttendance; } });
+var userAdminCallables_1 = require("./userAdminCallables");
+Object.defineProperty(exports, "forceLogoutUser", { enumerable: true, get: function () { return userAdminCallables_1.forceLogoutUser; } });
+Object.defineProperty(exports, "hardResetUser", { enumerable: true, get: function () { return userAdminCallables_1.hardResetUser; } });
+Object.defineProperty(exports, "forceLogoutAllUsers", { enumerable: true, get: function () { return userAdminCallables_1.forceLogoutAllUsers; } });
+var authCallables_1 = require("./authCallables");
+Object.defineProperty(exports, "resetPasswordByNationalId", { enumerable: true, get: function () { return authCallables_1.resetPasswordByNationalId; } });
+var qbAnalystChat_1 = require("./qbAnalystChat");
+Object.defineProperty(exports, "qbAnalystChat", { enumerable: true, get: function () { return qbAnalystChat_1.qbAnalystChat; } });
+var deviceFingerprintAttendance_1 = require("./deviceFingerprintAttendance");
+Object.defineProperty(exports, "deviceFingerprintAttendance", { enumerable: true, get: function () { return deviceFingerprintAttendance_1.deviceFingerprintAttendance; } });
+var horoscopeDaily_1 = require("./horoscopeDaily");
+Object.defineProperty(exports, "horoscopeDaily", { enumerable: true, get: function () { return horoscopeDaily_1.horoscopeDaily; } });
+var examPdfBytes_1 = require("./examPdfBytes");
+Object.defineProperty(exports, "examPdfBytes", { enumerable: true, get: function () { return examPdfBytes_1.examPdfBytes; } });
+var wordGame_1 = require("./wordGame");
+Object.defineProperty(exports, "wordGameCreateRoom", { enumerable: true, get: function () { return wordGame_1.wordGameCreateRoom; } });
+Object.defineProperty(exports, "wordGameJoinRoom", { enumerable: true, get: function () { return wordGame_1.wordGameJoinRoom; } });
+Object.defineProperty(exports, "wordGameStart", { enumerable: true, get: function () { return wordGame_1.wordGameStart; } });
+Object.defineProperty(exports, "wordGameSubmitGuess", { enumerable: true, get: function () { return wordGame_1.wordGameSubmitGuess; } });
+Object.defineProperty(exports, "wordGameLeaveRoom", { enumerable: true, get: function () { return wordGame_1.wordGameLeaveRoom; } });
 const STAFF_MIGRATION_BATCH_LIMIT = 450;
 function isValidDateStr(value) {
     return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -151,6 +113,52 @@ function pickBestRecord(records) {
         return currentLastTime > bestLastTime ? current : best;
     });
 }
+function orderQuestionIdsFromMap(questionMap) {
+    return Array.from(questionMap.entries())
+        .sort(([, a], [, b]) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0))
+        .map(([id]) => id);
+}
+function resolveEffectiveQuestionIds(selectedQuestionIds, questionMap) {
+    if (selectedQuestionIds.length > 0) {
+        const resolved = selectedQuestionIds.filter((qid) => questionMap.has(qid));
+        if (resolved.length > 0)
+            return resolved;
+        if (questionMap.size > 0)
+            return orderQuestionIdsFromMap(questionMap);
+        return [];
+    }
+    return orderQuestionIdsFromMap(questionMap);
+}
+function normalizeTextAnswer(value) {
+    return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+function getExpectedTextAnswer(questionData) {
+    const expected = questionData.payload?.expectedAnswer;
+    if (typeof expected === "string" && expected.trim()) {
+        return expected.trim();
+    }
+    return null;
+}
+function resolveQuestionPoints(questionId, questionData, questionPoints) {
+    const overridePts = questionPoints[questionId];
+    const docPts = Number(questionData.points || 0);
+    if (typeof overridePts === "number" && overridePts >= 0)
+        return overridePts;
+    if (docPts > 0)
+        return docPts;
+    return 1;
+}
+function addQuestionScore(totalScore, questionId, questionData, questionPoints) {
+    const overridePts = questionPoints[questionId];
+    const docPts = Number(questionData.points || 0);
+    if (typeof overridePts === "number" && overridePts >= 0) {
+        return totalScore + overridePts;
+    }
+    if (docPts > 0) {
+        return totalScore + docPts;
+    }
+    return totalScore + 1;
+}
 function normalizeRound(value) {
     const n = Number(value);
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
@@ -164,6 +172,7 @@ function resolveRoundConfig(roomData, round) {
     return {
         selectedQuestionIds: cfg?.questionIds || roomData.selectedQuestionIds || [],
         questionSetByQuestionId: cfg?.questionSetByQuestionId || {},
+        questionPoints: cfg?.questionPoints || {},
         fallbackQuestionSetId: cfg?.questionSetId || roomData.questionSetId,
     };
 }
@@ -174,21 +183,65 @@ function getCorrectOptionId(questionData) {
     const options = questionData.payload?.options;
     if (!Array.isArray(options))
         return null;
-    const correct = options.find((opt) => opt?.isCorrect === true && typeof opt.id === "string");
-    return correct?.id?.trim() || null;
+    const correctIndex = options.findIndex((opt) => opt?.isCorrect === true);
+    if (correctIndex < 0)
+        return null;
+    const correct = options[correctIndex];
+    if (typeof correct?.id === "string" && correct.id.trim())
+        return correct.id.trim();
+    return String(correctIndex + 1);
+}
+function legacyOptionKey(id) {
+    const trimmed = id.trim();
+    const legacy = /^opt-(\d+)$/.exec(trimmed);
+    return legacy ? legacy[1] : trimmed;
+}
+function isSelectedOptionCorrect(selectedOptionId, correctOptionId, options) {
+    if (!selectedOptionId.trim())
+        return false;
+    const sel = legacyOptionKey(selectedOptionId);
+    const cor = legacyOptionKey(correctOptionId);
+    if (sel === cor)
+        return true;
+    const correctIndex = options.findIndex((opt) => opt?.isCorrect === true);
+    if (correctIndex < 0)
+        return false;
+    const selectedIndex = options.findIndex((opt, index) => {
+        const oid = typeof opt.id === "string" && opt.id.trim()
+            ? opt.id.trim()
+            : String(index + 1);
+        return legacyOptionKey(oid) === sel || oid === selectedOptionId.trim();
+    });
+    return selectedIndex >= 0 && selectedIndex === correctIndex;
+}
+function resolveStudentAnswer(questionId, questionIndex, effectiveIds, answers) {
+    const direct = answers[questionId];
+    if (typeof direct === "string" && direct.trim())
+        return direct;
+    const ordinalKey = String(questionIndex + 1);
+    const ordinalAnswer = answers[ordinalKey];
+    if (typeof ordinalAnswer === "string" && ordinalAnswer.trim())
+        return ordinalAnswer;
+    const answerKeys = Object.keys(answers).filter((k) => (answers[k] ?? "").trim());
+    const overlap = answerKeys.some((k) => effectiveIds.includes(k));
+    if (!overlap && answerKeys.length === effectiveIds.length) {
+        const sortedKeys = [...answerKeys].sort((a, b) => {
+            const na = Number(a);
+            const nb = Number(b);
+            if (Number.isFinite(na) && Number.isFinite(nb))
+                return na - nb;
+            return a.localeCompare(b);
+        });
+        const mapped = answers[sortedKeys[questionIndex]];
+        if (typeof mapped === "string")
+            return mapped;
+    }
+    return "";
 }
 async function autoGradeAttempt(db, attemptRef, attemptData, roomData, attemptId) {
     const roomId = typeof attemptData.roomId === "string" ? attemptData.roomId.trim() : "";
     const round = normalizeRound(attemptData.round);
-    const { selectedQuestionIds, questionSetByQuestionId, fallbackQuestionSetId } = resolveRoundConfig(roomData, round);
-    if (selectedQuestionIds.length === 0) {
-        await attemptRef.update({
-            score: 0,
-            status: "graded",
-            gradedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        return "graded";
-    }
+    const { selectedQuestionIds, questionSetByQuestionId, questionPoints, fallbackQuestionSetId } = resolveRoundConfig(roomData, round);
     const candidateSetIds = new Set();
     selectedQuestionIds.forEach((qid) => {
         const mapped = questionSetByQuestionId[qid];
@@ -210,97 +263,181 @@ async function autoGradeAttempt(db, attemptRef, attemptData, roomData, attemptId
             questionMap.set(docSnap.id, docSnap.data());
         });
     }));
+    const effectiveQuestionIds = resolveEffectiveQuestionIds(selectedQuestionIds, questionMap);
+    if (effectiveQuestionIds.length === 0) {
+        console.warn("[autoGradeAttempt] no questions found for grading", { attemptId, roomId, round });
+        return "skipped_no_questions";
+    }
     const answers = (attemptData.answers && typeof attemptData.answers === "object") ? attemptData.answers : {};
     let totalScore = 0;
-    let hasEssayQuestion = false;
-    selectedQuestionIds.forEach((questionId) => {
+    let autoGradableMaxPoints = 0;
+    let manualEssayCount = 0;
+    effectiveQuestionIds.forEach((questionId, questionIndex) => {
         const q = questionMap.get(questionId);
         if (!q)
             return;
+        const questionPointsValue = resolveQuestionPoints(questionId, q, questionPoints);
         if (q.type === "essay") {
-            hasEssayQuestion = true;
+            const expected = getExpectedTextAnswer(q);
+            if (expected) {
+                autoGradableMaxPoints += questionPointsValue;
+                const studentAnswer = resolveStudentAnswer(questionId, questionIndex, effectiveQuestionIds, answers);
+                if (normalizeTextAnswer(studentAnswer) === normalizeTextAnswer(expected)) {
+                    totalScore = addQuestionScore(totalScore, questionId, q, questionPoints);
+                }
+                return;
+            }
+            manualEssayCount += 1;
             return;
         }
+        autoGradableMaxPoints += questionPointsValue;
         const correctOptionId = getCorrectOptionId(q);
         if (!correctOptionId)
             return;
-        const selectedOptionId = typeof answers[questionId] === "string" ? answers[questionId] : "";
-        if (selectedOptionId && selectedOptionId === correctOptionId) {
-            totalScore += Number(q.points || 0);
+        const selectedOptionId = resolveStudentAnswer(questionId, questionIndex, effectiveQuestionIds, answers);
+        const mcOptions = q.payload?.options ?? [];
+        if (isSelectedOptionCorrect(selectedOptionId, correctOptionId, mcOptions)) {
+            totalScore = addQuestionScore(totalScore, questionId, q, questionPoints);
         }
     });
-    if (hasEssayQuestion) {
-        console.info("[autoGradeAttempt] skipped auto-grading due to essay question", {
+    if (manualEssayCount > 0) {
+        console.info("[autoGradeAttempt] partial grading — manual essay pending", {
             attemptId,
             roomId,
             round,
+            manualEssayCount,
+            totalScore,
+            autoGradableMaxPoints,
         });
-        return "skipped_essay";
+        await attemptRef.update({
+            score: totalScore,
+            status: "submitted",
+            objectiveScore: totalScore,
+            objectiveMaxPoints: autoGradableMaxPoints,
+            pendingManualGrading: true,
+            manualEssayCount,
+        });
+        return "partial_graded";
     }
     await attemptRef.update({
         score: totalScore,
         status: "graded",
+        objectiveMaxPoints: autoGradableMaxPoints,
+        pendingManualGrading: false,
+        manualEssayCount: 0,
         gradedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     return "graded";
 }
 /**
  * Trigger: auto-grade attempt when student submits.
- * Path: exam_rooms/{roomId}/attempts/{attemptId}
- * Flow:
- * - student submits -> status: submitted, score: null
- * - function calculates score from selected question set/IDs
- * - writes score + status: graded back to the same document
+ * Gen2 + database pmv1 — Gen1 triggers only listen to (default) DB.
  */
-exports.gradeSubmittedExamAttempt = functions
-    .region("asia-southeast1")
-    .runWith({ timeoutSeconds: 120, memory: "512MB" })
-    .firestore.document("exam_rooms/{roomId}/attempts/{attemptId}")
-    .onUpdate(async (change, context) => {
+exports.gradeSubmittedExamAttempt = (0, firestore_1.onDocumentUpdated)({
+    document: "exam_rooms/{roomId}/attempts/{attemptId}",
+    region: callableOptions_1.CALLABLE_REGION,
+    database: (0, getAdminFirestore_1.getFirestoreDatabaseId)(),
+    timeoutSeconds: 120,
+    memory: "512MiB",
+}, async (event) => {
+    const change = event.data;
+    if (!change)
+        return;
     const before = change.before.data();
     const after = change.after.data();
-    // Run only when attempt transitions into submitted and has no score yet.
     const beforeStatus = String(before?.status || "");
     const afterStatus = String(after?.status || "");
-    const afterScore = after?.score;
-    const justSubmitted = beforeStatus !== "submitted" && beforeStatus !== "graded" && afterStatus === "submitted";
-    if (!justSubmitted || afterScore !== null) {
-        return null;
+    const justSubmitted = beforeStatus !== "submitted"
+        && beforeStatus !== "graded"
+        && afterStatus === "submitted";
+    if (!justSubmitted || typeof after?.score === "number") {
+        return;
     }
-    const roomId = String(context.params.roomId);
+    const roomId = String(event.params.roomId);
+    const attemptId = String(event.params.attemptId);
     const roomSnap = await db.collection("exam_rooms").doc(roomId).get();
     if (!roomSnap.exists) {
-        console.warn("[gradeSubmittedExamAttempt] room not found", { attemptId: context.params.attemptId, roomId });
-        return null;
+        console.warn("[gradeSubmittedExamAttempt] room not found", { attemptId, roomId });
+        return;
     }
     const roomData = roomSnap.data();
-    await autoGradeAttempt(db, change.after.ref, after, roomData, String(context.params.attemptId));
-    return null;
+    await autoGradeAttempt(db, change.after.ref, after, roomData, attemptId);
+});
+/**
+ * Callable fallback — client invokes after submit (also recovers stuck attempts).
+ */
+exports.requestExamAttemptGrading = (0, https_1.onCall)({
+    region: callableOptions_1.CALLABLE_REGION,
+    cors: callableOptions_1.CALLABLE_CORS,
+    invoker: "public",
+    timeoutSeconds: 120,
+    memory: "512MiB",
+}, async (request) => {
+    if (!request.auth?.uid) {
+        throw new https_1.HttpsError("unauthenticated", "Must be signed in");
+    }
+    const roomId = typeof request.data?.roomId === "string" ? request.data.roomId.trim() : "";
+    const attemptId = typeof request.data?.attemptId === "string" ? request.data.attemptId.trim() : "";
+    if (!roomId || !attemptId) {
+        throw new https_1.HttpsError("invalid-argument", "roomId and attemptId are required");
+    }
+    const attemptRef = db.collection("exam_rooms").doc(roomId).collection("attempts").doc(attemptId);
+    const attemptSnap = await attemptRef.get();
+    if (!attemptSnap.exists) {
+        throw new https_1.HttpsError("not-found", "Attempt not found");
+    }
+    const attemptData = attemptSnap.data();
+    if (attemptData.studentId !== request.auth.uid) {
+        throw new https_1.HttpsError("permission-denied", "Not your attempt");
+    }
+    const status = String(attemptData.status || "");
+    if (status !== "submitted" && status !== "graded") {
+        throw new https_1.HttpsError("failed-precondition", "Attempt is not submitted yet");
+    }
+    if (typeof attemptData.score === "number" && attemptData.pendingManualGrading !== true) {
+        return { status: "already_graded", score: attemptData.score };
+    }
+    const roomSnap = await db.collection("exam_rooms").doc(roomId).get();
+    if (!roomSnap.exists) {
+        throw new https_1.HttpsError("not-found", "Exam room not found");
+    }
+    const result = await autoGradeAttempt(db, attemptRef, attemptData, roomSnap.data(), attemptId);
+    const refreshed = await attemptRef.get();
+    const score = refreshed.data()?.score;
+    return {
+        status: result,
+        score: typeof score === "number" ? score : undefined,
+    };
 });
 /**
  * Trigger: when a round is closed, finalize in-progress attempts and auto-grade.
- * This ensures score summary table updates immediately after teacher closes exam.
+ * Gen2 + database pmv1.
  */
-exports.finalizeExamRoundOnClose = functions
-    .region("asia-southeast1")
-    .runWith({ timeoutSeconds: 180, memory: "512MB" })
-    .firestore.document("exam_rooms/{roomId}")
-    .onUpdate(async (change, context) => {
+exports.finalizeExamRoundOnClose = (0, firestore_1.onDocumentUpdated)({
+    document: "exam_rooms/{roomId}",
+    region: callableOptions_1.CALLABLE_REGION,
+    database: (0, getAdminFirestore_1.getFirestoreDatabaseId)(),
+    timeoutSeconds: 180,
+    memory: "512MiB",
+}, async (event) => {
+    const change = event.data;
+    if (!change)
+        return;
     const before = change.before.data();
     const after = change.after.data();
     const wasActive = before?.status === "active";
     const isActive = after?.status === "active";
     if (!wasActive || isActive)
-        return null;
+        return;
     const closedRound = normalizeRound(before?.currentRound);
-    const roomId = String(context.params.roomId);
+    const roomId = String(event.params.roomId);
     const attemptsSnap = await db
         .collection("exam_rooms").doc(roomId)
         .collection("attempts")
         .where("round", "==", closedRound)
         .get();
     if (attemptsSnap.empty)
-        return null;
+        return;
     for (const attemptDoc of attemptsSnap.docs) {
         const data = attemptDoc.data();
         const status = String(data.status || "");
@@ -317,11 +454,10 @@ exports.finalizeExamRoundOnClose = functions
         }
         if (String(data.status || "") !== "submitted")
             continue;
-        if (data.score !== null)
+        if (typeof data.score === "number")
             continue;
         await autoGradeAttempt(db, attemptDoc.ref, data, after, attemptDoc.id);
     }
-    return null;
 });
 /**
  * Callable Function: ตั้ง custom claim (role) บน anonymous user หลัง login
@@ -448,70 +584,36 @@ async function assertAdminCaller(context, db) {
         throw new functions.https.HttpsError("permission-denied", "Only admin can perform this action");
     }
 }
-function generateTempPassword(length = 12) {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
-    const bytes = crypto.randomBytes(length);
-    let out = "";
-    for (let i = 0; i < length; i += 1) {
-        out += alphabet[bytes[i] % alphabet.length];
-    }
-    return out;
-}
-exports.forceLogoutUser = functions
+exports.updateAuthUserEmail = functions
     .region("asia-southeast1")
     .https.onCall(async (data, context) => {
     await assertAdminCaller(context, db);
     const userId = typeof data?.userId === "string" ? data.userId.trim() : "";
     const authUid = typeof data?.authUid === "string" && data.authUid.trim() ? data.authUid.trim() : userId;
-    if (!userId || !authUid) {
-        throw new functions.https.HttpsError("invalid-argument", "userId and authUid are required");
+    const email = typeof data?.email === "string" ? data.email.trim().toLowerCase() : "";
+    if (!userId || !authUid || !email) {
+        throw new functions.https.HttpsError("invalid-argument", "userId, authUid, and email are required");
     }
-    await admin.auth().revokeRefreshTokens(authUid);
-    await db.collection("users").doc(userId).set({
-        forceLogoutAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    return { success: true, userId, authUid };
-});
-exports.hardResetUser = functions
-    .region("asia-southeast1")
-    .https.onCall(async (data, context) => {
-    await assertAdminCaller(context, db);
-    const userId = typeof data?.userId === "string" ? data.userId.trim() : "";
-    const authUid = typeof data?.authUid === "string" && data.authUid.trim() ? data.authUid.trim() : userId;
-    if (!userId || !authUid) {
-        throw new functions.https.HttpsError("invalid-argument", "userId and authUid are required");
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+        throw new functions.https.HttpsError("invalid-argument", "รูปแบบอีเมลไม่ถูกต้อง");
     }
-    const tempPassword = generateTempPassword(12);
-    await admin.auth().updateUser(authUid, {
-        password: tempPassword,
-        disabled: false,
-    });
-    await admin.auth().revokeRefreshTokens(authUid);
-    await db.collection("users").doc(userId).set({
-        mustChangePassword: true,
-        status: "active",
-        hardResetAt: admin.firestore.FieldValue.serverTimestamp(),
-        sessionInvalidatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    return {
-        success: true,
-        userId,
-        authUid,
-        tempPassword,
-    };
-});
-exports.forceLogoutAllUsers = functions
-    .region("asia-southeast1")
-    .https.onCall(async (_data, context) => {
-    await assertAdminCaller(context, db);
-    await db.collection("system_config").doc("auth_controls").set({
-        forceLogoutAllAt: admin.firestore.FieldValue.serverTimestamp(),
-        forcedByUid: context.auth?.uid ?? null,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    return { success: true };
+    try {
+        await admin.auth().updateUser(authUid, {
+            email,
+            emailVerified: false,
+        });
+    }
+    catch (error) {
+        if (error?.code === "auth/email-already-exists") {
+            throw new functions.https.HttpsError("already-exists", "อีเมลนี้มีในระบบแล้ว");
+        }
+        if (error?.code === "auth/user-not-found") {
+            throw new functions.https.HttpsError("not-found", "ไม่พบบัญชี Firebase Auth ของผู้ใช้นี้");
+        }
+        throw new functions.https.HttpsError("internal", error?.message || "อัปเดตอีเมลใน Firebase Auth ไม่สำเร็จ");
+    }
+    return { success: true, userId, authUid, email };
 });
 /**
  * Callable Function: Migrate legacy staff_attendance -> staff_attendance_by_date/{date}/entries/{userId}

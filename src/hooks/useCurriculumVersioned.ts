@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, writeBatch, getDocs, where, query,
+  onSnapshot, writeBatch, getDocs, where, query, orderBy,
 } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { db } from '@/lib/firebase';
@@ -19,45 +19,63 @@ export function useCurriculumVersioned() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadingVersionIds, setLoadingVersionIds] = useState<Set<string>>(new Set());
   const courseCacheRef = useRef<Set<string>>(new Set()); // Track which versions have been loaded
+  const courseDataCacheRef = useRef<Record<string, CurriculumCourse[]>>({});
 
-  // ── Real-time listener on curriculums collection (versions only) ──────────
-  // Only for admin/sysadmin; others don't have access to curriculum management
+  // ── Load curriculum versions ──────────────────────────────────────────────
+  // admin/sysadmin: real-time listener
+  // all other authenticated roles: one-shot getDocs (quota-friendly, read-only view)
   useEffect(() => {
-    const isAdmin = role === 'admin' || role === 'sysadmin';
-
-    if (!isAdmin) {
+    if (!role) {
       setIsLoading(false);
       return;
     }
 
-    const unsubVersions = onSnapshot(
-      query(
-        collection(db, 'curriculums'),
-        where('isDeleted', '!=', true)
-      ),
-      (snap) => {
-        const vers: CurriculumVersion[] = snap.docs.map(d => ({
-          id: d.id,
-          ...(d.data() as Omit<CurriculumVersion, 'id'>),
-        }));
-        setVersions(vers.sort((a, b) => (b.year ?? 0) - (a.year ?? 0)));
-        setIsLoading(false);
-      },
-      (err) => {
-        console.error('curriculums listener error:', err);
-        setIsLoading(false);
-      }
+    const isAdmin = role === 'admin' || role === 'sysadmin';
+
+    const q = query(
+      collection(db, 'curriculums'),
+      where('isDeleted', '!=', true),
+      orderBy('isDeleted'),
     );
 
-    return () => unsubVersions();
+    if (isAdmin) {
+      const unsubVersions = onSnapshot(q,
+        (snap) => {
+          const vers: CurriculumVersion[] = snap.docs.map(d => ({
+            id: d.id,
+            ...(d.data() as Omit<CurriculumVersion, 'id'>),
+          }));
+          setVersions(vers.sort((a, b) => (b.year ?? 0) - (a.year ?? 0)));
+          setIsLoading(false);
+        },
+        (err) => {
+          console.error('curriculums listener error:', err);
+          setIsLoading(false);
+        }
+      );
+      return () => unsubVersions();
+    } else {
+      // non-admin roles: one-shot fetch, no real-time updates needed
+      getDocs(q)
+        .then((snap) => {
+          const vers: CurriculumVersion[] = snap.docs.map(d => ({
+            id: d.id,
+            ...(d.data() as Omit<CurriculumVersion, 'id'>),
+          }));
+          setVersions(vers.sort((a, b) => (b.year ?? 0) - (a.year ?? 0)));
+          setIsLoading(false);
+        })
+        .catch((err) => {
+          console.error('curriculums fetch error:', err);
+          setIsLoading(false);
+        });
+    }
   }, [role]);
 
   // ── Lazy load courses for a specific version (on-demand) ──────────────────
-  const loadCoursesForVersion = useCallback(async (versionId: string) => {
-    // If already cached, skip
-    if (courseCacheRef.current.has(versionId) || coursesByVersion[versionId]) {
-      return;
-    }
+  const loadCoursesForVersion = useCallback(async (versionId: string): Promise<CurriculumCourse[]> => {
+    const cached = courseDataCacheRef.current[versionId] ?? coursesByVersion[versionId];
+    if (cached) return cached;
 
     setLoadingVersionIds(prev => new Set(prev).add(versionId));
 
@@ -70,14 +88,17 @@ export function useCurriculumVersioned() {
         ...(cd.data() as Omit<CurriculumCourse, 'id'>),
       }));
 
+      courseDataCacheRef.current[versionId] = courses;
       setCoursesByVersion(prev => ({
         ...prev,
         [versionId]: courses,
       }));
 
       courseCacheRef.current.add(versionId);
+      return courses;
     } catch (err) {
       console.error(`Failed to load courses for version ${versionId}:`, err);
+      return [];
     } finally {
       setLoadingVersionIds(prev => {
         const next = new Set(prev);
@@ -98,6 +119,7 @@ export function useCurriculumVersioned() {
     const payload: Record<string, unknown> = {
       ...data,
       allowEdit: true,
+      isDeleted: false,
       assignedGrades: data.assignedGrades ?? [],
       createdAt: new Date().toISOString(),
     };
@@ -261,8 +283,11 @@ export function useCurriculumVersioned() {
     return { count: courses.length, totalCredit, basic, additional, activity };
   }, [coursesByVersion]);
 
+  const isReadOnly = role !== 'admin' && role !== 'sysadmin';
+
   return {
     isLoading,
+    isReadOnly,
     versions,
     coursesByVersion,
     loadingVersionIds,

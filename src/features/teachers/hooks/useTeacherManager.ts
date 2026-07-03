@@ -1,38 +1,17 @@
-import { useState, useMemo, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { useMemo, useSyncExternalStore } from 'react';
+import { collection, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { sessionCache } from '@/lib/sessionCache';
+import { invalidateTeachersCache, teachersCollectionStore } from '@/lib/firestoreShared/teachersStore';
 import type { TeacherProfile, NewTeacherProfile, TeacherLoadInfo } from '@/types/teacher';
 import { useCurriculum } from '@/hooks/useCurriculum';
 
-// ── Hook ──────────────────────────────────────────────────────────────────────
-const CACHE_TEACHERS = 'cache:teacher-manager:teachers';
-
 export function useTeacherManager() {
-  const [teachers, setTeachers] = useState<TeacherProfile[]>(
-    () => sessionCache.get<TeacherProfile[]>(CACHE_TEACHERS) ?? []
+  const teachers = useSyncExternalStore(
+    teachersCollectionStore.subscribe,
+    teachersCollectionStore.getSnapshot,
+    teachersCollectionStore.getSnapshot,
   );
   const curriculum = useCurriculum();
-
-  // ── ดึงข้อมูล Real-time จาก Firebase ──────────────────────────────────────────
-  useEffect(() => {
-    const cached = sessionCache.get<TeacherProfile[]>(CACHE_TEACHERS);
-    if (cached) return;
-
-    let cancelled = false;
-    const unsub = onSnapshot(collection(db, 'teachers'),
-      (snap) => {
-        if (cancelled) return;
-        const next = snap.docs.map(d => ({ id: d.id, ...d.data() } as TeacherProfile));
-        setTeachers(next);
-        sessionCache.set(CACHE_TEACHERS, next);
-      },
-      () => {
-        // Silent fail for permissions
-      }
-    );
-    return () => { cancelled = true; unsub(); };
-  }, []);
 
   // ── CRUD ──────────────────────────────────────────────────────────────────────
 
@@ -51,18 +30,18 @@ export function useTeacherManager() {
     });
 
     const docRef = await addDoc(collection(db, 'teachers'), newTeacherData);
-    sessionCache.invalidate(CACHE_TEACHERS);
+    invalidateTeachersCache();
     return { id: docRef.id, ...newTeacherData } as TeacherProfile;
   };
 
   const updateTeacher = async (id: string, data: Partial<TeacherProfile>) => {
     await updateDoc(doc(db, 'teachers', id), data as any);
-    sessionCache.invalidate(CACHE_TEACHERS);
+    invalidateTeachersCache();
   };
 
   const deleteTeacher = async (id: string) => {
     await deleteDoc(doc(db, 'teachers', id));
-    sessionCache.invalidate(CACHE_TEACHERS);
+    invalidateTeachersCache();
   };
 
   const toggleTeacherStatus = async (id: string) => {
@@ -71,7 +50,7 @@ export function useTeacherManager() {
       await updateDoc(doc(db, 'teachers', id), {
         status: teacher.status === 'active' ? 'inactive' : 'active'
       });
-      sessionCache.invalidate(CACHE_TEACHERS);
+      invalidateTeachersCache();
     }
   };
 
@@ -83,7 +62,7 @@ export function useTeacherManager() {
     await updateDoc(doc(db, 'teachers', teacherId), {
       teachingSubjectIds: [...teacher.teachingSubjectIds, subjectId]
     });
-    sessionCache.invalidate(CACHE_TEACHERS);
+    invalidateTeachersCache();
   };
 
   const unassignSubject = async (teacherId: string, subjectId: string) => {
@@ -92,7 +71,7 @@ export function useTeacherManager() {
     await updateDoc(doc(db, 'teachers', teacherId), {
       teachingSubjectIds: teacher.teachingSubjectIds.filter(id => id !== subjectId)
     });
-    sessionCache.invalidate(CACHE_TEACHERS);
+    invalidateTeachersCache();
   };
 
   const toggleSubjectAssignment = async (teacherId: string, subjectId: string) => {

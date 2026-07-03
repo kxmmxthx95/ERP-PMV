@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { parseISO, subDays, format } from 'date-fns';
 import type { CalendarEvent, GoogleCalendarListResponse, GoogleCalendarEvent } from '@/types/calendar';
 
@@ -8,8 +8,8 @@ const CALENDAR_ID = 'th.th%23holiday%40group.v.calendar.google.com';
 const BASE_URL = `https://www.googleapis.com/calendar/v3/calendars/${CALENDAR_ID}/events`;
 const API_KEY = import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY as string | undefined;
 
-// In-memory cache: year → events
 const cache = new Map<number, CalendarEvent[]>();
+const inflight = new Map<number, Promise<CalendarEvent[]>>();
 
 export interface UseThaiHolidaysResult {
   holidays: CalendarEvent[];
@@ -39,13 +39,13 @@ function transformEvent(item: GoogleCalendarEvent): CalendarEvent {
   };
 }
 
-async function fetchAllPages(url: URL, signal: AbortSignal): Promise<GoogleCalendarEvent[]> {
+async function fetchAllPages(url: URL): Promise<GoogleCalendarEvent[]> {
   const items: GoogleCalendarEvent[] = [];
   let pageToken: string | undefined;
 
   do {
     if (pageToken) url.searchParams.set('pageToken', pageToken);
-    const res = await fetch(url.toString(), { signal });
+    const res = await fetch(url.toString());
     if (!res.ok) throw new Error(`Google Calendar API error: ${res.status} ${res.statusText}`);
     const data = await res.json() as GoogleCalendarListResponse;
     items.push(...data.items);
@@ -55,11 +55,51 @@ async function fetchAllPages(url: URL, signal: AbortSignal): Promise<GoogleCalen
   return items;
 }
 
+function buildEventsUrl(year: number): URL {
+  const url = new URL(BASE_URL);
+  url.searchParams.set('key', API_KEY!);
+  url.searchParams.set('timeMin', `${year}-01-01T00:00:00Z`);
+  url.searchParams.set('timeMax', `${year}-12-31T23:59:59Z`);
+  url.searchParams.set('singleEvents', 'true');
+  url.searchParams.set('orderBy', 'startTime');
+  url.searchParams.set('maxResults', '100');
+  return url;
+}
+
+/** โหลดวันหyุดปีเดียวกันแค่ครั้งเดียว — แชร์ cache + in-flight ระหว่าง hook instances */
+function loadThaiHolidaysForYear(year: number): Promise<CalendarEvent[]> {
+  const cached = cache.get(year);
+  if (cached) return Promise.resolve(cached);
+
+  const existing = inflight.get(year);
+  if (existing) return existing;
+
+  if (!API_KEY) {
+    return Promise.reject(new Error('ยังไม่ได้ตั้งค่า VITE_GOOGLE_CALENDAR_API_KEY'));
+  }
+
+  const promise = fetchAllPages(buildEventsUrl(year))
+    .then((items) => {
+      const events = items.map(transformEvent);
+      cache.set(year, events);
+      inflight.delete(year);
+      return events;
+    })
+    .catch((err) => {
+      inflight.delete(year);
+      throw err;
+    });
+
+  inflight.set(year, promise);
+  return promise;
+}
+
 export function useThaiHolidays(year: number): UseThaiHolidaysResult {
   const [holidays, setHolidays] = useState<CalendarEvent[]>(() => cache.get(year) ?? []);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const [isLoading, setIsLoading] = useState(() => !cache.has(year) && !!API_KEY);
+  const [error, setError] = useState<string | null>(() =>
+    !API_KEY ? 'ยังไม่ได้ตั้งค่า VITE_GOOGLE_CALENDAR_API_KEY' : null,
+  );
 
   useEffect(() => {
     if (!API_KEY) {
@@ -70,37 +110,30 @@ export function useThaiHolidays(year: number): UseThaiHolidaysResult {
     if (cache.has(year)) {
       setHolidays(cache.get(year)!);
       setError(null);
+      setIsLoading(false);
       return;
     }
 
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
+    let cancelled = false;
     setIsLoading(true);
     setError(null);
 
-    const url = new URL(BASE_URL);
-    url.searchParams.set('key', API_KEY);
-    url.searchParams.set('timeMin', `${year}-01-01T00:00:00Z`);
-    url.searchParams.set('timeMax', `${year}-12-31T23:59:59Z`);
-    url.searchParams.set('singleEvents', 'true');
-    url.searchParams.set('orderBy', 'startTime');
-    url.searchParams.set('maxResults', '100');
-
-    fetchAllPages(url, controller.signal)
-      .then(items => {
-        const events = items.map(transformEvent);
-        cache.set(year, events);
+    void loadThaiHolidaysForYear(year)
+      .then((events) => {
+        if (cancelled) return;
         setHolidays(events);
       })
-      .catch(err => {
-        if (err instanceof Error && err.name === 'AbortError') return;
+      .catch((err) => {
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : 'ไม่สามารถโหลดวันหยุดได้');
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
 
-    return () => controller.abort();
+    return () => {
+      cancelled = true;
+    };
   }, [year]);
 
   return { holidays, isLoading, error, year };

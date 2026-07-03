@@ -1,43 +1,52 @@
-import { useCallback } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import type { AcademicYear } from '@/types/settings';
+
+export const ACTIVE_ACADEMIC_YEAR_EVENT = 'activeAcademicYearUpdated';
+
+export function notifyActiveAcademicYearChanged() {
+  window.dispatchEvent(new Event(ACTIVE_ACADEMIC_YEAR_EVENT));
+}
+
+function readActiveYearFromStorage(): AcademicYear | null {
+  try {
+    const stored = localStorage.getItem('activeAcademicYear');
+    if (stored) return JSON.parse(stored) as AcademicYear;
+
+    const now = new Date();
+    const currentYearBE = now.getFullYear() + 543;
+    return {
+      id: currentYearBE.toString(),
+      year: currentYearBE.toString(),
+      activeSemester: 1,
+      startDate: '',
+      endDate: '',
+      status: 'active',
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Hook to access the currently active academic year and semester.
  *
- * This hook retrieves the active academic year from localStorage (set by SysAdminSettings).
- * The active year and semester are used as primary filters across the entire app:
- * - Grades queries (all grade entries are filtered by year + semester)
- * - Attendance records (filtered by year + semester)
- * - Schedules (filtered by year + semester)
- *
- * @returns {object} { activeYear, activeSemester, isLoaded }
- *   - activeYear: Current academic year object or null if not set
- *   - activeSemester: Current semester (1, 2, or 3) or null
- *   - isLoaded: Whether the data has been loaded from localStorage
+ * Sync จาก Firestore (`settings/academic_year`) หลัง login แล้วจะ dispatch
+ * ACTIVE_ACADEMIC_YEAR_EVENT — hook นี้จะ re-read localStorage อัตโนมัติ
  */
 export function useActiveAcademicYear() {
-  const getActiveYear = useCallback((): AcademicYear | null => {
-    try {
-      const stored = localStorage.getItem('activeAcademicYear');
-      if (stored) return JSON.parse(stored);
-      
-      // Fallback to current year if nothing in localStorage
-      const now = new Date();
-      const currentYearBE = now.getFullYear() + 543;
-      return {
-        id: 'default',
-        year: currentYearBE.toString(),
-        activeSemester: 1,
-        startDate: '',
-        endDate: '',
-        status: 'active'
-      };
-    } catch {
-      return null;
-    }
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setRevision((v) => v + 1);
+    window.addEventListener(ACTIVE_ACADEMIC_YEAR_EVENT, bump);
+    window.addEventListener('storage', bump);
+    return () => {
+      window.removeEventListener(ACTIVE_ACADEMIC_YEAR_EVENT, bump);
+      window.removeEventListener('storage', bump);
+    };
   }, []);
 
-  const activeYear = getActiveYear();
+  const activeYear = useMemo(() => readActiveYearFromStorage(), [revision]);
 
   return {
     activeYear,
@@ -59,7 +68,7 @@ export function setActiveAcademicYear(year: AcademicYear | string | null) {
       activeSemester: 1,
       startDate: '',
       endDate: '',
-      status: 'active'
+      status: 'active',
     };
     localStorage.setItem('activeAcademicYear', JSON.stringify(academicYear));
   } else if (year) {
@@ -67,6 +76,6 @@ export function setActiveAcademicYear(year: AcademicYear | string | null) {
   } else {
     localStorage.removeItem('activeAcademicYear');
   }
-  // Trigger a global reload to refresh all data
+  notifyActiveAcademicYearChanged();
   window.location.reload();
 }

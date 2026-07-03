@@ -47,6 +47,77 @@ export const DEFAULT_THRESHOLDS: GradeThreshold[] = [
 export const DEFAULT_WEIGHTS = { classwork: 30, midterm: 30, final: 40 };
 export const DEFAULT_MAX_SCORES = { classwork: 100, midterm: 100, final: 100 };
 
+/** Thai 0–4 GPA mapping (used for display and grade calculation). */
+export const GRADE_LETTER_TO_GPA: Record<GradeLetter, number> = {
+  'A': 4,
+  'B+': 3.5,
+  'B': 3,
+  'C+': 2.5,
+  'C': 2,
+  'D+': 1.5,
+  'D': 1,
+  'F': 0,
+  '0': 0,
+  'ร': 0,
+  'มส': 0,
+};
+
+export const GPA_GRADE_OPTIONS: { letter: GradeLetter; gpa: number }[] = [
+  { letter: 'A', gpa: 4 },
+  { letter: 'B+', gpa: 3.5 },
+  { letter: 'B', gpa: 3 },
+  { letter: 'C+', gpa: 2.5 },
+  { letter: 'C', gpa: 2 },
+  { letter: 'D+', gpa: 1.5 },
+  { letter: 'D', gpa: 1 },
+  { letter: 'F', gpa: 0 },
+];
+
+export function gradeLetterToGpa(grade: GradeLetter): number {
+  return GRADE_LETTER_TO_GPA[grade] ?? 0;
+}
+
+export function formatGpa(gpa: number): string {
+  return Number.isInteger(gpa) ? `${gpa}` : gpa.toFixed(1);
+}
+
+export function gpaStyle(gpa: number): { text: string; bg: string } {
+  if (gpa >= 3.5) return { text: '#059669', bg: '#d1fae5' };
+  if (gpa >= 3) return { text: '#0891b2', bg: '#cffafe' };
+  if (gpa >= 2.5) return { text: '#2563eb', bg: '#dbeafe' };
+  if (gpa >= 2) return { text: '#7c3aed', bg: '#ede9fe' };
+  if (gpa >= 1.5) return { text: '#d97706', bg: '#fef3c7' };
+  if (gpa >= 1) return { text: '#ea580c', bg: '#ffedd5' };
+  return { text: '#dc2626', bg: '#fee2e2' };
+}
+
+export function isPassingGpa(gpa: number): boolean {
+  return gpa >= 1;
+}
+
+/** Category scores are stored and edited on a 0–100 scale (percent). */
+export function categoryScoreToPercent(score: number): number {
+  return Math.min(100, Math.max(0, score));
+}
+
+/** Convert raw exam/assignment points to 0–100% using that item's max score. */
+export function rawPointsToPercent(raw: number, maxPoints: number): number {
+  const max = maxPoints > 0 ? maxPoints : 100;
+  return categoryScoreToPercent((raw / max) * 100);
+}
+
+/** Average multiple exam % scores into one 0–100 category score (e.g. several quizzes → เก็บคะแนน). */
+export function averagePercentScores(scores: number[]): number | null {
+  if (scores.length === 0) return null;
+  const sum = scores.reduce((acc, score) => acc + score, 0);
+  return Math.round((sum / scores.length) * 10) / 10;
+}
+
+/** Convert a 0–100 category % into weighted points (e.g. 92% × 15% weight → 13.8). */
+export function percentToWeightedPoints(percent: number, weight: number): number {
+  return Math.round((categoryScoreToPercent(percent) * weight / 100) * 10) / 10;
+}
+
 // ── Per-student score summary ──────────────────────────────────────────────────
 
 export interface StudentScoreSummary {

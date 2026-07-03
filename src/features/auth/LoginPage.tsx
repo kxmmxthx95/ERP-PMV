@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { db } from '@/lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import ChangePasswordModal from './components/ChangePasswordModal';
+import ForgotPasswordModal from './components/ForgotPasswordModal';
 
 function getErrorCode(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'code' in error) {
@@ -37,6 +38,7 @@ export default function LoginPage() {
 
   const { user } = useAuth();
   const [showChangeModal, setShowChangeModal] = useState(false);
+  const [showForgotModal, setShowForgotModal] = useState(false);
   const hasCheckedPassword = useRef(false);
   const redirectPath = getSafeRedirectPath(new URLSearchParams(location.search).get('redirect'));
 
@@ -93,7 +95,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden flex items-center justify-center">
+    <div className="relative min-h-[100dvh] w-full overflow-x-hidden flex items-center justify-center py-8">
       {/* ── Background Image with Blur ── */}
       <div
         className="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat scale-105"
@@ -118,7 +120,7 @@ export default function LoginPage() {
       >
         {/* Glass card */}
         <div
-          className="rounded-[3.5rem] p-8 shadow-2xl"
+          className="rounded-[3.5rem] p-6 sm:p-8 shadow-2xl overflow-hidden"
           style={{
             background: 'rgba(255,255,255,0.45)',
             backdropFilter: 'blur(28px) saturate(200%)',
@@ -148,7 +150,7 @@ export default function LoginPage() {
             {/* Email field */}
             <div className="space-y-1.5">
               <div
-                className="relative flex items-center rounded-2xl transition-all duration-200"
+                className="relative flex items-center w-full rounded-2xl transition-all duration-200"
                 style={{
                   background: focusedField === 'email' ? 'rgba(255,255,255,0.85)' : (hasError ? 'rgba(254,226,226,0.6)' : 'rgba(255,255,255,0.55)'),
                   border: focusedField === 'email' ? '1.5px solid rgba(59,130,246,0.6)' : (hasError ? '1.5px solid rgba(239,68,68,0.6)' : '1.5px solid rgba(255,255,255,0.6)'),
@@ -163,8 +165,8 @@ export default function LoginPage() {
                   onChange={e => { setEmail(e.target.value); setHasError(false); }}
                   onFocus={() => setFocusedField('email')}
                   onBlur={() => setFocusedField(null)}
-                  placeholder="กรุณากรอกอีเมล์เพื่อเข้าสู่ระบบ"
-                  className="w-full bg-transparent pl-9 pr-4 py-2 text-sm text-slate-800 placeholder:text-slate-400 outline-none font-sarabun"
+                  placeholder="กรอกอีเมล์เพื่อเข้าสู่ระบบ"
+                  className="flex-1 min-w-0 bg-transparent pl-9 pr-4 py-2.5 h-11 text-sm text-slate-800 placeholder:text-slate-400 outline-none font-sarabun"
                 />
               </div>
             </div>
@@ -172,7 +174,7 @@ export default function LoginPage() {
             {/* Password field */}
             <div className="space-y-1.5">
               <div
-                className="relative flex items-center rounded-2xl transition-all duration-200"
+                className="relative flex items-center w-full rounded-2xl transition-all duration-200"
                 style={{
                   background: focusedField === 'password' ? 'rgba(255,255,255,0.85)' : (hasError ? 'rgba(254,226,226,0.6)' : 'rgba(255,255,255,0.55)'),
                   border: focusedField === 'password' ? '1.5px solid rgba(59,130,246,0.6)' : (hasError ? '1.5px solid rgba(239,68,68,0.6)' : '1.5px solid rgba(255,255,255,0.6)'),
@@ -188,7 +190,7 @@ export default function LoginPage() {
                   onFocus={() => setFocusedField('password')}
                   onBlur={() => setFocusedField(null)}
                   placeholder="รหัสผ่าน"
-                  className="w-full bg-transparent pl-9 pr-11 py-2 text-sm text-slate-800 placeholder:text-slate-400 outline-none font-sarabun"
+                  className="flex-1 min-w-0 bg-transparent pl-9 pr-11 py-2.5 h-11 text-sm text-slate-800 placeholder:text-slate-400 outline-none font-sarabun"
                 />
                 <button
                   type="button"
@@ -210,7 +212,7 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* Remember me */}
+            {/* Remember me + forgot password */}
             <div className="flex items-center justify-between px-1">
               <label className="flex items-center gap-2 cursor-pointer group">
                 <span className="text-xs text-slate-500 group-hover:text-slate-700 transition-colors select-none">
@@ -228,6 +230,13 @@ export default function LoginPage() {
                   />
                 </div>
               </label>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(true)}
+                className="text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors"
+              >
+                ลืมรหัสผ่าน?
+              </button>
             </div>
 
             {/* Submit */}
@@ -297,6 +306,11 @@ export default function LoginPage() {
           100% { transform: translateX(200%); }
         }
       `}</style>
+
+      <ForgotPasswordModal
+        isOpen={showForgotModal}
+        onClose={() => setShowForgotModal(false)}
+      />
 
       {/* First-time Password Change Modal */}
       {user && (

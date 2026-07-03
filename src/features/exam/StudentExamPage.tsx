@@ -1,16 +1,24 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShieldAlert, CheckCircle, ChevronLeft, ChevronRight,
   Send, Lock, AlertTriangle, Eye, EyeOff,
-  Maximize2, Minimize2, LayoutGrid, Info, HelpCircle
+  Maximize2, LayoutGrid, Info, HelpCircle, ClipboardList, FileText, Loader2
 } from 'lucide-react';
 
 import { IndeterminateProgress } from '@/components/ui/progress';
-import { useExamAttempt } from '@/hooks/useExamRoom';
+import { useExamAttempt, type ExamAnswerSheetGroup, type ExamPdfPart, type ExamRoomPreview } from '@/hooks/useExamRoom';
 import { useAuth } from '@/hooks/useAuth';
 import { Input } from '@/components/ui/input';
+import { PdfAnswerSheet, PdfPagePagination, PdfPageViewer } from '@/features/exam/components/PdfExamViewer';
+import ExamQuestionContent from '@/features/questionBank/components/ExamQuestionContent';
+import EssayAnswerPanel from '@/features/exam/components/EssayAnswerPanel';
+import { isExamAnswerFilled } from '@/lib/exam/examAnswerFormat';
+import { getVisiblePdfPages, snapToVisiblePdfPage } from '@/features/questionBank/utils/pdfExamPages';
+import { getPartBadgeTheme } from '@/features/exam/utils/partBadgeTheme';
+import { colors } from '@/lib/designTokens';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 // ── Countdown Hook ────────────────────────────────────────────────────────────
@@ -34,39 +42,28 @@ function useCountdown(endTime: number | null | undefined) {
   return { remaining, mm, ss, isUrgent, isExpired };
 }
 
-// ── Background Component ──────────────────────────────────────────────────────
+// ── Background Component (matches Portal Dashboard shell) ───────────────────
 function ExamBackground() {
   return (
-    <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
-      <div className="absolute inset-0 bg-slate-50" />
-      <motion.div 
-        animate={{ 
-          scale: [1, 1.2, 1],
-          opacity: [0.2, 0.28, 0.2],
-          rotate: [0, 90, 0]
-        }}
-        transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-        className="absolute -top-1/4 -left-1/4 w-[150%] h-[150%] bg-[radial-gradient(circle_at_center,rgba(59,130,246,0.15)_0%,transparent_70%)]"
-      />
-      <motion.div 
-        animate={{ 
-          scale: [1.2, 1, 1.2],
-          opacity: [0.16, 0.24, 0.16],
-          rotate: [0, -90, 0]
-        }}
-        transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
-        className="absolute -bottom-1/4 -right-1/4 w-[150%] h-[150%] bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.1)_0%,transparent_70%)]"
-      />
-      <div className="absolute inset-0 backdrop-blur-[90px]" />
-    </div>
+    <div
+      className="fixed inset-0 z-0 pointer-events-none"
+      style={{ background: colors.palette.shell }}
+    />
   );
+}
+
+function resolveJoinGradeLabel(preview: ExamRoomPreview | null): string {
+  if (!preview) return '';
+  if (preview.gradeLevel?.trim()) return preview.gradeLevel.trim();
+  const fromClass = preview.className?.split('/')[0]?.trim();
+  return fromClass || '';
 }
 
 // ── Join Screen ───────────────────────────────────────────────────────────────
 function JoinScreen({
-  roomId, onJoin, isJoining, error,
+  roomPreview, onJoin, isJoining, error,
 }: {
-  roomId: string;
+  roomPreview: ExamRoomPreview | null;
   onJoin: (password: string, studentId: string, studentName: string) => Promise<boolean>;
   isJoining: boolean;
   error: string | null;
@@ -90,189 +87,292 @@ function JoinScreen({
       return;
     }
     const finalName = studentName || user?.displayName || user?.email || 'Anonymous Student';
-    const success = await onJoin(password, studentUid, finalName);
-    if (success) toast.success('ยินดีต้อนรับเข้าสู่ห้องสอบ');
+    await onJoin(password, studentUid, finalName);
   }, [password, studentName, onJoin, user]);
 
+  const gradeLabel = resolveJoinGradeLabel(roomPreview);
+  const roomTitle = roomPreview?.title || 'ห้องสอบออนไลน์';
+  const subjectLabel = roomPreview?.subjectName?.trim() || '';
+
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 relative overflow-hidden font-sarabun">
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sarabun">
       <ExamBackground />
-      
+
       <motion.div
-        initial={{ opacity: 0, y: 40, scale: 0.9 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        className="relative z-10 w-full max-w-[440px] rounded-[3rem] p-10 flex flex-col gap-8 overflow-hidden"
-        style={{
-          background: 'rgba(255,255,255,0.95)',
-          border: '1px solid rgba(148,163,184,0.25)',
-          backdropFilter: 'blur(20px)',
-          boxShadow: '0 24px 64px rgba(15,23,42,0.12)',
-        }}
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative z-10 w-full max-w-[360px] rounded-2xl flex flex-col gap-4 overflow-hidden bg-white border border-slate-200 shadow-xl"
       >
-        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent" />
+        <div className="px-4 pt-4">
+          <button
+            onClick={() => navigate('/portal')}
+            className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all"
+            aria-label="กลับหน้าหลัก"
+          >
+            <ChevronLeft size={18} />
+          </button>
+        </div>
 
-        <button 
-          onClick={() => navigate('/portal')}
-          className="absolute top-6 left-6 w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all z-20"
-        >
-          <ChevronLeft size={20} />
-        </button>
-
-        <div className="flex flex-col items-center gap-4">
-          <motion.div 
-            className="w-20 h-20 rounded-[2rem] flex items-center justify-center border border-blue-100"
+        <div className="flex flex-col items-center text-center gap-2 px-5 -mt-1">
+          <div
+            className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center border border-blue-100"
             style={{ background: 'linear-gradient(135deg, #2563eb, #06b6d4)' }}
           >
-            <Lock size={32} className="text-white" />
-          </motion.div>
-          <div className="text-center">
-            <h1 className="text-[28px] font-black text-slate-900 font-sukhumvit tracking-tight">Examination</h1>
-            <p className="text-[13px] text-slate-500 font-medium tracking-widest uppercase mt-1">Room ID: {roomId}</p>
+            <Lock size={18} className="text-white" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wider leading-none mb-1">
+              เข้าห้องสอบ
+            </p>
+            <h1 className="text-[17px] font-black text-slate-900 font-sukhumvit leading-snug line-clamp-2">
+              {roomTitle}
+            </h1>
+            {(gradeLabel || subjectLabel) && (
+              <div className="flex flex-wrap items-center justify-center gap-1.5 mt-1.5">
+                {gradeLabel && (
+                  <span className="px-2 py-0.5 rounded-md bg-blue-50 border border-blue-100 text-[11px] font-black text-blue-700 font-sukhumvit">
+                    {gradeLabel}
+                  </span>
+                )}
+                {subjectLabel && (
+                  <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[11px] font-bold text-slate-600 truncate max-w-[160px]">
+                    {subjectLabel}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="flex flex-col gap-6">
-
-          <div className="space-y-2">
-            <label className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] ml-4">Access Password</label>
+        <div className="flex flex-col gap-3 px-5 pb-5">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider ml-1">
+              รหัสผ่านเข้าสอบ
+            </label>
             <div className="relative">
               <Input
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                type={showPassword ? "text" : "password"}
-                placeholder="รหัสผ่านเข้าสอบ"
-                className="h-14 rounded-2xl border border-slate-200 text-slate-900 text-[18px] font-black bg-white focus:bg-white transition-all pl-6 pr-14 tracking-[0.3em]"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="กรอกรหัสผ่าน"
+                className="h-11 rounded-xl border border-slate-200 text-slate-900 text-[15px] font-bold bg-white focus:bg-white transition-all pl-4 pr-11"
                 onKeyDown={e => { if (e.key === 'Enter') handleJoin(); }}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors"
               >
-                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
           </div>
 
           <AnimatePresence>
             {error && (
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-                className="flex items-center gap-3 px-5 py-3 rounded-2xl bg-rose-500/10 border border-rose-500/20">
-                <AlertTriangle size={16} className="text-rose-400 shrink-0" />
-                <p className="text-[13px] text-rose-200 font-medium">{error}</p>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-rose-50 border border-rose-200"
+              >
+                <AlertTriangle size={15} className="text-rose-500 shrink-0" />
+                <p className="text-[12px] text-rose-700 font-medium">{error}</p>
               </motion.div>
             )}
           </AnimatePresence>
 
           <motion.button
-            whileHover={{ backgroundColor: '#1d4ed8' }}
             whileTap={{ scale: 0.98 }}
             onClick={handleJoin}
             disabled={isJoining || !password}
-            className="h-14 rounded-2xl text-white font-black text-[15px] font-sukhumvit transition-all disabled:opacity-30 disabled:cursor-not-allowed border border-blue-600 flex items-center justify-center gap-2"
-            style={{ background: '#2563eb' }}
+            className="h-11 rounded-xl text-white font-black text-[14px] font-sukhumvit transition-all disabled:opacity-30 disabled:cursor-not-allowed border border-blue-600 flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700"
           >
             {isJoining ? (
-              <IndeterminateProgress className="w-32" white />
+              <IndeterminateProgress className="w-28" white />
             ) : (
-              <>เริ่มทำข้อสอบ <ChevronRight size={18} /></>
+              <>เริ่มทำข้อสอบ <ChevronRight size={16} /></>
             )}
           </motion.button>
-        </div>
 
-        <div className="flex items-center justify-center gap-2 text-[11px] text-slate-500 font-medium">
-          <ShieldAlert size={12} />
-          <span>ระบบป้องกันการทุจริตกำลังทำงาน</span>
+          <div className="flex items-center justify-center gap-1.5 text-[10px] text-slate-400">
+            <ShieldAlert size={11} />
+            <span>ระบบป้องกันการทุจริตกำลังทำงาน</span>
+          </div>
         </div>
       </motion.div>
     </div>
   );
 }
 
-// ── Result Screen ─────────────────────────────────────────────────────────────
-function ResultScreen({ score, total, canReview, onReview }: {
+import type { ExamQuestionPublic } from '@/types/exam';
+
+// ── Result summary ────────────────────────────────────────────────────────────
+function resolveResultSummary({
+  score,
+  total,
+  status,
+  pendingManualGrading,
+  objectiveMaxPoints,
+  manualEssayCount,
+  questions,
+}: {
   score: number | null;
   total: number;
-  canReview?: boolean;
-  onReview?: () => void;
+  status: string;
+  pendingManualGrading?: boolean;
+  objectiveMaxPoints?: number | null;
+  manualEssayCount?: number;
+  questions: ExamQuestionPublic[];
+}) {
+  const essayCountFromQuestions = questions.filter((q) => q.questionType === 'essay').length;
+  const manualCount = manualEssayCount ?? essayCountFromQuestions;
+  const pending = pendingManualGrading === true
+    || (pendingManualGrading !== false && status === 'submitted' && manualCount > 0);
+
+  const objectiveMaxFromQuestions = questions
+    .filter((q) => q.questionType !== 'essay')
+    .reduce((sum, q) => sum + (q.points || 0), 0);
+
+  if (pending && manualCount > 0) {
+    const displayMax = objectiveMaxPoints ?? objectiveMaxFromQuestions;
+    const displayScore = score;
+    const pct = displayScore !== null && displayMax > 0
+      ? Math.round((displayScore / displayMax) * 100)
+      : null;
+    return {
+      pendingManual: true,
+      manualCount,
+      displayScore,
+      displayMax,
+      pct,
+    };
+  }
+
+  const pct = score !== null && total > 0 ? Math.round((score / total) * 100) : null;
+  return {
+    pendingManual: false,
+    manualCount: 0,
+    displayScore: score,
+    displayMax: total,
+    pct,
+  };
+}
+
+// ── Result Screen ─────────────────────────────────────────────────────────────
+function ResultScreen({
+  score,
+  total,
+  status,
+  pendingManualGrading,
+  objectiveMaxPoints,
+  manualEssayCount,
+  questions,
+}: {
+  score: number | null;
+  total: number;
+  status: string;
+  pendingManualGrading?: boolean;
+  objectiveMaxPoints?: number | null;
+  manualEssayCount?: number;
+  questions: ExamQuestionPublic[];
 }) {
   const navigate = useNavigate();
-  const pct = score !== null ? Math.round((score / total) * 100) : null;
+  const summary = resolveResultSummary({
+    score,
+    total,
+    status,
+    pendingManualGrading,
+    objectiveMaxPoints,
+    manualEssayCount,
+    questions,
+  });
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 relative overflow-hidden font-sarabun">
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sarabun">
       <ExamBackground />
-      
+
       <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="relative z-10 w-full max-w-[480px] rounded-[3.5rem] p-12 flex flex-col gap-10 text-center"
-        style={{
-          background: 'rgba(255,255,255,0.95)',
-          border: '1px solid rgba(148,163,184,0.25)',
-          backdropFilter: 'blur(20px)',
-        }}
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
+        className="relative z-10 w-full max-w-[340px] rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_2px_8px_rgba(15,23,42,0.035)]"
       >
-        <div className="flex flex-col items-center gap-6">
-          <motion.div
-            initial={{ scale: 0, rotate: -45 }}
-            animate={{ scale: 1, rotate: 0 }}
-            transition={{ type: 'spring', damping: 12, delay: 0.2 }}
-            className="w-24 h-24 rounded-[2.5rem] flex items-center justify-center border border-emerald-200"
+        <div className="flex items-start gap-3">
+          <div
+            className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center border border-emerald-200"
             style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
           >
-            <CheckCircle size={44} className="text-white" />
-          </motion.div>
-          
-          <div className="space-y-2">
-            <h1 className="text-[32px] font-black text-slate-900 font-sukhumvit">ส่งข้อสอบเรียบร้อย</h1>
-            <p className="text-[15px] text-slate-600">คุณได้ทำข้อสอบครบถ้วนและส่งข้อมูลเข้าระบบแล้ว</p>
+            <CheckCircle size={22} className="text-white" />
+          </div>
+          <div className="min-w-0 flex-1 text-left pt-0.5">
+            <h1 className="text-[17px] font-black text-slate-900 font-sukhumvit leading-snug">
+              ส่งข้อสอบเรียบร้อย
+            </h1>
+            <p className="mt-0.5 text-[12px] text-slate-500 leading-snug">
+              ส่งคำตอบเข้าระบบแล้ว
+            </p>
           </div>
         </div>
 
-        <div className="p-8 rounded-[2.5rem] bg-slate-50 border border-slate-200 space-y-4">
-          {pct !== null ? (
-            <>
-              <div className="flex flex-col items-center">
-                <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-[0.2em] mb-1">Final Score</span>
-                <p className="text-[64px] font-black font-sukhumvit text-slate-900 leading-none">
-                  {pct}<span className="text-[24px] text-slate-500 ml-1">%</span>
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+          {summary.pct !== null ? (
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className={`text-[10px] font-bold uppercase tracking-wider ${summary.pendingManual ? 'text-blue-600' : 'text-emerald-600'}`}>
+                  {summary.pendingManual ? 'คะแนนข้อปรนัย' : 'คะแนน'}
+                </p>
+                <p className="mt-0.5 text-[13px] font-bold text-slate-600">
+                  {summary.displayScore} / {summary.displayMax} คะแนน
                 </p>
               </div>
-              <div className="h-[1px] w-full bg-slate-200" />
-              <p className="text-[14px] font-bold text-slate-600">
-                {score} / {total} คะแนน
+              <p className="text-[36px] font-black font-sukhumvit text-slate-900 leading-none tabular-nums">
+                {summary.pct}
+                <span className="text-[16px] text-slate-400 ml-0.5">%</span>
               </p>
-            </>
-          ) : (
-            <div className="flex flex-col items-center gap-3 py-4">
-              <div className="w-10 h-10 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-400">
-                <Info size={20} />
+            </div>
+          ) : status === 'submitted' && score === null ? (
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-500 shrink-0">
+                <Loader2 size={16} className="animate-spin" />
               </div>
-              <p className="text-[14px] text-slate-600 font-medium">
-                รอคุณครูสรุปคะแนนและประกาศผล<br />
-                ผ่านหน้าแดชบอร์ดของคุณ
+              <p className="text-[12px] text-slate-600 leading-snug text-left">
+                กำลังคำนวณคะแนน...
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-500 shrink-0">
+                <Info size={16} />
+              </div>
+              <p className="text-[12px] text-slate-600 leading-snug text-left">
+                รอคุณครูสรุปคะแนนและประกาศผลผ่านแดชบอร์ด
               </p>
             </div>
           )}
         </div>
 
-        <div className="flex flex-col gap-3">
-          {canReview && onReview && (
-            <button
-              onClick={onReview}
-              className="h-14 rounded-2xl text-blue-700 font-black text-[15px] font-sukhumvit border border-blue-200 bg-blue-50 transition-all"
-            >
-              กลับไปดูข้อสอบที่ทำ
-            </button>
-          )}
-          <button
-            onClick={() => navigate('/portal')}
-            className="h-14 rounded-2xl text-slate-700 font-bold text-[15px] font-sukhumvit border border-slate-200 bg-white transition-all"
-          >
-            กลับสู่หน้าหลัก
-          </button>
-        </div>
+        {summary.pendingManual && (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 flex items-start gap-2.5">
+            <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+            <div className="min-w-0 text-left">
+              <p className="text-[12px] font-bold text-amber-800 font-sukhumvit leading-snug">
+                มีข้ออัตนัย {summary.manualCount} ข้อ รอครูตรวจเพิ่ม
+              </p>
+              <p className="mt-0.5 text-[11px] text-amber-700/90 leading-snug">
+                คะแนนรวมจะประกาศหลังตรวจครบทุกข้อ
+              </p>
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => navigate('/portal')}
+          className="mt-4 w-full h-10 rounded-xl text-slate-700 font-bold text-[13px] font-sukhumvit border border-slate-200 bg-white hover:bg-slate-50 transition-colors"
+        >
+          กลับสู่หน้าหลัก
+        </button>
       </motion.div>
     </div>
   );
@@ -280,15 +380,19 @@ function ResultScreen({ score, total, canReview, onReview }: {
 
 // ── Exam Interface ────────────────────────────────────────────────────────────
 function ExamInterface({
-  room, questions, answers, suspiciousActivities, endTime,
+  room, roomId, attemptId, questions, answers, suspiciousActivities, endTime, examPdfParts, answerSheetGroups,
   onAnswer, onSubmit, onRecordSuspicious, isLoadingQuestions, readOnly = false, onExitReview,
 }: {
   room: any;
+  roomId: string;
+  attemptId: string;
   questions: any[];
   answers: Record<string, string>;
   suspiciousActivities: number;
   endTime: number;
-  onAnswer: (qId: string, optId: string) => void;
+  examPdfParts: ExamPdfPart[];
+  answerSheetGroups: ExamAnswerSheetGroup[];
+  onAnswer: (qId: string, value: string) => void;
   onSubmit: () => void;
   onRecordSuspicious: () => void;
   isLoadingQuestions?: boolean;
@@ -301,26 +405,65 @@ function ExamInterface({
   const [warningMsg, setWarningMsg] = useState('');
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [showMap, setShowMap] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [pdfPanelMode, setPdfPanelMode] = useState<'pdf' | 'answers'>('pdf');
+  const [activePdfPartIndex, setActivePdfPartIndex] = useState(0);
+  const [pdfPageNum, setPdfPageNum] = useState(1);
+  const [pdfTotalPages, setPdfTotalPages] = useState(0);
+  const [pdfLoading, setPdfLoading] = useState(true);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+  const suppressSuspiciousRef = useRef(false);
+  const suppressSuspiciousUntilRef = useRef(0);
+  const answerSheetPartGroups = useMemo(
+    () => answerSheetGroups.map((group) => ({
+      partLabel: group.partLabel,
+      title: group.title,
+      questions: group.questions,
+    })),
+    [answerSheetGroups],
+  );
+  const hasPdfExam = examPdfParts.length > 0;
+  const activePdfPart = examPdfParts[activePdfPartIndex] ?? examPdfParts[0] ?? null;
+  const activePdfHiddenPages = activePdfPart?.examPdfHiddenPages ?? [];
+
+  useEffect(() => {
+    if (activePdfPartIndex >= examPdfParts.length) {
+      setActivePdfPartIndex(0);
+    }
+  }, [activePdfPartIndex, examPdfParts.length]);
+
+  const handleSelectPdfPart = useCallback((index: number) => {
+    setActivePdfPartIndex(index);
+    setPdfPageNum(1);
+    setPdfTotalPages(0);
+    setPdfLoading(true);
+    setPdfError(null);
+  }, []);
+
   const hasAutoSubmittedRef = useRef(false);
-  
   const { mm, ss, isUrgent, isExpired } = useCountdown(endTime);
 
-  // Anti-cheat & Fullscreen
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
+  const handleCameraSessionChange = useCallback((active: boolean) => {
+    if (active) {
+      suppressSuspiciousRef.current = true;
+      suppressSuspiciousUntilRef.current = Date.now() + 6000;
+      return;
     }
-  };
+    suppressSuspiciousUntilRef.current = Date.now() + 2000;
+    window.setTimeout(() => {
+      if (Date.now() >= suppressSuspiciousUntilRef.current) {
+        suppressSuspiciousRef.current = false;
+      }
+    }, 2100);
+  }, []);
 
+  // Anti-cheat
   useEffect(() => {
     const handleVisibility = () => {
       if (document.hidden) {
+        if (suppressSuspiciousRef.current || Date.now() < suppressSuspiciousUntilRef.current) {
+          return;
+        }
         const nextSuspiciousCount = suspiciousActivities + 1;
         onRecordSuspicious();
 
@@ -359,6 +502,26 @@ function ExamInterface({
     if (isExpired && !readOnly) onSubmit();
   }, [isExpired, onSubmit, readOnly]);
 
+  const handlePdfLoadState = useCallback(
+    (state: { pageNum: number; totalPages: number; loading: boolean; error: string | null }) => {
+      setPdfTotalPages(state.totalPages);
+      setPdfLoading(state.loading);
+      setPdfError(state.error);
+      setPdfPageNum((prev) => (prev === state.pageNum ? prev : state.pageNum));
+    },
+    [],
+  );
+
+  const pdfVisiblePages = useMemo(
+    () => getVisiblePdfPages(pdfTotalPages, activePdfHiddenPages),
+    [pdfTotalPages, activePdfHiddenPages],
+  );
+
+  useEffect(() => {
+    if (pdfVisiblePages.length === 0) return;
+    setPdfPageNum((prev) => snapToVisiblePdfPage(prev, pdfVisiblePages));
+  }, [pdfVisiblePages]);
+
   const handleContentClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.tagName === 'IMG' && (target as HTMLImageElement).src) {
@@ -370,7 +533,7 @@ function ExamInterface({
 
   if (isLoadingQuestions) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-slate-900 bg-slate-50 font-sarabun gap-8">
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-slate-900 font-sarabun gap-8" style={{ background: colors.palette.shell }}>
         <IndeterminateProgress className="w-64" />
         <div className="text-center">
           <p className="text-lg font-bold text-slate-900">กำลังเตรียมข้อสอบ...</p>
@@ -382,7 +545,7 @@ function ExamInterface({
 
   if (questions.length === 0) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 text-slate-900 bg-slate-50 font-sarabun">
+      <div className="min-h-screen flex items-center justify-center p-6 text-slate-900 font-sarabun" style={{ background: colors.palette.shell }}>
         <div className="text-center space-y-4">
           <div className="w-16 h-16 rounded-3xl bg-white border border-slate-200 flex items-center justify-center mx-auto text-slate-400">
             <HelpCircle size={32} />
@@ -396,11 +559,18 @@ function ExamInterface({
   }
 
   const q = questions[currentIdx];
-  const answeredCount = Object.keys(answers).length;
+  const answeredCount = questions.filter((question) =>
+    isExamAnswerFilled(answers[question.id], question.questionType === 'essay'),
+  ).length;
   const progress = (answeredCount / questions.length) * 100;
 
   return (
-    <div className="min-h-screen bg-slate-50 relative overflow-y-auto select-none font-sarabun text-slate-900">
+    <div
+      className={cn(
+        'relative select-none font-sarabun text-slate-900',
+        hasPdfExam ? 'flex h-dvh flex-col overflow-hidden' : 'flex h-dvh flex-col overflow-y-auto overscroll-y-contain',
+      )}
+    >
       <ExamBackground />
 
       {/* ── Warning toast ── */}
@@ -418,7 +588,9 @@ function ExamInterface({
       </AnimatePresence>
 
       {/* ── Top Header ── */}
-      <div className="fixed top-0 left-0 right-0 z-50 p-4 md:p-6 flex items-center justify-between">
+      <div className={cn('z-50 shrink-0', hasPdfExam ? 'relative' : 'sticky top-0')}>
+        <div className="absolute inset-0 bg-white/90 border-b border-slate-200 backdrop-blur-xl" />
+        <div className="relative p-4 md:p-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="hidden md:flex flex-col">
             <h2 className="text-[11px] font-black text-blue-600 uppercase tracking-widest leading-none mb-1">Examination</h2>
@@ -434,44 +606,140 @@ function ExamInterface({
         {/* Global Progress Pill */}
         <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1 p-0.5 rounded-full bg-white border border-slate-200 shadow-sm backdrop-blur-xl">
           <div className="flex items-center gap-2.5 px-3 py-1.5">
-             <div className="flex flex-col items-end">
-                <span className="text-[9px] font-bold text-slate-500 leading-none">TIME</span>
-                <span className={`text-[15px] font-black tabular-nums leading-none font-sukhumvit ${isUrgent ? 'text-rose-600' : 'text-slate-900'}`}>
-                  {mm}:{ss}
-                </span>
-             </div>
+             <span className={`text-[15px] font-black tabular-nums leading-none font-sukhumvit ${isUrgent ? 'text-rose-600' : 'text-slate-900'}`}>
+               {mm}:{ss}
+             </span>
              <div className="w-[1px] h-5 bg-slate-200" />
-             <div className="flex flex-col">
-                <span className="text-[9px] font-bold text-slate-500 leading-none">PROGRESS</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-[15px] font-black leading-none font-sukhumvit text-slate-900">{Math.round(progress)}%</span>
-                  <div className="w-10 h-1 rounded-full bg-slate-200 overflow-hidden">
-                    <motion.div className="h-full bg-blue-600" animate={{ width: `${progress}%` }} />
-                  </div>
-                </div>
+             <div className="flex items-center gap-2">
+               <span className="text-[15px] font-black leading-none font-sukhumvit text-slate-900">{Math.round(progress)}%</span>
+               <div className="w-10 h-1 rounded-full bg-slate-200 overflow-hidden">
+                 <motion.div className="h-full bg-blue-600" animate={{ width: `${progress}%` }} />
+               </div>
              </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <button 
-            onClick={toggleFullscreen}
-            className="w-10 h-10 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-900 transition-all"
+          <button
+            type="button"
+            title={
+              hasPdfExam
+                ? pdfPanelMode === 'pdf'
+                  ? 'กระดาษคำตอบ'
+                  : 'ดูข้อสอบ'
+                : 'เลือกข้อสอบ'
+            }
+            onClick={() => {
+              if (hasPdfExam) {
+                setPdfPanelMode(m => (m === 'pdf' ? 'answers' : 'pdf'));
+                return;
+              }
+              setShowMap(!showMap);
+            }}
+            className={`w-10 h-10 rounded-full border flex items-center justify-center shrink-0 transition-all shadow-[0_2px_8px_rgba(15,23,42,0.08)] lg:hidden ${
+              hasPdfExam && pdfPanelMode === 'answers'
+                ? 'bg-blue-50 border-blue-300 text-blue-700'
+                : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900'
+            }`}
           >
-            {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+            {hasPdfExam ? (
+              pdfPanelMode === 'pdf' ? (
+                <ClipboardList size={16} />
+              ) : (
+                <FileText size={16} />
+              )
+            ) : (
+              <LayoutGrid size={16} />
+            )}
           </button>
-          <button 
-            onClick={() => setShowMap(!showMap)}
-            className="h-10 px-4 rounded-2xl bg-white border border-slate-200 flex items-center gap-2 text-[13px] font-bold text-slate-600 hover:text-slate-900 transition-all"
-          >
-            <LayoutGrid size={16} />
-            <span className="hidden sm:inline">ข้อสอบ</span>
-          </button>
+        </div>
         </div>
       </div>
 
       {/* ── Main content ── */}
-      <div className="relative z-10 min-h-screen flex flex-col md:flex-row items-stretch justify-start pt-24 pb-32 px-4 md:px-10 lg:px-20 gap-8">
+      {hasPdfExam && activePdfPart ? (
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-4 pb-28 pt-2 md:px-6 lg:flex-row lg:gap-0 lg:divide-x lg:divide-slate-200">
+          <div
+            className={cn(
+              'flex min-h-0 flex-1 flex-col overflow-hidden lg:pr-6',
+              pdfPanelMode !== 'pdf' ? 'hidden lg:flex' : 'flex',
+            )}
+          >
+            {examPdfParts.length > 1 && (
+              <div className="mb-2 flex shrink-0 gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                {examPdfParts.map((part, index) => {
+                  const isActive = index === activePdfPartIndex;
+                  const theme = getPartBadgeTheme(index);
+                  return (
+                    <button
+                      key={part.setId}
+                      type="button"
+                      onClick={() => handleSelectPdfPart(index)}
+                      className={cn(
+                        'shrink-0 rounded-xl border px-3 py-2 text-left transition-colors',
+                        isActive
+                          ? theme.tabActive
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50',
+                      )}
+                      aria-pressed={isActive}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block rounded-md px-1.5 py-0.5 font-sukhumvit text-[10px] font-black uppercase tracking-wide text-white',
+                          theme.badge,
+                        )}
+                      >
+                        {part.partLabel}
+                      </span>
+                      <span className="block max-w-[10rem] truncate font-sarabun text-[11px] font-bold">
+                        {part.title}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <p className="mb-2 hidden shrink-0 font-sukhumvit text-[11px] font-black uppercase tracking-[0.15em] text-slate-500 lg:block">
+              {examPdfParts.length > 1 ? activePdfPart.partLabel : 'ข้อสอบ PDF'}
+              {examPdfParts.length > 1 && (
+                <span className="ml-2 font-sarabun font-bold normal-case tracking-normal text-slate-400">
+                  {activePdfPart.title}
+                </span>
+              )}
+            </p>
+            <PdfPageViewer
+              key={activePdfPart.setId}
+              url={activePdfPart.examPdfUrl}
+              className="min-h-0 flex-1"
+              pageNum={pdfPageNum}
+              onPageNumChange={setPdfPageNum}
+              onLoadStateChange={handlePdfLoadState}
+              showPagination={false}
+              hiddenPages={activePdfHiddenPages}
+              applyHiddenPages
+            />
+          </div>
+          <div
+            className={cn(
+              'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:pl-6',
+              pdfPanelMode !== 'answers' ? 'hidden lg:flex' : 'flex',
+            )}
+          >
+            <PdfAnswerSheet
+              questions={questions}
+              groups={answerSheetPartGroups.length > 0 ? answerSheetPartGroups : undefined}
+              answers={answers}
+              readOnly={readOnly}
+              onAnswer={onAnswer}
+              roomId={roomId}
+              attemptId={attemptId}
+              onCameraSessionChange={handleCameraSessionChange}
+              className="min-h-0 flex-1"
+            />
+          </div>
+        </div>
+      ) : (
+      <div className="relative z-10 flex flex-col md:flex-row items-stretch justify-start pt-5 md:pt-6 pb-32 px-4 md:px-10 lg:px-20 gap-8">
         
         {/* Question Area */}
         <div className="flex flex-col items-center justify-start w-full">
@@ -483,22 +751,34 @@ function ExamInterface({
                 animate={{ opacity: 1, scale: 1, x: 0 }}
                 exit={{ opacity: 0, scale: 0.98, x: -20 }}
                 transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                className="flex flex-col gap-10"
+                className="flex flex-col gap-4"
               >
                 {/* Question Text */}
-                <div className="space-y-4 text-left">
+                <div className="space-y-3 text-left">
                    <div className="flex items-center justify-start gap-3">
-                      <span className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[11px] font-black text-indigo-400 tracking-[0.2em]">QUESTION {currentIdx + 1}</span>
+                      <span className="px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[11px] font-black text-blue-600 tracking-[0.2em]">QUESTION {currentIdx + 1}</span>
                       <span className="text-[11px] font-bold text-slate-500 tracking-[0.1em]">{q.points} POINTS</span>
                    </div>
-                    <div 
-                      className="flex flex-col text-[24px] md:text-[32px] font-bold text-slate-900 font-sarabun leading-[1.5] text-balance cursor-pointer [&_p]:m-0 [&_p]:leading-[1.5] [&_div]:m-0 [&_div]:leading-[1.5] [&_span]:leading-[1.5] [&_img]:transition-all [&_img]:hover:brightness-105 [&_img]:order-last [&_img]:mt-6 [&_img]:w-full [&_img]:max-h-[300px] [&_img]:rounded-2xl [&_img]:border [&_img]:border-slate-200 [&_img]:bg-white [&_img]:p-1.5 [&_img]:object-contain [&_img]:cursor-zoom-in"
-                      dangerouslySetInnerHTML={{ __html: q.text }}
-                      onClick={handleContentClick}
-                    />
+                    <div onClick={handleContentClick}>
+                      <ExamQuestionContent
+                        html={q.text}
+                        variant="question"
+                        onImagePreview={setZoomedImage}
+                      />
+                    </div>
                 </div>
 
-                {/* Options Grid */}
+                {q.questionType === 'essay' ? (
+                  <EssayAnswerPanel
+                    questionId={q.id}
+                    value={answers[q.id]}
+                    readOnly={readOnly}
+                    roomId={roomId}
+                    attemptId={attemptId}
+                    onSave={onAnswer}
+                    onCameraSessionChange={handleCameraSessionChange}
+                  />
+                ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {q.options.map((opt: any, oi: number) => {
                     const isSelected = answers[q.id] === opt.id;
@@ -508,49 +788,96 @@ function ExamInterface({
                         key={opt.id}
                         whileHover={{ backgroundColor: 'rgba(255,255,255,0.06)' }}
                         whileTap={{ scale: 0.98 }}
-                        onClick={() => { if (!readOnly) onAnswer(q.id, opt.id); }}
+                        onClick={() => {
+                          if (readOnly) return;
+                          onAnswer(q.id, isSelected ? '' : opt.id);
+                        }}
                         disabled={readOnly}
                         className="group relative flex items-center gap-3 px-4 py-2.5 rounded-2xl text-left transition-all duration-300 border overflow-hidden"
                         style={{
-                          background: isSelected ? 'rgba(37,99,235,0.08)' : 'rgba(255,255,255,0.96)',
-                          borderColor: isSelected ? 'rgba(37,99,235,0.45)' : 'rgba(148,163,184,0.25)',
+                          background: '#ffffff',
+                          border: isSelected
+                            ? '1.5px solid rgba(37,99,235,0.45)'
+                            : '1px solid rgba(148,163,184,0.25)',
                           cursor: readOnly ? 'default' : 'pointer',
                         }}
                       >
-                        {isSelected && (
-                          <motion.div 
-                            layoutId="active-opt"
-                            className="absolute inset-0 bg-indigo-500/5 pointer-events-none"
-                          />
-                        )}
                         <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center font-black text-[14px] font-sukhumvit transition-all duration-300 ${
                             isSelected ? 'bg-blue-600 text-white border border-blue-500' : 'bg-slate-100 text-slate-500'
                           }`}>
                           {label}
                         </div>
-                        <div 
-                          className={`text-[15px] font-sarabun flex-1 transition-all duration-300 ${isSelected ? 'text-slate-900 font-bold' : 'text-slate-700 group-hover:text-slate-900'} cursor-pointer [&_img]:mt-2 [&_img]:block [&_img]:mx-auto [&_img]:w-full [&_img]:h-[170px] [&_img]:max-h-[170px] [&_img]:rounded-xl [&_img]:border [&_img]:border-slate-200 [&_img]:bg-white [&_img]:p-1 [&_img]:object-contain [&_img]:cursor-zoom-in`}
-                          dangerouslySetInnerHTML={{ __html: opt.text }}
+                        <div
+                          className="min-w-0 flex-1"
                           onClick={handleContentClick}
-                        />
-                        <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'border-blue-600 bg-blue-600' : 'border-slate-300 group-hover:border-slate-400'}`}>
-                          {isSelected && <CheckCircle size={14} className="text-white" />}
+                        >
+                          <ExamQuestionContent
+                            html={opt.text}
+                            variant="option"
+                            onImagePreview={setZoomedImage}
+                            className={cn(
+                              'bg-transparent px-0 py-0',
+                              isSelected && 'font-bold text-slate-900',
+                            )}
+                          />
                         </div>
                       </motion.button>
                     );
                   })}
                 </div>
+                )}
               </motion.div>
             </AnimatePresence>
           </div>
         </div>
       </div>
+      )}
 
       {/* ── Navigation bar ── */}
       <div className="fixed bottom-0 left-0 right-0 z-50">
         <div className="absolute inset-0 bg-white/90 border-t border-slate-200 backdrop-blur-xl" />
         <div className="relative p-4 md:p-6 flex items-center justify-center">
         <div className="w-full max-w-4xl flex items-center justify-between gap-4">
+            {hasPdfExam ? (
+              <div className="relative flex w-full min-h-10 items-center justify-center">
+                {pdfTotalPages > 0 && !pdfError && (
+                  <PdfPagePagination
+                    pageNum={pdfPageNum}
+                    totalPages={pdfTotalPages}
+                    onPageChange={setPdfPageNum}
+                    disabled={pdfLoading}
+                    appearance="inline"
+                    enableKeyboard={pdfPanelMode === 'pdf'}
+                    className={cn(pdfPanelMode !== 'pdf' && 'hidden lg:flex')}
+                    visiblePages={
+                      activePdfHiddenPages.length > 0 && pdfVisiblePages.length > 0
+                        ? pdfVisiblePages
+                        : undefined
+                    }
+                  />
+                )}
+                <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-3">
+                  {readOnly ? (
+                    <button
+                      onClick={() => onExitReview?.()}
+                      className="h-10 px-6 rounded-xl bg-emerald-600 text-white font-black text-[13px] border border-emerald-500 hover:bg-emerald-500 transition-all flex items-center gap-2 font-sukhumvit"
+                    >
+                      กลับหน้าสรุปผล
+                    </button>
+                  ) : (
+                    answeredCount === questions.length && (
+                      <button
+                        onClick={() => setShowSubmitConfirm(true)}
+                        className="h-10 px-6 rounded-xl bg-blue-600 text-white font-black text-[13px] border border-blue-500 hover:bg-blue-700 transition-all flex items-center gap-2 font-sukhumvit"
+                      >
+                        <Send size={14} className="-rotate-12" /> ส่งข้อสอบ
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            ) : (
+              <>
             <button 
               onClick={() => setCurrentIdx(p => Math.max(0, p - 1))}
               disabled={currentIdx === 0}
@@ -572,7 +899,7 @@ function ExamInterface({
                 answeredCount === questions.length && (
                   <button 
                     onClick={() => setShowSubmitConfirm(true)}
-                    className="h-10 px-6 rounded-xl bg-indigo-600 text-white font-black text-[13px] border border-indigo-500 hover:bg-indigo-500 transition-all flex items-center gap-2 font-sukhumvit"
+                    className="h-10 px-6 rounded-xl bg-blue-600 text-white font-black text-[13px] border border-blue-500 hover:bg-blue-700 transition-all flex items-center gap-2 font-sukhumvit"
                   >
                     <Send size={14} className="-rotate-12" /> ส่งข้อสอบ
                   </button>
@@ -588,6 +915,8 @@ function ExamInterface({
              <span className="hidden md:inline">ข้อถัดไป</span>
              <ChevronRight size={16} />
            </button>
+              </>
+            )}
         </div>
         </div>
       </div>
@@ -621,7 +950,10 @@ function ExamInterface({
                     className={`h-12 rounded-xl text-[14px] font-black transition-all flex items-center justify-center border ${
                       i === currentIdx 
                         ? 'bg-blue-600 border border-blue-500 text-white' 
-                        : answers[questions[i].id]
+                        : isExamAnswerFilled(
+                            answers[questions[i].id],
+                            questions[i].questionType === 'essay',
+                          )
                           ? 'bg-emerald-100 border-emerald-300 text-emerald-700'
                           : 'bg-slate-100 border-slate-200 text-slate-600 hover:bg-slate-200'
                     }`}
@@ -678,7 +1010,7 @@ function ExamInterface({
                 </button>
                  <motion.button whileTap={{ scale: 0.98 }}
                   onClick={() => { setShowSubmitConfirm(false); onSubmit(); }}
-                  className="flex-1 h-14 rounded-2xl text-[15px] font-black text-white font-sukhumvit transition-all border border-indigo-500 bg-indigo-600 hover:bg-indigo-500">
+                  className="flex-1 h-14 rounded-2xl text-[15px] font-black text-white font-sukhumvit transition-all border border-blue-500 bg-blue-600 hover:bg-blue-700">
                   ส่งข้อสอบเลย
                 </motion.button>
               </div>
@@ -725,22 +1057,40 @@ function ExamInterface({
 export default function StudentExamPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
-  const { attempt, room, questions, isJoining, isLoadingQuestions, error, joinRoom, saveAnswer, recordSuspicious, submitAttempt, isSubmitted } = useExamAttempt(roomId || '');
-  const [isReviewMode, setIsReviewMode] = useState(false);
+  const { user, isLoading: authLoading } = useAuth();
+  const { attempt, room, roomPreview, questions, examPdfParts, answerSheetGroups, isJoining, isLoadingQuestions, error, joinRoom, saveAnswer, recordSuspicious, submitAttempt, isSubmitted } = useExamAttempt(roomId || '');
 
   // If no roomId in URL, redirect to portal
   useEffect(() => {
     if (!roomId) navigate('/portal');
   }, [roomId, navigate]);
 
+  // Exam content (question_sets) requires signed-in student — redirect to login with return URL
+  useEffect(() => {
+    if (authLoading || !roomId) return;
+    if (!user) {
+      navigate(`/login?redirect=${encodeURIComponent(`/exam/${roomId}`)}`, { replace: true });
+    }
+  }, [authLoading, user, roomId, navigate]);
+
   const handleSubmit = useCallback(() => {
     submitAttempt();
   }, [submitAttempt]);
 
+  if (authLoading || !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: colors.palette.shell }}>
+        <IndeterminateProgress />
+      </div>
+    );
+  }
+
+  if (!roomId) return null;
+
   if (!attempt || !room) {
     return (
       <JoinScreen
-        roomId={roomId || ''}
+        roomPreview={roomPreview}
         onJoin={joinRoom}
         isJoining={isJoining}
         error={error}
@@ -748,13 +1098,16 @@ export default function StudentExamPage() {
     );
   }
 
-  if ((isSubmitted || attempt.status === 'submitted' || attempt.status === 'graded') && !isReviewMode) {
+  if (isSubmitted || attempt.status === 'submitted' || attempt.status === 'graded') {
     return (
       <ResultScreen
         score={attempt?.score ?? null}
         total={room?.totalPoints ?? 0}
-        canReview={questions.length > 0}
-        onReview={() => setIsReviewMode(true)}
+        status={attempt.status}
+        pendingManualGrading={attempt.pendingManualGrading}
+        objectiveMaxPoints={attempt.objectiveMaxPoints}
+        manualEssayCount={attempt.manualEssayCount}
+        questions={questions}
       />
     );
   }
@@ -762,16 +1115,18 @@ export default function StudentExamPage() {
   return (
     <ExamInterface
       room={room}
+      roomId={roomId}
+      attemptId={attempt.id}
       questions={questions}
       answers={attempt.answers}
       suspiciousActivities={attempt.suspiciousActivities}
       endTime={room.endTime}
+      examPdfParts={examPdfParts}
+      answerSheetGroups={answerSheetGroups}
       onAnswer={saveAnswer}
       onSubmit={handleSubmit}
       onRecordSuspicious={recordSuspicious}
       isLoadingQuestions={isLoadingQuestions}
-      readOnly={isSubmitted || attempt.status === 'submitted' || attempt.status === 'graded'}
-      onExitReview={() => setIsReviewMode(false)}
     />
   );
 }

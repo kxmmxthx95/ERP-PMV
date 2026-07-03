@@ -15,6 +15,19 @@ export default defineConfig([
       reactHooks.configs.flat.recommended,
       reactRefresh.configs.vite,
     ],
+    rules: {
+      'no-restricted-imports': [
+        'warn',
+        {
+          paths: [
+            {
+              name: 'lucide-react',
+              message: "Use 'react-icons/hi2' instead of 'lucide-react' for new UI icons.",
+            },
+          ],
+        },
+      ],
+    },
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,

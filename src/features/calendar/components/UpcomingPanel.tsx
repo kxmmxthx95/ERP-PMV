@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, CalendarX, ArrowLeft, SlidersHorizontal } from 'lucide-react';
+import { Calendar, CalendarX, ArrowLeft, SlidersHorizontal } from 'lucide-react';
 import { format } from 'date-fns';
 import { th } from 'date-fns/locale';
 import {
@@ -76,7 +76,7 @@ export default function UpcomingPanel({
           className="flex items-center gap-3 px-5 py-4"
           style={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}
         >
-          {isSelected ? (
+          {isSelected && (
             <motion.button
               whileHover={{ scale: 1.1, backgroundColor: 'rgba(0,0,0,0.05)' }}
               whileTap={{ scale: 0.9 }}
@@ -85,16 +85,6 @@ export default function UpcomingPanel({
             >
               <ArrowLeft size={16} />
             </motion.button>
-          ) : (
-            <div
-              className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{
-                background: 'rgba(15,23,42,0.08)',
-                border: '1px solid rgba(15,23,42,0.14)',
-              }}
-            >
-              <Sparkles size={14} className="text-slate-800" />
-            </div>
           )}
           
           <div className="flex-1 min-w-0">
@@ -156,7 +146,7 @@ export default function UpcomingPanel({
                     className="w-14 h-14 rounded-2xl flex items-center justify-center mb-1"
                     style={{ background: 'rgba(0,0,0,0.03)' }}
                   >
-                    {isSelected ? <CalendarX size={24} strokeWidth={1.5} /> : <Sparkles size={24} strokeWidth={1.5} />}
+                    {isSelected ? <CalendarX size={24} strokeWidth={1.5} /> : <Calendar size={24} strokeWidth={1.5} />}
                   </div>
                   <p className="text-[11px] font-medium font-sarabun">
                     {isSelected ? 'ไม่มีกิจกรรมในวันนี้' : 'ไม่มีกิจกรรมที่กำลังจะมาถึง'}

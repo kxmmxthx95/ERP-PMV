@@ -1,9 +1,22 @@
 import { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import {
   BookOpen, Zap, BarChart3, Users, ChevronDown, Search,
-  Languages, Calculator, Atom, Globe, HeartPulse, Palette, Briefcase, MessageSquare, Sparkles, MoreHorizontal
+  MoreHorizontal, UserMinus,
 } from 'lucide-react';
+import {
+  HiOutlineLanguage,
+  HiOutlineCalculator,
+  HiOutlineBeaker,
+  HiOutlineGlobeAsiaAustralia,
+  HiOutlineHeart,
+  HiOutlinePaintBrush,
+  HiOutlineBriefcase,
+  HiOutlineChatBubbleLeftRight,
+  HiOutlineSparkles,
+  HiOutlineBookOpen,
+} from 'react-icons/hi2';
 import { Button } from '@/components/ui/button';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
@@ -14,6 +27,8 @@ import type { ClassRoom, EnrolledCourse } from '@/types/class';
 import type { Department, Subject } from '@/types/curriculum';
 import { CATEGORY_CONFIG } from '@/types/curriculum';
 import { toast } from 'sonner';
+import PasswordConfirmDialog from '@/features/auth/components/PasswordConfirmDialog';
+import { logActivity } from '@/lib/activityLogger';
 
 interface Props {
   classRoom: ClassRoom;
@@ -49,16 +64,16 @@ function SubjectIcon({ subjectGroup, className, size = 18 }: { subjectGroup?: st
   const g = (subjectGroup || '').toLowerCase();
   const props = { size, className: className || "text-white drop-shadow-sm" };
 
-  if (g.includes('thai') || g.includes('ภาษาไทย')) return <Languages {...props} />;
-  if (g.includes('math') || g.includes('คณิต')) return <Calculator {...props} />;
-  if (g.includes('science') || g.includes('วิทยา')) return <Atom {...props} />;
-  if (g.includes('social') || g.includes('สังคม')) return <Globe {...props} />;
-  if (g.includes('health') || g.includes('pe')) return <HeartPulse {...props} />;
-  if (g.includes('art') || g.includes('ศิลป')) return <Palette {...props} />;
-  if (g.includes('career') || g.includes('งาน')) return <Briefcase {...props} />;
-  if (g.includes('foreign') || g.includes('lang') || g.includes('ภาษา')) return <MessageSquare {...props} />;
-  if (g.includes('activity') || g.includes('กิจกรรม')) return <Sparkles {...props} />;
-  return <BookOpen {...props} />;
+  if (g.includes('thai') || g.includes('ภาษาไทย')) return <HiOutlineLanguage {...props} />;
+  if (g.includes('math') || g.includes('คณิต')) return <HiOutlineCalculator {...props} />;
+  if (g.includes('science') || g.includes('วิทยา')) return <HiOutlineBeaker {...props} />;
+  if (g.includes('social') || g.includes('สังคม')) return <HiOutlineGlobeAsiaAustralia {...props} />;
+  if (g.includes('health') || g.includes('pe')) return <HiOutlineHeart {...props} />;
+  if (g.includes('art') || g.includes('ศิลป')) return <HiOutlinePaintBrush {...props} />;
+  if (g.includes('career') || g.includes('งาน')) return <HiOutlineBriefcase {...props} />;
+  if (g.includes('foreign') || g.includes('lang') || g.includes('ภาษา')) return <HiOutlineChatBubbleLeftRight {...props} />;
+  if (g.includes('activity') || g.includes('กิจกรรม')) return <HiOutlineSparkles {...props} />;
+  return <HiOutlineBookOpen {...props} />;
 }
 
 function getGroupLabelThai(group?: string): string {
@@ -110,18 +125,43 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
   }, [versions, coursesByVersion, classRoom, activeSystemYear, loadCoursesForVersion]);
 
   const initial = useMemo(() => {
-    const m: Record<string, string> = {};
+    const m: Record<string, string[]> = {};
     for (const ec of classRoom.enrolledCourses ?? []) {
-      m[ec.subjectId] = ec.teacherId;
+      if (!m[ec.subjectId]) m[ec.subjectId] = [];
+      if (ec.teacherId && !m[ec.subjectId].includes(ec.teacherId)) {
+        m[ec.subjectId].push(ec.teacherId);
+      }
     }
     return m;
   }, [classRoom.enrolledCourses]);
 
-  const [courseTeachers, setCourseTeachers] = useState<Record<string, string>>(initial);
+  const [courseTeachers, setCourseTeachers] = useState<Record<string, string[]>>(initial);
+  const [selectedSemester, setSelectedSemester] = useState<1 | 2>((classRoom.semester || 1) as 1 | 2);
   const [isStampMode, setIsStampMode] = useState(false);
   const [selectedStampTeacherId, setSelectedStampTeacherId] = useState<string | null>(null);
   const [teacherSearch, setTeacherSearch] = useState('');
   const [isTeacherPickerOpen, setIsTeacherPickerOpen] = useState(false);
+  const [showClearTeachersModal, setShowClearTeachersModal] = useState(false);
+  const [headerPortalTarget, setHeaderPortalTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setHeaderPortalTarget(document.getElementById('course-header-portal'));
+  }, []);
+
+  useEffect(() => {
+    const next: Record<string, string[]> = {};
+    for (const ec of classRoom.enrolledCourses ?? []) {
+      if (!ec.semester || ec.semester === selectedSemester) {
+        if (!next[ec.subjectId]) next[ec.subjectId] = [];
+        if (ec.teacherId && !next[ec.subjectId].includes(ec.teacherId)) {
+          next[ec.subjectId].push(ec.teacherId);
+        }
+      }
+    }
+    setCourseTeachers(next);
+  }, [classRoom.enrolledCourses, selectedSemester]);
+
+
   const classSubjects = useMemo((): Subject[] => {
     // 1. Resolve Department & Academic Year (same fallback as ClassStudentPanel)
     const dept = (classRoom.departmentId ||
@@ -130,7 +170,7 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
 
     const academicYearId = classRoom.academicYearId || (classRoom as any).academicYear || activeSystemYear || '2568';
     const currentYearNum = parseInt(academicYearId);
-    const semester = classRoom.semester || 1;
+    const semester = selectedSemester;
     const semKey = semester === 1 ? 'semester1' : 'semester2';
 
     let curriculumSubjectIds: string[] = [];
@@ -200,7 +240,7 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
     return subjects
       .filter(s => uniqueIds.includes(s.id))
       .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'th', { numeric: true }));
-  }, [maps, subjects, versions, coursesByVersion, activeSystemYear, classRoom]);
+  }, [maps, subjects, versions, coursesByVersion, activeSystemYear, classRoom, selectedSemester]);
 
   const courseSummary = useMemo(() => {
     let total = 0;
@@ -230,18 +270,64 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
     [teachers],
   );
 
-  const setTeacher = async (subjectId: string, teacherId: string) => {
-    const nextTeachers = { ...courseTeachers, [subjectId]: teacherId };
+  const hasAssignedTeachers = useMemo(
+    () => Object.values(courseTeachers).some((ids) => ids.length > 0),
+    [courseTeachers],
+  );
+
+  const setTeacherIds = async (subjectId: string, teacherIds: string[]) => {
+    const nextTeachers = { ...courseTeachers, [subjectId]: teacherIds.slice(0, 2) };
     setCourseTeachers(nextTeachers);
 
     try {
-      const enrolledCourses: EnrolledCourse[] = Object.entries(nextTeachers)
-        .filter(([, tid]) => tid)
-        .map(([sid, tid]) => ({ subjectId: sid, teacherId: tid }));
+      const current = classRoom.enrolledCourses ?? [];
+      const keepOtherSemesters = current.filter(ec => ec.semester && ec.semester !== selectedSemester);
+      const semesterSubjectIds = Array.from(new Set(classSubjects.map(s => s.id)));
+      const forCurrentSemester: EnrolledCourse[] = semesterSubjectIds.flatMap((sid) => {
+        const tids = (nextTeachers[sid] || []).filter(Boolean).slice(0, 2);
+        if (tids.length === 0) {
+          // Keep the subject enrolled, but explicitly mark as unassigned teacher.
+          return [{ subjectId: sid, teacherId: '', semester: selectedSemester }];
+        }
+        return tids.map((tid) => ({ subjectId: sid, teacherId: tid, semester: selectedSemester }));
+      });
+      const enrolledCourses: EnrolledCourse[] = [...keepOtherSemesters, ...forCurrentSemester];
       await updateClass(classRoom.id, { enrolledCourses });
     } catch (e) {
       toast.error('บันทึกอัตโนมัติล้มเหลว');
       console.error('Auto-save failed:', e);
+    }
+  };
+
+  const clearAllTeachers = async () => {
+    const previousTeachers = courseTeachers;
+    const clearedTeachers = Object.fromEntries(
+      classSubjects.map((subject) => [subject.id, [] as string[]]),
+    );
+    setCourseTeachers(clearedTeachers);
+
+    try {
+      const current = classRoom.enrolledCourses ?? [];
+      const keepOtherSemesters = current.filter(ec => ec.semester && ec.semester !== selectedSemester);
+      const forCurrentSemester: EnrolledCourse[] = classSubjects.map((subject) => ({
+        subjectId: subject.id,
+        teacherId: '',
+        semester: selectedSemester,
+      }));
+      await updateClass(classRoom.id, { enrolledCourses: [...keepOtherSemesters, ...forCurrentSemester] });
+      await logActivity({
+        action: 'clear_class_teachers',
+        category: 'academic',
+        status: 'success',
+        targetId: classRoom.id,
+        detail: `ล้างครูผู้สอนทั้งหมด เทอม ${selectedSemester} ห้อง ${classRoom.className}`,
+        metadata: { semester: selectedSemester, subjectCount: classSubjects.length },
+      });
+      toast.success(`ล้างครูผู้สอน เทอม ${selectedSemester} เรียบร้อยแล้ว`);
+    } catch (e) {
+      setCourseTeachers(previousTeachers);
+      toast.error('ล้างครูผู้สอนไม่สำเร็จ');
+      console.error('Clear teachers failed:', e);
     }
   };
 
@@ -260,128 +346,132 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-6 h-full">
-      {/* ── Credit Summary Inline ── */}
-      <div
-        className={`flex flex-wrap items-center gap-x-8 gap-y-3 px-2 py-3 flex-shrink-0 relative ${isTeacherPickerOpen ? 'z-50' : 'z-20'}`}
-      >
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-500 shadow-sm">
-            <BarChart3 size={14} strokeWidth={2.5} />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-0.5 font-sarabun">หน่วยกิตรวม</span>
-            <span className="text-[14px] font-black text-slate-700 leading-none">{courseSummary.total.toFixed(1)}</span>
-          </div>
-        </div>
-
-        <div className="w-px h-6 bg-black/[0.04] hidden md:block" />
-
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center text-blue-500 shadow-sm">
-            <BookOpen size={14} strokeWidth={2.5} />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-0.5 font-sarabun">วิชาพื้นฐาน</span>
-            <span className="text-[14px] font-black text-slate-700 leading-none">{courseSummary.basic.toFixed(1)}</span>
-          </div>
-        </div>
-
-        <div className="w-px h-6 bg-black/[0.04] hidden md:block" />
-
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center text-amber-500 shadow-sm">
-            <Zap size={14} strokeWidth={2.5} />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-0.5 font-sarabun">วิชาเพิ่มเติม</span>
-            <span className="text-[14px] font-black text-slate-700 leading-none">{courseSummary.additional.toFixed(1)}</span>
-          </div>
-        </div>
-
-        <div className="w-px h-6 bg-black/[0.04] hidden md:block" />
-
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-500 shadow-sm">
-            <Users size={14} strokeWidth={2.5} />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-0.5 font-sarabun">กิจกรรม</span>
-            <span className="text-[14px] font-black text-slate-700 leading-none">{courseSummary.activity}</span>
-          </div>
-        </div>
-
-        {/* ── Stamp Mode Integration ── */}
-        <div className="ml-auto flex items-center gap-3">
-          {isStampMode && (
-            <div className="relative">
-              <button
-                onClick={() => setIsTeacherPickerOpen(!isTeacherPickerOpen)}
-                className="h-9 px-4 rounded-xl bg-blue-50 border border-blue-100 flex items-center gap-2.5 transition-all hover:bg-blue-100 group"
-              >
-                <div className="w-5 h-5 rounded-md bg-blue-500 flex items-center justify-center text-[10px] text-white font-bold">
-                  {selectedStampTeacherId ? teachers.find(t => t.id === selectedStampTeacherId)?.name.slice(0, 1) : '?'}
-                </div>
-                <span className="text-xs font-bold text-blue-600 font-sarabun">
-                  {selectedStampTeacherId ? teachers.find(t => t.id === selectedStampTeacherId)?.name : 'เลือกครูที่จะสแตมป์'}
-                </span>
-                <MoreHorizontal size={14} className="text-blue-400 group-hover:text-blue-600" />
-              </button>
-
-              {isTeacherPickerOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setIsTeacherPickerOpen(false)} />
-                  <div className="absolute top-full right-0 mt-2 z-50 w-64 bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-black/5 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                    <div className="p-3 border-b border-black/5">
-                      <input
-                        autoFocus
-                        placeholder="ค้นหาชื่อครู..."
-                        value={teacherSearch}
-                        onChange={e => setTeacherSearch(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-50 rounded-xl text-xs outline-none border border-transparent focus:border-blue-200 transition-all font-sarabun"
-                      />
-                    </div>
-                    <div className="max-h-60 overflow-y-auto py-1">
-                      {teachers
-                        .filter(t => t.name.toLowerCase().includes(teacherSearch.toLowerCase()))
-                        .map(t => (
-                          <button
-                            key={t.id}
-                            onClick={() => {
-                              setSelectedStampTeacherId(t.id);
-                              setIsTeacherPickerOpen(false);
-                              setTeacherSearch('');
-                            }}
-                            className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs hover:bg-blue-50 transition-colors font-sarabun ${selectedStampTeacherId === t.id ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600'
-                              }`}
-                          >
-                            <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] text-white ${selectedStampTeacherId === t.id ? 'bg-blue-500' : 'bg-slate-300'}`}>
-                              {t.name.slice(0, 1)}
-                            </div>
-                            <span>{t.name}</span>
-                          </button>
-                        ))}
-                    </div>
-                  </div>
-                </>
-              )}
+    <div className="flex flex-col gap-4 h-full font-sukhumvit">
+      {headerPortalTarget && createPortal(
+        <div className={`flex flex-wrap items-center justify-between gap-3.5 relative ${isTeacherPickerOpen ? 'z-50' : 'z-20'} w-full flex-1`}>
+          {/* Left: Stats (Full-width on mobile, auto on desktop) */}
+          <div className="w-full md:w-auto flex items-center justify-between md:justify-start gap-1.5">
+            <div className="flex items-center justify-center flex-1 md:flex-initial gap-1 px-2.5 py-1 rounded-full bg-indigo-50/90 border border-indigo-100/60 shadow-sm">
+              <BarChart3 size={12} className="text-indigo-500 shrink-0" />
+              <span className="text-[11px] font-black text-indigo-700">{courseSummary.total.toFixed(1)}</span>
             </div>
-          )}
+            <div className="flex items-center justify-center flex-1 md:flex-initial gap-1 px-2.5 py-1 rounded-full bg-blue-50/90 border border-blue-100/60 shadow-sm">
+              <BookOpen size={12} className="text-blue-500 shrink-0" />
+              <span className="text-[11px] font-black text-blue-700">{courseSummary.basic.toFixed(1)}</span>
+            </div>
+            <div className="flex items-center justify-center flex-1 md:flex-initial gap-1 px-2.5 py-1 rounded-full bg-amber-50/90 border border-amber-100/60 shadow-sm">
+              <Zap size={12} className="text-amber-500 shrink-0" />
+              <span className="text-[11px] font-black text-amber-700">{courseSummary.additional.toFixed(1)}</span>
+            </div>
+            <div className="flex items-center justify-center flex-1 md:flex-initial gap-1 px-2.5 py-1 rounded-full bg-emerald-50/90 border border-emerald-100/60 shadow-sm">
+              <Users size={12} className="text-emerald-500 shrink-0" />
+              <span className="text-[11px] font-black text-emerald-700">{courseSummary.activity}</span>
+            </div>
+          </div>
 
-          <Button
-            onClick={() => {
-              setIsStampMode(!isStampMode);
-              if (!isStampMode) setSelectedStampTeacherId(null);
-            }}
-            className={`w-9 h-9 p-0 rounded-xl flex items-center justify-center transition-all ${isStampMode
+          {/* Right: Term Selector & Zap stamp button (Full-width on mobile, auto on desktop) */}
+          <div className="w-full md:w-auto flex items-center gap-2 justify-between md:justify-end">
+            {/* ── Stamp Mode Integration ── */}
+            <div className="flex-1 md:flex-initial flex items-center h-9 bg-white/70 border border-black/[0.06] p-0.5 rounded-full shadow-sm">
+              {[1, 2].map((sem) => (
+                <button
+                  key={sem}
+                  onClick={() => setSelectedSemester(sem as 1 | 2)}
+                  className={`flex-1 md:flex-initial text-center h-8 px-4 rounded-full text-[10px] font-black transition-all ${selectedSemester === sem
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-black/[0.04]'
+                    }`}
+                >
+                  เทอม {sem}
+                </button>
+              ))}
+            </div>
+
+            {isStampMode && (
+              <div className="relative">
+                <button
+                  onClick={() => setIsTeacherPickerOpen(!isTeacherPickerOpen)}
+                  className="h-9 px-4 rounded-xl bg-blue-50 border border-blue-100 flex items-center gap-2.5 transition-all hover:bg-blue-100 group"
+                >
+                  <div className="w-5 h-5 rounded-md bg-blue-500 flex items-center justify-center text-[10px] text-white font-bold">
+                    {selectedStampTeacherId ? teachers.find(t => t.id === selectedStampTeacherId)?.name.slice(0, 1) : '?'}
+                  </div>
+                  <span className="text-xs font-bold text-blue-600 font-sarabun">
+                    {selectedStampTeacherId ? teachers.find(t => t.id === selectedStampTeacherId)?.name : 'เลือกครูที่จะสแตมป์'}
+                  </span>
+                  <MoreHorizontal size={14} className="text-blue-400 group-hover:text-blue-600" />
+                </button>
+
+                {isTeacherPickerOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsTeacherPickerOpen(false)} />
+                    <div className="absolute top-full right-0 mt-2 z-50 w-64 bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-black/5 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                      <div className="p-3 border-b border-black/5">
+                        <input
+                          autoFocus
+                          placeholder="ค้นหาชื่อครู..."
+                          value={teacherSearch}
+                          onChange={e => setTeacherSearch(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 rounded-xl text-xs outline-none border border-transparent focus:border-blue-200 transition-all font-sarabun"
+                        />
+                      </div>
+                      <div className="max-h-60 overflow-y-auto py-1">
+                        {teachers
+                          .filter(t => t.name.toLowerCase().includes(teacherSearch.toLowerCase()))
+                          .map(t => (
+                            <button
+                              key={t.id}
+                              onClick={() => {
+                                setSelectedStampTeacherId(t.id);
+                                setIsTeacherPickerOpen(false);
+                                setTeacherSearch('');
+                              }}
+                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs hover:bg-blue-50 transition-colors font-sarabun ${selectedStampTeacherId === t.id ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600'
+                                }`}
+                            >
+                              <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] text-white ${selectedStampTeacherId === t.id ? 'bg-blue-500' : 'bg-slate-300'}`}>
+                                {t.name.slice(0, 1)}
+                              </div>
+                              <span>{t.name}</span>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <Button
+              onClick={() => setShowClearTeachersModal(true)}
+              disabled={!hasAssignedTeachers}
+              title="ล้างครูผู้สอนออกจากรายวิชาทั้งหมด"
+              className={`w-9 h-9 p-0 rounded-xl flex items-center justify-center transition-all shrink-0 ${
+                hasAssignedTeachers
+                  ? 'bg-white border border-rose-100 text-rose-500 hover:bg-rose-50 hover:border-rose-200'
+                  : 'bg-white border border-black/5 text-slate-300 cursor-not-allowed'
+              }`}
+            >
+              <UserMinus size={14} />
+            </Button>
+
+            <Button
+              onClick={() => {
+                setIsStampMode(!isStampMode);
+                if (!isStampMode) setSelectedStampTeacherId(null);
+              }}
+              className={`w-9 h-9 p-0 rounded-xl flex items-center justify-center transition-all ${isStampMode
                 ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200 border-0'
                 : 'bg-white border border-black/5 text-slate-400 hover:text-blue-600 hover:bg-blue-50'
-              }`}
-          >
-            <Zap size={14} className={isStampMode ? 'animate-pulse' : ''} />
-          </Button>
+                }`}
+            >
+              <Zap size={14} className={isStampMode ? 'animate-pulse' : ''} />
+            </Button>
+          </div>
         </div>
-      </div>
+        ,
+        headerPortalTarget
+      )}
 
 
       {/* Course list */}
@@ -391,164 +481,216 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
         transition={{ delay: 0.05 }}
         className="flex-1 min-h-0 flex flex-col relative z-10"
       >
-        {/* Header */}
-        <div className="flex items-center px-6 py-3 border-b border-black/[0.05] bg-transparent sticky top-0 z-30">
-          <div className="flex-1 min-w-0 px-4 text-[10px] font-black text-slate-400 uppercase tracking-widest font-sarabun">รายวิชา</div>
-          <div className="w-72 shrink-0 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest font-sarabun">ผู้สอน</div>
-          <div className="w-44 shrink-0 px-6 text-[10px] font-black text-slate-400 uppercase tracking-widest font-sarabun">กลุ่มสาระ</div>
-          <div className="w-24 shrink-0 px-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest font-sarabun">คาบ</div>
-          <div className="w-24 shrink-0 px-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest font-sarabun">หน่วยกิต</div>
-        </div>
-
-        {/* Rows */}
-        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar flex flex-col pb-40">
-          {classSubjects.map((subject, idx) => {
-            const catCfg = CATEGORY_CONFIG[subject.category];
-            const colors = getSubjectColors(subject.subjectGroup);
-            const selectedTeacherId = courseTeachers[subject.id] ?? '';
-            const selectedTeacher = activeTeachers.find(t => t.id === selectedTeacherId);
-            return (
-              <CourseRow
-                key={subject.id}
-                idx={idx + 1}
-                subject={subject}
-                catCfg={catCfg}
-                colors={colors}
-                cfg={cfg}
-                classRoom={classRoom}
-                teachers={activeTeachers}
-                selectedTeacherId={selectedTeacherId}
-                selectedTeacher={selectedTeacher}
-                isStampMode={isStampMode}
-                selectedStampTeacherId={selectedStampTeacherId}
-                onSelect={tid => setTeacher(subject.id, tid)}
-              />
-            );
-          })}
+        {/* Cards Grid Container */}
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pb-40">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-1.5 md:p-3">
+            {classSubjects.map((subject, idx) => {
+              const catCfg = CATEGORY_CONFIG[subject.category];
+              const colors = getSubjectColors(subject.subjectGroup);
+              const selectedTeacherIds = courseTeachers[subject.id] ?? [];
+              const selectedTeachers = activeTeachers.filter(t => selectedTeacherIds.includes(t.id));
+              return (
+                <CourseCard
+                  key={subject.id}
+                  idx={idx + 1}
+                  subject={subject}
+                  catCfg={catCfg}
+                  colors={colors}
+                  cfg={cfg}
+                  classRoom={classRoom}
+                  teachers={activeTeachers}
+                  rowIndex={idx}
+                  selectedTeacherIds={selectedTeacherIds}
+                  selectedTeachers={selectedTeachers}
+                  isStampMode={isStampMode}
+                  selectedStampTeacherId={selectedStampTeacherId}
+                  onSelect={async (tid) => {
+                    const current = courseTeachers[subject.id] ?? [];
+                    if (!current.includes(tid) && current.length >= 2) {
+                      toast.error('รายวิชานี้กำหนดครูได้สูงสุด 2 คน');
+                      return;
+                    }
+                    const next = current.includes(tid) ? current.filter(id => id !== tid) : [...current, tid];
+                    await setTeacherIds(subject.id, next);
+                  }}
+                  onClear={async () => setTeacherIds(subject.id, [])}
+                />
+              );
+            })}
+          </div>
         </div>
 
       </motion.div>
+
+      <PasswordConfirmDialog
+        open={showClearTeachersModal}
+        onClose={() => setShowClearTeachersModal(false)}
+        onVerified={clearAllTeachers}
+        title="ล้างครูผู้สอนทั้งหมด"
+        subtitle={`ยืนยันการล้างครูผู้สอนออกจากทุกรายวิชา เทอม ${selectedSemester} ห้อง ${classRoom.className}`}
+        confirmLabel="ล้างครูผู้สอน"
+      />
     </div>
   );
 }
 
-// ── Course Row ────────────────────────────────────────────────────────────────
+// ── Course Card ────────────────────────────────────────────────────────────────
 
-interface CourseRowProps {
+interface CourseCardProps {
   idx: number;
+  rowIndex: number;
   subject: Subject;
   catCfg: { label: string; color: string; bg: string };
   colors: string[];
   cfg: { bg: string; color: string };
   classRoom: ClassRoom;
   teachers: ReturnType<typeof useTeacherManager>['teachers'];
-  selectedTeacherId: string;
-  selectedTeacher: ReturnType<typeof useTeacherManager>['teachers'][number] | undefined;
+  selectedTeacherIds: string[];
+  selectedTeachers: ReturnType<typeof useTeacherManager>['teachers'];
   isStampMode?: boolean;
   selectedStampTeacherId?: string | null;
   onSelect: (id: string) => void;
+  onClear: () => void;
 }
 
-function CourseRow({
+function CourseCard({
   subject, colors, teachers,
-  selectedTeacherId, selectedTeacher, isStampMode, selectedStampTeacherId, onSelect
-}: CourseRowProps) {
+  rowIndex, selectedTeacherIds, selectedTeachers, isStampMode, selectedStampTeacherId, onSelect, onClear
+}: CourseCardProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
 
   const filtered = teachers.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
   const groupLabel = getGroupLabelThai(subject.subjectGroup);
 
-  const isCurrentStampMatch = isStampMode && selectedStampTeacherId && selectedTeacherId === selectedStampTeacherId;
+  const isCurrentStampMatch = isStampMode && selectedStampTeacherId && selectedTeacherIds.includes(selectedStampTeacherId);
 
   return (
-    <div
-      onClick={() => {
-        if (isStampMode && selectedStampTeacherId) {
-          onSelect(selectedStampTeacherId);
-        }
-      }}
-      className={`group flex items-center px-6 py-2 border-b border-black/[0.03] hover:bg-slate-50/50 transition-all ${open ? 'z-50 bg-white/80 backdrop-blur-sm' : 'z-0'
-        } relative ${isCurrentStampMatch ? 'bg-blue-50/40 ring-1 ring-blue-100/50 z-10' : ''
-        }`}
-    >
-      {/* Subject Info (Song) */}
-      <div className="flex-1 min-w-0 px-4 flex items-center gap-4">
-        <div
-          className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm"
-          style={{
-            background: `linear-gradient(135deg, ${colors[1]} 0%, ${colors[0]} 100%)`,
-          }}
-        >
-          <SubjectIcon subjectGroup={subject.subjectGroup} />
-        </div>
-        <div className="flex flex-col min-w-0">
-          <p className="text-[14px] font-bold text-slate-900 truncate leading-tight mb-1">
-            {subject.name}
-          </p>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded uppercase tracking-tighter">
+      <div
+        onClick={() => {
+          if (isStampMode && selectedStampTeacherId) {
+            onSelect(selectedStampTeacherId);
+          }
+        }}
+        className={`group relative flex flex-col justify-between p-3.5 rounded-2xl border border-slate-200 transition-all duration-200 cursor-pointer ${open ? 'z-40 bg-white shadow-lg border-blue-200 ring-2 ring-blue-500/5' : 'z-10'
+          } ${isCurrentStampMatch
+            ? 'bg-blue-50/80 border-blue-200 shadow-sm shadow-blue-100/50'
+            : rowIndex % 2 === 0
+              ? 'bg-white/90 hover:border-slate-200 hover:shadow-sm'
+              : 'bg-white/60 hover:border-slate-200 hover:shadow-sm'
+          }`}
+      >
+      {/* Top Section: Icon, Badges */}
+      <div className="flex items-start justify-between gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div
+            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm"
+            style={{
+              background: `linear-gradient(135deg, ${colors[1]} 0%, ${colors[0]} 100%)`,
+            }}
+          >
+            <SubjectIcon subjectGroup={subject.subjectGroup} size={16} />
+          </div>
+          <div className="min-w-0">
+            <span className="text-[9px] font-black font-mono tracking-tighter text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-black/[0.02] uppercase block w-max">
               {subject.code}
             </span>
           </div>
         </div>
+
+        {/* Hour / Credit Badges */}
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+            {subject.hoursPerWeek || 0} คาบ
+          </span>
+          <span className="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600">
+            {Number(subject.credits || 0).toFixed(1)} นก.
+          </span>
+        </div>
       </div>
 
-      {/* Teacher (Artist) */}
-      <div className="w-72 shrink-0 px-6 relative flex items-center gap-3">
-        <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 overflow-hidden bg-slate-100 shadow-sm border border-black/[0.03]">
-          {selectedTeacher ? (
+      {/* Middle Section: Subject Name & Group */}
+      <div className="my-2.5 min-w-0">
+        <h3 className="text-[12.5px] font-black text-slate-800 leading-snug truncate" title={subject.name}>
+          {subject.name}
+        </h3>
+        <p className="text-[10px] font-bold text-slate-400 truncate mt-0.5">
+          {groupLabel}
+        </p>
+      </div>
+
+      {/* Bottom Section: Teacher Picker Dropdown */}
+      <div className="flex items-center gap-2 pt-2.5 border-t border-black/[0.03]">
+        {/* Avatar */}
+        <div
+          onDoubleClick={(e) => {
+            if (selectedTeachers[0]) {
+              e.stopPropagation();
+              onSelect(selectedTeachers[0].id);
+            }
+          }}
+          title="ดับเบิลคลิกเพื่อลบครูผู้สอน"
+          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden bg-slate-100 shadow-sm border border-black/[0.03]"
+        >
+          {selectedTeachers[0] ? (
             <img
-              src={selectedTeacher.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedTeacher.id}&backgroundColor=f8fafc`}
+              src={selectedTeachers[0].photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedTeachers[0].id}&backgroundColor=f8fafc`}
               alt="teacher"
               className="w-full h-full object-cover"
             />
           ) : (
-            <Search size={18} className="text-slate-300" />
+            <Search size={14} className="text-slate-300" />
           )}
         </div>
 
-        <div
-          className={`group/teacher flex items-center gap-2 px-3 py-1.5 rounded-full transition-all flex-1 text-left border relative ${open ? 'bg-white shadow-sm border-blue-500 ring-2 ring-blue-500/10' :
-              selectedTeacher
-                ? 'border-black/[0.06] hover:border-blue-400'
-                : 'border-black/[0.03] hover:bg-blue-50/50'
-            }`}
-        >
-          <div className="flex-1 min-w-0">
-            <input
-              value={open ? search : (selectedTeacher?.name || '')}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                if (!open) setOpen(true);
-              }}
-              onFocus={() => {
-                setOpen(true);
-                setSearch('');
-              }}
-              placeholder="ค้นหาชื่อครู..."
-              className="w-full bg-transparent text-[11px] font-bold outline-none placeholder:text-slate-300 text-slate-700 font-sarabun truncate"
+        {/* Dropdown Input Wrapper */}
+        <div className="relative flex-1 min-w-0">
+          <div
+            className={`group/teacher flex items-center gap-1 px-2 py-1 rounded-xl transition-all w-full text-left border relative ${open ? 'bg-white shadow-sm border-blue-500 ring-2 ring-blue-500/10' :
+                selectedTeachers.length > 0
+                  ? 'border-black/[0.06] hover:border-blue-400 bg-white/50'
+                  : 'border-black/[0.03] hover:bg-blue-50/50 bg-transparent'
+              }`}
+          >
+            <div className="flex-1 min-w-0">
+              {open ? (
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="ค้นหา..."
+                  className="w-full bg-transparent text-[10px] font-bold outline-none placeholder:text-slate-400 text-slate-800 font-sarabun truncate py-0.5"
+                  autoFocus
+                />
+              ) : (
+                <div
+                  onClick={() => { setOpen(true); setSearch(''); }}
+                  className="w-full bg-transparent text-[10px] font-bold text-slate-800 font-sarabun truncate cursor-pointer py-0.5"
+                >
+                  {selectedTeachers.length > 0 ? selectedTeachers.map(t => t.name).join(', ') : 'เลือกครูผู้สอน...'}
+                </div>
+              )}
+            </div>
+            <ChevronDown
+              size={10}
+              className={`text-slate-300 transition-transform duration-300 shrink-0 ${open ? 'rotate-180 text-blue-500' : ''}`}
             />
           </div>
-          <ChevronDown
-            size={12}
-            className={`text-slate-300 transition-transform duration-300 ${open ? 'rotate-180 text-blue-500' : ''}`}
-          />
 
           {open && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setSearch(''); }} />
               <div
-                className="absolute top-full left-0 right-0 mt-1 z-50 rounded-lg overflow-hidden shadow-2xl animate-in fade-in slide-in-from-top-1 duration-200"
+                className="absolute bottom-full left-0 right-0 mb-1.5 z-50 rounded-xl overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-1 duration-200"
                 style={{
                   background: 'white',
                   border: '1px solid rgba(59, 130, 246, 0.2)',
                 }}
               >
-                <div className="max-h-56 overflow-y-auto custom-scrollbar p-1 flex flex-col gap-0.5">
+                <div className="max-h-48 overflow-y-auto custom-scrollbar p-1 flex flex-col gap-0.5">
                   <button
-                    onClick={() => { onSelect(''); setOpen(false); setSearch(''); }}
-                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-[9px] hover:bg-slate-50 transition-colors font-sarabun border border-transparent ${!selectedTeacherId ? 'text-blue-600 font-bold bg-blue-50/50 border-blue-100 shadow-sm' : 'text-slate-400'}`}
+                    onClick={() => { onClear(); setOpen(false); setSearch(''); }}
+                    className={`w-full text-left px-2 py-1.5 rounded-md text-[9px] hover:bg-slate-50 transition-colors font-sarabun border border-transparent ${selectedTeacherIds.length === 0 ? 'text-blue-600 font-bold bg-blue-50/50 border-blue-100 shadow-sm' : 'text-slate-400'
+                      }`}
                   >
                     — ไม่ระบุครูผู้สอน
                   </button>
@@ -559,64 +701,51 @@ function CourseRow({
                         <button
                           key={t.id}
                           onClick={() => { onSelect(t.id); setOpen(false); setSearch(''); }}
-                          className={`w-full flex items-center justify-between px-2.5 py-1 rounded-md text-[10px] bg-white border shadow-sm transition-all hover:border-blue-200 hover:shadow-md font-sarabun group/item ${t.id === selectedTeacherId ? 'border-blue-500 ring-1 ring-blue-500/20' : 'border-black/[0.03]'
+                          className={`w-full flex items-center justify-between px-2 py-1 rounded-md text-[9.5px] bg-white border shadow-sm transition-all hover:border-blue-200 hover:shadow-md font-sarabun group/item ${selectedTeacherIds.includes(t.id) ? 'border-blue-500 ring-1 ring-blue-500/20' : 'border-black/[0.03]'
                             }`}
                         >
-                          <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full overflow-hidden bg-slate-100 shadow-inner flex-shrink-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <div className="w-5.5 h-5.5 rounded-full overflow-hidden bg-slate-100 shadow-inner flex-shrink-0">
                               <img
                                 src={t.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${t.id}&backgroundColor=f8fafc`}
                                 alt="teacher"
                                 className="w-full h-full object-cover"
                               />
                             </div>
-                            <span className={`font-medium ${t.id === selectedTeacherId ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>{t.name}</span>
+                            <span className={`truncate ${selectedTeacherIds.includes(t.id) ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>
+                              {t.name}
+                            </span>
                           </div>
-                          <span className="px-1 py-0.5 rounded bg-blue-50 text-blue-500 text-[7px] font-black tracking-wider">
-                            {(t as any).personalId || t.id.slice(-5).toUpperCase()}
-                          </span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {selectedTeacherIds.includes(t.id) && (
+                              <span className="px-1 py-0.5 rounded bg-blue-500 text-white text-[7px] font-black">
+                                เลือก
+                              </span>
+                            )}
+                            <span className="px-1 py-0.5 rounded bg-blue-50 text-blue-500 text-[6.5px] font-black tracking-wider">
+                              {(t as any).personalId || t.id.slice(-4).toUpperCase()}
+                            </span>
+                          </div>
                         </button>
                       ))}
                       {filtered.length === 0 && (
                         <div className="px-3 py-6 text-center">
-                          <p className="text-[10px] text-slate-400 font-sarabun">ไม่พบรายชื่อครู</p>
+                          <p className="text-[9.5px] text-slate-400 font-sarabun">ไม่พบรายชื่อครู</p>
                         </div>
                       )}
                     </>
                   ) : (
-                    <div className="py-8 px-4 text-center">
-                      <Search size={18} className="mx-auto mb-2 text-slate-200" />
-                      <p className="text-[11px] text-slate-400 font-sarabun">พิมพ์เพื่อค้นหาชื่อครู...</p>
+                    <div className="py-6 px-4 text-center">
+                      <Search size={14} className="mx-auto mb-1.5 text-slate-200" />
+                      <p className="text-[10px] text-slate-400 font-sarabun">พิมพ์เพื่อค้นหาชื่อครู...</p>
                     </div>
                   )}
+                </div>
               </div>
-            </div>
-          </>
-        )}
+            </>
+          )}
+        </div>
       </div>
-    </div>
-
-      {/* Group (Album) */}
-      <div className="w-44 shrink-0 px-6">
-        <p className="text-[13px] text-slate-500 font-sarabun truncate">
-          {groupLabel}
-        </p>
-      </div>
-
-      {/* Periods */}
-      <div className="w-24 shrink-0 px-4 text-center">
-        <p className="text-[14px] font-bold text-slate-600 font-sarabun">
-          {subject.hoursPerWeek || 0}
-        </p>
-      </div>
-
-      {/* Credits (Time) */}
-      <div className="w-24 shrink-0 px-4 text-center">
-        <p className="text-[14px] font-bold text-slate-700 font-sarabun">
-          {Number(subject.credits || 0).toFixed(1)}
-        </p>
-      </div>
-
     </div>
   );
 }

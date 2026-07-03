@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { BookOpen, GraduationCap, Library, Award, Layers } from 'lucide-react';
+import { HiBookOpen, HiAcademicCap, HiBuildingLibrary, HiTrophy, HiSquare2Stack } from 'react-icons/hi2';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import {
   type CurriculumVersion, type CurriculumCourse,
@@ -105,10 +105,10 @@ export default function CurriculumDashboard({
       {/* ── KPI Row ── */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         {[
-          { icon: Library, label: 'หลักสูตรทั้งหมด', value: totalVersions, sub: `${editableVersions} แก้ไขได้`, color: '#3b82f6' },
-          { icon: BookOpen, label: 'รายวิชาทั้งหมด', value: totalCourses, sub: 'ใน catalog', color: '#10b981' },
-          { icon: Award, label: 'หน่วยกิตรวม', value: totalCredits.toFixed(1), sub: 'ทุกหลักสูตร', color: '#f97316' },
-          { icon: Layers, label: 'สายการเรียน', value: trackData.length, sub: `จาก ${totalVersions} หลักสูตร`, color: '#8b5cf6' },
+          { icon: HiBuildingLibrary, label: 'หลักสูตรทั้งหมด', value: totalVersions, sub: `${editableVersions} แก้ไขได้`, color: '#3b82f6' },
+          { icon: HiBookOpen, label: 'รายวิชาทั้งหมด', value: totalCourses, sub: 'ใน catalog', color: '#10b981' },
+          { icon: HiTrophy, label: 'หน่วยกิตรวม', value: totalCredits.toFixed(1), sub: 'ทุกหลักสูตร', color: '#f97316' },
+          { icon: HiSquare2Stack, label: 'สายการเรียน', value: trackData.length, sub: `จาก ${totalVersions} หลักสูตร`, color: '#8b5cf6' },
         ].map(({ icon: Icon, label, value, sub, color }) => (
           <motion.div
             key={label}
@@ -118,7 +118,7 @@ export default function CurriculumDashboard({
             className="rounded-3xl p-5 flex items-center gap-4"
           >
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: `${color}18` }}>
-              <Icon size={22} style={{ color }} strokeWidth={2} />
+              <Icon size={22} style={{ color }} />
             </div>
             <div>
               <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest font-sarabun mb-0.5">{label}</p>
@@ -140,7 +140,7 @@ export default function CurriculumDashboard({
         >
           <div className="flex items-center gap-3 mb-5">
             <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
-              <GraduationCap size={18} className="text-blue-500" />
+              <HiAcademicCap size={18} className="text-blue-500" />
             </div>
             <div>
               <p className="text-[13px] font-black text-slate-800 font-sukhumvit">หน่วยกิตต่อหลักสูตร</p>
@@ -174,7 +174,7 @@ export default function CurriculumDashboard({
         >
           <div className="flex items-center gap-3 mb-5">
             <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center">
-              <BookOpen size={18} className="text-emerald-500" />
+              <HiBookOpen size={18} className="text-emerald-500" />
             </div>
             <p className="text-[13px] font-black text-slate-800 font-sukhumvit">หมวดวิชา</p>
           </div>

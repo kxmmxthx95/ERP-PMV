@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { Student, Enrollment } from '@/types/student';
 import StudentAvatar from './StudentAvatar';
 import { GLASS } from '@/components/layouts/PortalLayout';
+import { formatNationalId } from './studentDetailFormShared';
 
 interface StudentDetailPanelProps {
   open: boolean;
@@ -151,6 +152,7 @@ export default function StudentDetailPanel({ open, onClose, student, enrollments
                 <div className="grid grid-cols-1 gap-1">
                   <InfoRow icon={User} label="เพศ" value={student.gender === 'male' ? 'ชาย' : 'หญิง'} />
                   <InfoRow icon={User} label="วันเกิด / อายุ" value={student.birthDate ? `${student.birthDate} (${calcAge(student.birthDate)})` : undefined} />
+                  <InfoRow icon={User} label="เลขบัตรประชาชน" value={formatNationalId(student.nationalId)} />
                   <InfoRow icon={User} label="หมู่เลือด" value={student.bloodType} />
                   <InfoRow icon={User} label="สัญชาติ" value={student.nationality} />
                   <InfoRow icon={User} label="ศาสนา" value={student.religion} />

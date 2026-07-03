@@ -1,5 +1,5 @@
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -11,6 +11,7 @@ import type { LucideProps } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { usePortalRecipientUsers, useStaffUsers, useStudentParentUsers } from '@/hooks/useStaffUsers';
 
 const STAT_ICON_MAP: Record<string, ComponentType<LucideProps>> = {
   group: Users,
@@ -82,43 +83,53 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const dashboardBgImage = "url('/Bg.jpg'), url('/BG.jpg'), url('https://nutty-yellow-w6lw8f8pkd.edgeone.app/BG.jpg')";
 
-  const [stats, setStats] = useState<any[]>([]);
-  const [roleBreakdown, setRoleBreakdown] = useState<any[]>([]);
+  const { users: staffUsers, loading: staffLoading } = useStaffUsers();
+  const { users: portalUsers, loading: portalLoading } = usePortalRecipientUsers();
+  const { users: studentParentUsers, loading: studentParentLoading } = useStudentParentUsers();
+  const usersLoading = staffLoading || portalLoading || studentParentLoading;
+
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
 
+  const { roleBreakdown, stats } = useMemo(() => {
+    const roleCount: Record<string, number> = {
+      student: 0, parent: 0, teacher: 0, staff: 0, admin: 0, sysadmin: 0,
+    };
+    let activeUsers = 0;
+
+    const countUser = (role: string | undefined, status: string | undefined) => {
+      if (role && roleCount[role] !== undefined) roleCount[role] += 1;
+      if (status === 'active') activeUsers += 1;
+    };
+
+    staffUsers.forEach((user) => countUser(user.role, user.status));
+    portalUsers
+      .filter((user) => user.role === 'admin' || user.role === 'sysadmin')
+      .forEach((user) => countUser(user.role, user.status));
+    studentParentUsers.forEach((user) => countUser(user.role, user.status));
+
+    const totalUsers = Object.values(roleCount).reduce((sum, count) => sum + count, 0);
+
+    return {
+      roleBreakdown: [
+        { role: 'นักเรียน', count: roleCount.student, pct: totalUsers ? Math.round((roleCount.student / totalUsers) * 100) : 0, color: '#7c3aed' },
+        { role: 'ผู้ปกครอง', count: roleCount.parent, pct: totalUsers ? Math.round((roleCount.parent / totalUsers) * 100) : 0, color: '#2563eb' },
+        { role: 'ครูผู้สอน', count: roleCount.teacher, pct: totalUsers ? Math.round((roleCount.teacher / totalUsers) * 100) : 0, color: '#e11d48' },
+        { role: 'เจ้าหน้าที่', count: roleCount.staff, pct: totalUsers ? Math.round((roleCount.staff / totalUsers) * 100) : 0, color: '#059669' },
+        { role: 'ผู้บริหาร', count: roleCount.admin, pct: totalUsers ? Math.round((roleCount.admin / totalUsers) * 100) : 0, color: '#d97706' },
+        { role: 'System Admin', count: roleCount.sysadmin, pct: totalUsers ? Math.round((roleCount.sysadmin / totalUsers) * 100) : 0, color: '#64748b' },
+      ],
+      stats: [
+        { label: 'บัญชีผู้ใช้ทั้งหมด', value: totalUsers.toLocaleString(), sub: 'บัญชีทั้งหมดในระบบ', trend: 'neutral', icon: 'group', glow: '#7c3aed', gradient: 'from-violet-500 to-indigo-500' },
+        { label: 'ผู้ใช้ที่ Active', value: activeUsers.toLocaleString(), sub: 'สถานะปกติ', trend: 'up', icon: 'person_check', glow: '#059669', gradient: 'from-emerald-400 to-teal-500' },
+        { label: 'พื้นที่จัดเก็บ (GB)', value: '45', sub: '45 / 100 GB ที่ใช้', trend: 'neutral', icon: 'database', glow: '#d97706', gradient: 'from-amber-400 to-orange-500' },
+        { label: 'สถานะระบบ', value: usersLoading ? '...' : 'Online', sub: 'Uptime 99.9%', trend: 'up', icon: 'heart_check', glow: '#0ea5e9', gradient: 'from-sky-400 to-blue-500' },
+      ],
+    };
+  }, [staffUsers, portalUsers, studentParentUsers, usersLoading]);
+
   useEffect(() => {
-    const fetchDashboardData = async () => {
+    const fetchLogs = async () => {
       try {
-        const usersSnap = await getDocs(collection(db, 'users'));
-        let activeUsers = 0;
-        const roleCount: Record<string, number> = {
-          student: 0, parent: 0, teacher: 0, staff: 0, admin: 0, sysadmin: 0,
-        };
-
-        usersSnap.forEach(doc => {
-          const d = doc.data();
-          if (d.role && roleCount[d.role] !== undefined) roleCount[d.role]++;
-          if (d.status === 'active') activeUsers++;
-        });
-
-        const totalUsers = usersSnap.size;
-
-        setRoleBreakdown([
-          { role: 'นักเรียน', count: roleCount.student, pct: totalUsers ? Math.round((roleCount.student / totalUsers) * 100) : 0, color: '#7c3aed' },
-          { role: 'ผู้ปกครอง', count: roleCount.parent, pct: totalUsers ? Math.round((roleCount.parent / totalUsers) * 100) : 0, color: '#2563eb' },
-          { role: 'ครูผู้สอน', count: roleCount.teacher, pct: totalUsers ? Math.round((roleCount.teacher / totalUsers) * 100) : 0, color: '#e11d48' },
-          { role: 'เจ้าหน้าที่', count: roleCount.staff, pct: totalUsers ? Math.round((roleCount.staff / totalUsers) * 100) : 0, color: '#059669' },
-          { role: 'ผู้บริหาร', count: roleCount.admin, pct: totalUsers ? Math.round((roleCount.admin / totalUsers) * 100) : 0, color: '#d97706' },
-          { role: 'System Admin', count: roleCount.sysadmin, pct: totalUsers ? Math.round((roleCount.sysadmin / totalUsers) * 100) : 0, color: '#64748b' },
-        ]);
-
-        setStats([
-          { label: 'บัญชีผู้ใช้ทั้งหมด', value: totalUsers.toLocaleString(), sub: 'บัญชีทั้งหมดในระบบ', trend: 'neutral', icon: 'group', glow: '#7c3aed', gradient: 'from-violet-500 to-indigo-500' },
-          { label: 'ผู้ใช้ที่ Active', value: activeUsers.toLocaleString(), sub: 'สถานะปกติ', trend: 'up', icon: 'person_check', glow: '#059669', gradient: 'from-emerald-400 to-teal-500' },
-          { label: 'พื้นที่จัดเก็บ (GB)', value: '45', sub: '45 / 100 GB ที่ใช้', trend: 'neutral', icon: 'database', glow: '#d97706', gradient: 'from-amber-400 to-orange-500' },
-          { label: 'สถานะระบบ', value: 'Online', sub: 'Uptime 99.9%', trend: 'up', icon: 'heart_check', glow: '#0ea5e9', gradient: 'from-sky-400 to-blue-500' },
-        ]);
-
         const logsQuery = query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(5));
         const logsSnap = await getDocs(logsQuery);
         setRecentLogs(logsSnap.docs.map(doc => {
@@ -133,10 +144,10 @@ export default function DashboardPage() {
           };
         }));
       } catch (err) {
-        console.error('Error fetching dashboard data:', err);
+        console.error('Error fetching dashboard logs:', err);
       }
     };
-    fetchDashboardData();
+    void fetchLogs();
   }, []);
 
   const today = new Date().toLocaleDateString('th-TH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });

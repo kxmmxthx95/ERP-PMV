@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 
 export type PrefixGroup = 'student' | 'adult' | 'teacher';
 
@@ -32,12 +32,12 @@ export function useNamePrefix(group: PrefixGroup = 'adult') {
   }, [group]);
 
   // ฟังก์ชันช่วยจัดรูปแบบชื่อเต็ม เช่น "นายสมชาย ใจดี"
-  const formatFullName = (prefix: string, firstName: string, lastName: string) => {
+  const formatFullName = useCallback((prefix: string, firstName: string, lastName: string) => {
     return `${prefix}${firstName} ${lastName}`;
-  };
+  }, []);
 
   // ฟังก์ชันช่วยแยกคำนำหน้า ชื่อ และนามสกุล ออกจากชื่อเต็ม
-  const extractNameParts = (fullName: string = '') => {
+  const extractNameParts = useCallback((fullName: string = '') => {
     if (!fullName) return { prefix: '', firstName: '', lastName: '' };
     const parts = fullName.split(' ');
     const last = parts.length > 1 ? parts.pop() || '' : '';
@@ -52,7 +52,7 @@ export function useNamePrefix(group: PrefixGroup = 'adult') {
       }
     }
     return { prefix: foundPrefix, firstName: firstAndPrefix.trim(), lastName: last };
-  };
+  }, []);
 
   return { prefixes, formatFullName, extractNameParts };
 }

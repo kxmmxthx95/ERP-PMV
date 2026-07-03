@@ -1,9 +1,9 @@
 // src/features/exam/ExamManager.tsx
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import {
   ResponsiveContainer,
   BarChart,
@@ -20,13 +20,64 @@ import {
 } from 'recharts';
 import {
   ClipboardList, Plus, Play, Square, Trash2, Eye,
-  Clock, X, Pencil, Settings, Save,
-  ShieldAlert, Timer, Users, FileText, CheckCircle2,
-  BookOpen, Check, Link2, ArrowLeft, SlidersHorizontal,
+  X, Pencil,
+  ShieldAlert, Users, CheckCircle2,
+  BookOpen, Check, Link2,
   BarChart2, Trophy, TrendingUp, RotateCcw
 } from 'lucide-react';
-import { Switch } from '@/components/ui/switch';
+import {
+  HiArrowLeft,
+  HiUsers,
+  HiDocumentText,
+  HiBookOpen,
+  HiAdjustmentsHorizontal,
+  HiMiniPencil,
+  HiMiniTrash,
+  HiEye,
+  HiStop,
+  HiPresentationChartLine,
+  HiChevronDown,
+  HiClock,
+  HiPlay,
+  HiLockClosed,
+  HiSquares2X2,
+  HiBars3,
+  HiCheckCircle,
+  HiCheck,
+  HiXMark,
+  HiChevronRight,
+  HiChevronLeft,
+  HiArrowDownTray,
+  HiOutlineExclamationTriangle,
+  HiOutlineXMark,
+} from 'react-icons/hi2';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from '@/components/ui/drawer';
+import { cn } from '@/lib/utils';
+import type { IconType } from 'react-icons';
+import { Skeleton } from '@/components/ui/skeleton';
 import { IndeterminateProgress } from '@/components/ui/progress';
+import StudentAvatar from '@/features/students/components/StudentAvatar';
+import { StudentExamScoreDetailDrawer } from '@/features/exam/components/StudentExamScoreDetailDrawer';
+import { ExamManualGradingDrawer } from '@/features/exam/components/ExamManualGradingDrawer';
+import ExamRoomsMobileFilterDrawer from '@/features/exam/components/ExamRoomsMobileFilterDrawer';
+import { CreateRoomModal, type CreateRoomPrefill } from '@/features/exam/components/CreateRoomModal';
+import {
+  ExamMobileFilterTriggerButton,
+} from '@/features/exam/components/ExamMobileFilterMenuButton';
+import { fetchRoomRoundExamData } from '@/lib/exam/fetchRoomRoundQuestions';
+import {
+  countPendingManualAttempts,
+  getManualEssayQuestions,
+  resolveAttemptTotalScore,
+} from '@/lib/exam/manualEssayGrading';
+import { toast } from 'sonner';
+import { useExamShell } from '@/features/exam/ExamLayout';
 
 
 function DeleteConfirmDialog({
@@ -205,57 +256,505 @@ function StudentScoreSummaryModal({
 import { useExamRoom } from '@/hooks/useExamRoom';
 import { useAuth } from '@/hooks/useAuth';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
-import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import type { ExamRoom, ExamAttempt, GradeScoreType, GradeBookSubjectLink } from '@/types/exam';
-import { Input } from '@/components/ui/input';
+import { rawPointsToPercent } from '@/types/grades';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from '@/components/ui/dialog';
-import { DEPARTMENT_CONFIG, SUBJECT_GROUP_CONFIG, SUBJECT_SUBGROUP_CONFIG, type Department, type SubjectGroupId } from '@/types/curriculum';
+import { DEPARTMENT_CONFIG, SUBJECT_GROUP_CONFIG, type Department, type SubjectGroupId } from '@/types/curriculum';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
+import { getSubjectColors, SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
 import { useTeachingManager } from '@/hooks/useTeachingManager';
 import { QUESTION_SETS_COL, useQuestionSetBank } from '@/hooks/useQuestionSetBank';
-import { useSetQuestions } from '@/hooks/useSetQuestions';
-import { DIFFICULTY_CONFIG, TYPE_CONFIG } from '@/types/questionBank';
+import type { Question } from '@/types/questionBank';
+import { getDefaultQuestionPoints, resolveQuestionPoints, sumSelectedQuestionPoints } from '@/lib/exam/questionPoints';
+import {
+  deriveSetOrder,
+  isExamRoomQuestionsConfigured,
+  propagateRoundConfigToEmptyRounds,
+} from '@/lib/exam/roundQuestions';
+import {
+  formatClassRoomBadgeLabel,
+  getGradeLevelBadgeStyle,
+} from '@/lib/school/gradeLevelBadge';
 import type { Subject } from '@/types/curriculum';
 import { db } from '@/lib/firebase';
+import {
+  buildStudentIdentityLookup,
+  buildStudentDisplayNameByIdentityKey,
+  enrichStudentIdentityLookupFromAttempts,
+  findTakerAttemptForStudent,
+  indexAttemptsByStudentRound,
+  normalizeExamRound,
+  resolveAttemptDisplayName,
+} from '@/lib/students/studentIdentity';
 
+const PdfPreviewFrame = lazy(() =>
+  import('@/features/exam/components/PdfExamViewer').then((m) => ({ default: m.PdfPreviewFrame })),
+);
 // ── Status badge ──────────────────────────────────────────────────────────────
-const STATUS_CONFIG = {
-  upcoming: { label: 'รอเปิด', color: '#6366f1', bg: '#eef2ff', icon: Clock },
-  active: { label: 'กำลังสอบ', color: '#059669', bg: '#d1fae5', icon: Play },
-  closed: { label: 'ปิดแล้ว', color: '#94a3b8', bg: '#f1f5f9', icon: Square },
+const STATUS_CONFIG: Record<ExamRoom['status'], { label: string; color: string; bg: string; icon: IconType }> = {
+  upcoming: { label: 'รอเปิด', color: '#d97706', bg: '#fef3c7', icon: HiClock },
+  active: { label: 'กำลังสอบ', color: '#059669', bg: '#d1fae5', icon: HiPlay },
+  closed: { label: 'ปิดแล้ว', color: '#94a3b8', bg: '#f1f5f9', icon: HiLockClosed },
 };
 
 // Hide media in compact question cards (picker/selected list) while keeping full preview dialog intact.
-const stripImagesFromHtml = (html: string) =>
-  (html || '')
-    .replace(/<figure\b[^>]*>[\s\S]*?<\/figure>/gi, '')
-    .replace(/<img\b[^>]*>/gi, '');
 
-function StatusBadge({ status }: { status: ExamRoom['status'] }) {
-  const cfg = STATUS_CONFIG[status];
-  const Icon = cfg.icon;
+function parseExamRoomClassName(className?: string): { gradeLevel?: string; roomNumber?: string } {
+  if (!className) return {};
+  const [gradeLevel, roomNumber] = className.split('/');
+  return {
+    gradeLevel: gradeLevel || undefined,
+    roomNumber: roomNumber || undefined,
+  };
+}
+
+function getExamRoomGradeLevel(room: ExamRoom): string {
+  return room.gradeLevel || parseExamRoomClassName(room.className).gradeLevel || '';
+}
+
+function getExamRoomNumber(room: ExamRoom): string {
+  return parseExamRoomClassName(room.className).roomNumber || '';
+}
+
+function sortGradeLevels(grades: string[], department: Department | 'all'): string[] {
+  const order = department !== 'all'
+    ? DEPARTMENT_CONFIG[department].grades
+    : Object.values(DEPARTMENT_CONFIG).flatMap((cfg) => cfg.grades);
+  return [...grades].sort((a, b) => {
+    const indexA = order.indexOf(a);
+    const indexB = order.indexOf(b);
+    if (indexA === -1 && indexB === -1) return a.localeCompare(b, 'th', { numeric: true });
+    if (indexA === -1) return 1;
+    if (indexB === -1) return -1;
+    return indexA - indexB;
+  });
+}
+
+
+
+const EXAM_FILTER_SELECT_CLASS =
+  'h-9 min-w-0 flex-1 basis-0 rounded-xl border border-slate-200 bg-white/95 px-2 sm:px-3 text-[11px] sm:text-[12px] font-bold text-slate-700 font-sukhumvit outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/25 disabled:opacity-50 disabled:cursor-not-allowed';
+
+const EXAM_STATUS_FILTER_SELECT_CLASS =
+  'h-9 max-w-[min(132px,34vw)] appearance-none rounded-full border border-slate-200 bg-white/95 pl-6 pr-3 text-[11px] font-black text-slate-900 font-sukhumvit outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/25 [&::-ms-expand]:hidden';
+
+const EXAM_STATUS_FILTER_COLORS: Record<'all' | ExamRoom['status'], string> = {
+  all: '#6366f1',
+  upcoming: '#f59e0b',
+  active: '#059669',
+  closed: '#94a3b8',
+};
+
+const TAKERS_SKELETON_ROWS = 6;
+
+/** Vertical + horizontal inset so card shadows are not clipped by scroll edges. */
+const PORTAL_CARD_LIST_PADDING = 'px-1.5 pt-1.5 pb-4 sm:px-2';
+
+const MOBILE_STUDENT_CARD_OUTER = 'px-0.5 py-0.5';
+
+const MOBILE_STUDENT_CARD_SHELL =
+  'rounded-2xl bg-white/90 p-3 shadow-sm';
+
+function TakersListSkeleton() {
   return (
-    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-black uppercase font-sukhumvit"
-      style={{ color: cfg.color, background: cfg.bg }}>
-      <Icon size={9} />
-      {cfg.label}
+    <div className="flex flex-col flex-1 min-h-0 w-full gap-3" aria-busy="true" aria-label="กำลังโหลดรายชื่อนักเรียน">
+      <div className={cn('md:hidden flex flex-col gap-2.5', PORTAL_CARD_LIST_PADDING)}>
+        {Array.from({ length: TAKERS_SKELETON_ROWS }).map((_, index) => (
+          <div key={index} className={MOBILE_STUDENT_CARD_OUTER}>
+            <div className={MOBILE_STUDENT_CARD_SHELL}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                <Skeleton className="h-10 w-10 shrink-0 rounded-xl bg-slate-100" />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Skeleton className="h-4 w-[62%] rounded-lg bg-slate-100" />
+                  <Skeleton className="h-3 w-[28%] rounded-lg bg-slate-50" />
+                </div>
+              </div>
+              <Skeleton className="h-6 w-14 shrink-0 rounded-lg bg-slate-100" />
+            </div>
+            <div className="mt-2.5 flex items-center gap-3 border-t border-slate-100 pt-2.5">
+              <Skeleton className="h-8 w-12 rounded-lg bg-slate-100" />
+              <Skeleton className="h-8 w-28 rounded-lg bg-slate-50" />
+              <Skeleton className="ml-auto h-8 w-8 shrink-0 rounded-lg bg-slate-100" />
+            </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:flex flex-1 min-h-0 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white/80">
+        <div className="w-full">
+          <div className="flex items-center gap-4 border-b border-slate-200 bg-slate-50/90 px-4 py-3">
+            <Skeleton className="h-3 flex-1 rounded bg-slate-100" />
+            <Skeleton className="h-3 w-16 rounded bg-slate-100" />
+            <Skeleton className="h-3 w-20 rounded bg-slate-100" />
+            <Skeleton className="h-3 w-12 rounded bg-slate-100" />
+            <Skeleton className="h-3 w-24 rounded bg-slate-100" />
+          </div>
+          {Array.from({ length: TAKERS_SKELETON_ROWS }).map((_, index) => (
+            <div
+              key={index}
+              className="flex items-center gap-4 border-b border-slate-100 px-4 py-3 last:border-b-0"
+            >
+              <Skeleton className="h-4 flex-1 rounded-lg bg-slate-100" />
+              <Skeleton className="h-4 w-16 rounded-lg bg-slate-50" />
+              <Skeleton className="h-6 w-20 rounded-lg bg-slate-100" />
+              <Skeleton className="h-6 w-10 rounded-lg bg-slate-100" />
+              <Skeleton className="h-4 w-28 rounded-lg bg-slate-50" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScoreSummarySkeleton() {
+  return (
+    <div className="flex flex-col gap-3" aria-busy="true" aria-label="กำลังโหลดสรุปคะแนน">
+      <div className="flex flex-col items-center justify-center gap-2 md:flex-row md:items-center md:justify-between">
+        <Skeleton className="h-4 w-56 max-w-full rounded-lg bg-slate-100" />
+        <Skeleton className="h-9 w-48 max-w-full rounded-xl bg-slate-100" />
+      </div>
+      <div className={cn('md:hidden flex flex-col gap-2.5', PORTAL_CARD_LIST_PADDING)}>
+        {Array.from({ length: TAKERS_SKELETON_ROWS }).map((_, index) => (
+          <div key={index} className={MOBILE_STUDENT_CARD_OUTER}>
+            <div className={MOBILE_STUDENT_CARD_SHELL}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                <Skeleton className="h-10 w-10 shrink-0 rounded-xl bg-slate-100" />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Skeleton className="h-4 w-[58%] rounded-lg bg-slate-100" />
+                  <Skeleton className="h-3 w-[24%] rounded-lg bg-slate-50" />
+                </div>
+              </div>
+              <Skeleton className="h-10 w-12 shrink-0 rounded-lg bg-slate-100" />
+            </div>
+            <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-slate-100 pt-2.5">
+              <Skeleton className="mx-auto h-8 w-12 rounded-lg bg-slate-100" />
+              <Skeleton className="mx-auto h-8 w-12 rounded-lg bg-slate-100" />
+              <Skeleton className="mx-auto h-8 w-12 rounded-lg bg-slate-100" />
+            </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="hidden md:block overflow-hidden rounded-2xl border border-slate-200 bg-white/80">
+        <div className="flex items-center gap-4 border-b border-slate-200 bg-slate-50/90 px-4 py-3">
+          <Skeleton className="h-3 w-24 rounded bg-slate-100" />
+          <Skeleton className="h-3 w-16 rounded bg-slate-100" />
+          <Skeleton className="h-3 w-16 rounded bg-slate-100" />
+          <Skeleton className="h-3 w-16 rounded bg-slate-100" />
+          <Skeleton className="h-3 w-14 rounded bg-slate-100" />
+        </div>
+        {Array.from({ length: TAKERS_SKELETON_ROWS }).map((_, index) => (
+          <div
+            key={index}
+            className="flex items-center gap-4 border-b border-slate-100 px-4 py-3 last:border-b-0"
+          >
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-4 w-[45%] rounded-lg bg-slate-100" />
+              <Skeleton className="h-3 w-[22%] rounded-lg bg-slate-50" />
+            </div>
+            <Skeleton className="h-7 w-12 rounded-lg bg-slate-100" />
+            <Skeleton className="h-7 w-12 rounded-lg bg-slate-100" />
+            <Skeleton className="h-7 w-12 rounded-lg bg-slate-100" />
+            <Skeleton className="h-7 w-12 rounded-lg bg-slate-100" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** ไฟแดงกระพริบ — ห้องสอบกำลังเปิดอยู่ */
+function ExamRoomLiveIndicator({ className = '' }: { className?: string }) {
+  return (
+    <span
+      className={`relative inline-flex h-2.5 w-2.5 shrink-0 ${className}`}
+      title="กำลังเปิดสอบ"
+      aria-label="กำลังเปิดสอบ"
+    >
+      <span className="absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75 animate-ping" />
+      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
     </span>
   );
 }
 
-function CountdownTimer({ startTime, durationMinutes }: { startTime?: number; durationMinutes: number }) {
+function RoomCardStatusPill({ room }: { room: ExamRoom }) {
+  const cfg = STATUS_CONFIG[room.status];
+  const Icon = cfg.icon;
+  const completedRounds = room.completedRounds ?? 0;
+  const nextRound = completedRounds + 1;
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black uppercase font-sukhumvit shrink-0"
+      style={{ color: cfg.color, background: cfg.bg }}
+    >
+      {room.status === 'active' && <ExamRoomLiveIndicator />}
+      <Icon className="w-2.5 h-2.5 shrink-0" />
+      {cfg.label}
+      {room.status === 'upcoming' && completedRounds > 0 && (
+        <span className="normal-case font-bold">· รอบ {nextRound}</span>
+      )}
+      {room.status === 'active' && (
+        <span className="normal-case font-bold">· รอบ {room.currentRound ?? 1}</span>
+      )}
+    </span>
+  );
+}
+
+const ROOM_CARD_ICON_BTN_BASE =
+  'w-8 h-8 rounded-xl flex items-center justify-center transition-colors shrink-0';
+
+function RoomCardIconButton({
+  onClick,
+  title,
+  children,
+  variant = 'default',
+}: {
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+  variant?: 'default' | 'danger';
+}) {
+  return (
+    <motion.button
+      type="button"
+      whileTap={{ scale: 0.92 }}
+      onClick={onClick}
+      title={title}
+      className={cn(
+        ROOM_CARD_ICON_BTN_BASE,
+        variant === 'danger'
+          ? 'bg-white hover:bg-rose-50 text-rose-500 border border-slate-200/80'
+          : 'bg-slate-100 hover:bg-slate-200/80 text-slate-900',
+      )}
+    >
+      {children}
+    </motion.button>
+  );
+}
+
+function RoomCardActionsPanel({
+  canEdit,
+  canDelete,
+  needsQuestionSetup,
+  onEdit,
+  onOpenSettings,
+  onDelete,
+  onClose,
+}: {
+  canEdit?: boolean;
+  canDelete?: boolean;
+  needsQuestionSetup: boolean;
+  onEdit: () => void;
+  onOpenSettings: (tab: SettingsTab) => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const run = (fn: () => void) => {
+    onClose();
+    fn();
+  };
+
+  const actions = [
+    canEdit && {
+      key: 'edit',
+      label: 'แก้ไขห้องสอบ',
+      shortLabel: 'แก้ไข',
+      icon: HiMiniPencil,
+      onClick: () => run(onEdit),
+    },
+    canEdit && {
+      key: 'takers',
+      label: 'รายชื่อ',
+      shortLabel: 'รายชื่อ',
+      icon: HiUsers,
+      onClick: () => run(() => onOpenSettings('takers')),
+    },
+    canEdit && {
+      key: 'questions',
+      label: 'ข้อสอบ',
+      shortLabel: 'ข้อสอบ',
+      icon: HiDocumentText,
+      onClick: () => run(() => onOpenSettings('questions')),
+      warning: needsQuestionSetup,
+    },
+    canEdit && {
+      key: 'score-summary',
+      label: 'สรุปคะแนน',
+      shortLabel: 'สรุปคะแนน',
+      icon: HiPresentationChartLine,
+      onClick: () => run(() => onOpenSettings('score-summary')),
+    },
+    canEdit && {
+      key: 'score-config',
+      label: 'เก็บคะแนน',
+      shortLabel: 'เก็บคะแนน',
+      icon: HiAdjustmentsHorizontal,
+      onClick: () => run(() => onOpenSettings('score-config')),
+    },
+    canDelete && {
+      key: 'delete',
+      label: 'ลบห้องสอบ',
+      shortLabel: 'ลบ',
+      icon: HiMiniTrash,
+      onClick: () => run(onDelete),
+      danger: true,
+    },
+  ].filter(Boolean) as Array<{
+    key: string;
+    label: string;
+    shortLabel: string;
+    icon: IconType;
+    onClick: () => void;
+    warning?: boolean;
+    danger?: boolean;
+  }>;
+
+  return (
+    <div className="grid grid-cols-3 gap-1.5">
+      {actions.map((action) => {
+        const Icon = action.icon;
+        return (
+          <motion.button
+            key={action.key}
+            type="button"
+            whileTap={{ scale: 0.92 }}
+            onClick={action.onClick}
+            title={action.label}
+            className={cn(
+              'flex flex-col items-center justify-center gap-1 rounded-xl px-1 py-2.5 transition-colors min-h-[58px]',
+              action.danger
+                ? 'bg-rose-50 hover:bg-rose-100 text-rose-600'
+                : action.warning
+                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-700'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700',
+            )}
+          >
+            <Icon
+              className={cn(
+                'h-4 w-4 shrink-0',
+                action.warning && 'text-rose-500',
+              )}
+            />
+            <span className="text-[9px] font-bold font-sukhumvit leading-tight text-center line-clamp-2">
+              {action.shortLabel}
+            </span>
+          </motion.button>
+        );
+      })}
+    </div>
+  );
+}
+
+function MobileRoundSelect({
+  rounds,
+  value,
+  onChange,
+  className,
+}: {
+  rounds: number[];
+  value: number;
+  onChange: (round: number) => void;
+  className?: string;
+}) {
+  if (rounds.length <= 1) return null;
+
+  return (
+    <div className={cn('flex items-center gap-2 min-w-0', className)}>
+      <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider font-sukhumvit shrink-0">
+        รอบ
+      </label>
+      <div className="relative w-full max-w-[160px]">
+        <select
+          value={String(value)}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className={cn(
+            EXAM_FILTER_SELECT_CLASS,
+            'w-full appearance-none bg-slate-100 border-slate-200/80 text-slate-900 pl-3 pr-9',
+          )}
+          aria-label="เลือกรอบการสอบ"
+        >
+          {rounds.map((round) => (
+            <option key={round} value={String(round)}>
+              รอบ {round}
+            </option>
+          ))}
+        </select>
+        <HiChevronDown
+          className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500"
+          aria-hidden
+        />
+      </div>
+    </div>
+  );
+}
+
+function GradeLevelBadge({
+  gradeLevel,
+  roomNumber,
+}: {
+  gradeLevel: string;
+  roomNumber?: string;
+}) {
+  const label = formatClassRoomBadgeLabel(gradeLevel, roomNumber);
+  if (!label) return null;
+
+  const style = getGradeLevelBadgeStyle(gradeLevel);
+
+  return (
+    <span
+      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit leading-none shrink-0"
+      style={{
+        color: style.color,
+        backgroundColor: style.bg,
+        border: `1px solid ${style.border}`,
+      }}
+    >
+      ห้อง {label}
+    </span>
+  );
+}
+
+function CountdownTimer({
+  startTime,
+  durationMinutes,
+  onExpire,
+}: {
+  startTime?: number;
+  durationMinutes: number;
+  onExpire?: () => void;
+}) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const hasExpiredRef = useRef(false);
+  const onExpireRef = useRef(onExpire);
+
+  useEffect(() => {
+    onExpireRef.current = onExpire;
+  }, [onExpire]);
 
   useEffect(() => {
     if (!startTime) return;
+    hasExpiredRef.current = false;
 
     const calculateTimeLeft = () => {
       const end = startTime + durationMinutes * 60 * 1000;
       const diff = end - Date.now();
-      return Math.max(0, diff);
+      const left = Math.max(0, diff);
+
+      if (left <= 0 && !hasExpiredRef.current) {
+        hasExpiredRef.current = true;
+        if (onExpireRef.current) {
+          onExpireRef.current();
+        }
+      }
+      return left;
     };
 
     setTimeLeft(calculateTimeLeft());
@@ -265,32 +764,42 @@ function CountdownTimer({ startTime, durationMinutes }: { startTime?: number; du
 
   if (!startTime) return null;
   if (timeLeft === null) return null;
-  if (timeLeft <= 0) return <span className="text-rose-500 font-bold">หมดเวลา</span>;
+  if (timeLeft <= 0) {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-black font-sukhumvit bg-red-600 text-white">
+        หมดเวลา
+      </span>
+    );
+  }
 
   const m = Math.floor(timeLeft / 60000);
   const s = Math.floor((timeLeft % 60000) / 1000);
 
   return (
-    <motion.span 
+    <motion.span
       initial={{ scale: 0.9, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
-      className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[11px] font-black font-mono border border-slate-200/60"
-      style={{ 
-        background: 'linear-gradient(135deg, #ecfdf5, #d1fae5)',
-        color: '#059669',
-        borderColor: '#10b98130'
-      }}>
-      <Clock size={10} className="animate-pulse" />
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-black font-mono tabular-nums bg-red-600 text-white"
+    >
+      <HiClock className="w-2.5 h-2.5 shrink-0 text-white animate-pulse" />
       {m}:{s.toString().padStart(2, '0')}
     </motion.span>
   );
 }
 
 // ── Attempt status dot ────────────────────────────────────────────────────────
-function AttemptCard({ att }: { att: ExamAttempt }) {
+function AttemptCard({
+  att,
+  displayName,
+}: {
+  att: ExamAttempt;
+  displayName?: string;
+}) {
   const isSuspicious = att.suspiciousActivities >= 2;
   const statusColor = att.status === 'submitted' ? '#059669' : att.status === 'graded' ? '#6366f1' : '#f59e0b';
   const statusLabel = att.status === 'submitted' ? 'ส่งแล้ว' : att.status === 'graded' ? 'ตรวจแล้ว' : 'กำลังทำ';
+  const name = displayName?.trim() || att.studentName || 'ไม่ทราบชื่อ';
+  const avatarInitial = name.replace(/^[^\p{L}\p{N}]+/u, '').charAt(0) || '?';
 
   return (
     <motion.div
@@ -302,10 +811,10 @@ function AttemptCard({ att }: { att: ExamAttempt }) {
       <div className="flex items-center gap-3">
         <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[11px] font-black"
           style={{ background: 'linear-gradient(135deg,#f43f5e,#fb7185)' }}>
-          {att.studentName.charAt(3)}
+          {avatarInitial}
         </div>
         <div>
-          <p className="text-[13px] font-bold text-slate-800 font-sukhumvit">{att.studentName}</p>
+          <p className="text-[13px] font-bold text-slate-800 font-sukhumvit">{name}</p>
           <p className="text-[10px] text-slate-400 font-sarabun">
             ตอบแล้ว {Object.keys(att.answers).length} ข้อ
           </p>
@@ -331,8 +840,70 @@ function AttemptCard({ att }: { att: ExamAttempt }) {
 
 // ── Proctor Dashboard Modal ───────────────────────────────────────────────────
 function ProctoringModal({
-  room, attempts, onClose,
-}: { room: ExamRoom; attempts: ExamAttempt[]; onClose: () => void }) {
+  room, attempts, onClose, onRecalculateScores,
+}: {
+  room: ExamRoom;
+  attempts: ExamAttempt[];
+  onClose: () => void;
+  onRecalculateScores?: (roomId: string, round: number) => Promise<void>;
+}) {
+  const { user, role } = useAuth();
+  const canViewAllSubjects = role === 'admin' || role === 'sysadmin';
+  const teachingMgr = useTeachingManager(user?.uid ?? '', canViewAllSubjects);
+  const classStudents = useMemo(() => {
+    if (!room.classId) return [] as ReturnType<typeof teachingMgr.getStudentsForClass>;
+    return teachingMgr.getStudentsForClass(room.classId);
+  }, [room.classId, teachingMgr.getStudentsForClass]);
+
+  const displayNameByKey = useMemo(
+    () => buildStudentDisplayNameByIdentityKey(classStudents, attempts),
+    [classStudents, attempts],
+  );
+
+  const [isRecalculating, setIsRecalculating] = useState(false);
+
+  const runRecalculate = useCallback(async () => {
+    if (!onRecalculateScores) return;
+    setIsRecalculating(true);
+    try {
+      const rounds = Array.from(new Set(
+        attempts.map((a) => normalizeExamRound(a.round)),
+      )).filter((r) => r > 0);
+      const targetRounds = rounds.length > 0
+        ? rounds
+        : [normalizeExamRound(room.currentRound)];
+      await Promise.all(
+        targetRounds.map((round) => onRecalculateScores(room.id, round)),
+      );
+    } finally {
+      setIsRecalculating(false);
+    }
+  }, [attempts, onRecalculateScores, room.currentRound, room.id]);
+
+  // Recalculate once when the proctor dashboard opens for this room
+  useEffect(() => {
+    if (!onRecalculateScores) return;
+    let cancelled = false;
+    void (async () => {
+      setIsRecalculating(true);
+      try {
+        const rounds = Array.from(new Set(
+          attempts.map((a) => normalizeExamRound(a.round)),
+        )).filter((r) => r > 0);
+        const targetRounds = rounds.length > 0
+          ? rounds
+          : [normalizeExamRound(room.currentRound)];
+        await Promise.all(
+          targetRounds.map((round) => onRecalculateScores(room.id, round)),
+        );
+      } finally {
+        if (!cancelled) setIsRecalculating(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per room open
+  }, [room.id, onRecalculateScores]);
+
   const inProgress = attempts.filter(a => a.status === 'in_progress').length;
   const submitted = attempts.filter(a => a.status === 'submitted' || a.status === 'graded').length;
   const suspicious = attempts.filter(a => a.suspiciousActivities >= 2).length;
@@ -358,15 +929,27 @@ function ProctoringModal({
         }}
       >
         {/* Header */}
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest font-sukhumvit">PROCTOR DASHBOARD</p>
             <h2 className="text-[18px] font-black text-slate-800 font-sukhumvit mt-0.5">{room.title}</h2>
           </div>
-          <button onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-all">
-            <X size={14} className="text-slate-500" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {onRecalculateScores && (
+              <button
+                type="button"
+                onClick={() => void runRecalculate()}
+                disabled={isRecalculating}
+                className="h-8 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black font-sukhumvit transition-all disabled:opacity-50"
+              >
+                {isRecalculating ? 'กำลังคำนวณ...' : 'คำนวณคะแนนใหม่'}
+              </button>
+            )}
+            <button onClick={onClose}
+              className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-all">
+              <X size={14} className="text-slate-500" />
+            </button>
+          </div>
         </div>
 
         {/* Stats row */}
@@ -393,7 +976,10 @@ function ProctoringModal({
           ) : (
             attempts.map((att) => (
               <div key={att.id}>
-                <AttemptCard att={att} />
+                <AttemptCard
+                  att={att}
+                  displayName={resolveAttemptDisplayName(att, displayNameByKey)}
+                />
               </div>
             ))
           )}
@@ -408,355 +994,52 @@ function ProctoringModal({
 }
 
 // ── Create Room Modal ─────────────────────────────────────────────────────────
-function CreateRoomModal({ onClose, onCreate, onUpdate, editRoom }: {
-  onClose: () => void;
-  onCreate: (data: Omit<ExamRoom, 'id' | 'createdAt' | 'status' | 'currentRound' | 'completedRounds'>) => Promise<ExamRoom>;
-  onUpdate: (roomId: string, data: Partial<ExamRoom>) => Promise<void>;
-  editRoom?: ExamRoom | null;
-}) {
-  const { user } = useAuth();
-  const { year: academicYear, activeSemester } = useActiveAcademicYear();
-  const { classes } = useClassroomManager();
-  const { subjects } = useCurriculum();
-
-  const [form, setForm] = useState({
-    title: editRoom?.title || '',
-    departmentId: (editRoom?.departmentId as Department) || ('' as Department | ''),
-    gradeLevel: editRoom?.gradeLevel || '',
-    classId: editRoom?.classId || '',
-    subjectGroupId: (editRoom?.subjectGroupId as SubjectGroupId) || ('' as SubjectGroupId | ''),
-    subjectId: editRoom?.subjectId || '',
-    password: editRoom?.password || '',
-    durationMinutes: editRoom?.durationMinutes || 60,
-    maxAttempts: editRoom?.settings?.maxAttempts ?? 1,
-    shuffleQuestions: editRoom?.settings?.shuffleQuestions || false,
-    showResultImmediately: editRoom?.settings?.showResultImmediately || true,
-  });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    setForm({
-      title: editRoom?.title || '',
-      departmentId: (editRoom?.departmentId as Department) || ('' as Department | ''),
-      gradeLevel: editRoom?.gradeLevel || '',
-      classId: editRoom?.classId || '',
-      subjectGroupId: (editRoom?.subjectGroupId as SubjectGroupId) || ('' as SubjectGroupId | ''),
-      subjectId: editRoom?.subjectId || '',
-      password: editRoom?.password || '',
-      durationMinutes: editRoom?.durationMinutes || 60,
-      maxAttempts: editRoom?.settings?.maxAttempts ?? 1,
-      shuffleQuestions: editRoom?.settings?.shuffleQuestions || false,
-      showResultImmediately: (editRoom?.settings?.showResultImmediately ?? true) as true,
-    });
-  }, [editRoom]);
-
-  const inferDepartmentFromGrade = (gradeLevel?: string): Department | '' => {
-    if (!gradeLevel) return '';
-    if (gradeLevel.startsWith('อ.')) return 'early';
-    if (gradeLevel.startsWith('ป.')) return 'primary';
-    if (gradeLevel.startsWith('ม.')) return 'secondary';
-    return '';
-  };
-
-  // Derived options
-  const gradeOptions = form.departmentId ? DEPARTMENT_CONFIG[form.departmentId].grades : [];
-  const classOptions = classes.filter((c) => {
-    const classDept = c.departmentId || c.department || inferDepartmentFromGrade(c.gradeLevel);
-    const passDept = !form.departmentId || classDept === form.departmentId;
-    const passGrade = !form.gradeLevel || c.gradeLevel === form.gradeLevel;
-    return passDept && passGrade;
-  }).sort((a, b) => Number(a.roomNumber) - Number(b.roomNumber));
-
-  const subjectOptions = subjects.filter((s) => {
-    const subjectDept = s.department || inferDepartmentFromGrade(s.gradeLevel);
-    const passDept = !form.departmentId || subjectDept === form.departmentId;
-    const passGrade =
-      !form.gradeLevel ||
-      !s.gradeLevel ||
-      s.gradeLevel === form.gradeLevel ||
-      s.gradeLevel.includes(form.gradeLevel);
-    const passSubjectGroup = !form.subjectGroupId || s.subjectGroup === form.subjectGroupId;
-    return passDept && passGrade && passSubjectGroup;
-  });
-  const subjectGroupOptions = Object.entries(SUBJECT_GROUP_CONFIG).sort(([, a], [, b]) => a.order - b.order);
-  const subSubjectOptions = form.subjectGroupId ? (SUBJECT_SUBGROUP_CONFIG[form.subjectGroupId] ?? []) : [];
-  const subjectSelectMode: 'subgroup' | 'curriculum' =
-    form.subjectGroupId && subSubjectOptions.length > 0 ? 'subgroup' : 'curriculum';
-
-  const handleSubmit = async () => {
-    if (!form.title || !form.password || !user?.uid || !academicYear || !activeSemester) return;
-    setIsSubmitting(true);
-    try {
-      const selectedSubject = subjects.find(s => s.id === form.subjectId);
-      const subjectName = selectedSubject ? selectedSubject.name : (form.subjectId || '');
-
-      const selectedClass = classes.find(c => c.id === form.classId);
-      const className = selectedClass ? `${selectedClass.gradeLevel}/${selectedClass.roomNumber}` : '';
-
-      const now = Date.now();
-      const roomData = {
-        title: form.title,
-        subjectId: form.subjectId,
-        subjectName: subjectName,
-        classId: form.classId,
-        className: className,
-        password: form.password,
-        durationMinutes: form.durationMinutes,
-        academicYearId: String(academicYear),
-        departmentId: form.departmentId || 'secondary',
-        gradeLevel: form.gradeLevel,
-        subjectGroupId: form.subjectGroupId,
-        semester: activeSemester as 1 | 2,
-        settings: {
-          shuffleQuestions: form.shuffleQuestions,
-          showResultImmediately: form.showResultImmediately,
-          allowReview: true,
-          maxAttempts: form.maxAttempts,
-        },
-      };
-
-      if (editRoom) {
-        await onUpdate(editRoom.id, roomData);
-      } else {
-        await onCreate({
-          ...roomData,
-          startTime: now,
-          endTime: now + form.durationMinutes * 60 * 1000,
-          examPaperId: 'paper-001',
-          teacherId: user.uid,
-          teacherName: user.displayName || 'ครู',
-          questionCount: 5,
-          totalPoints: 100,
-        });
-      }
-      onClose();
-    } catch (err) {
-      console.error('Error creating exam room:', err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return (
-    <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent
-        className="w-[92vw] sm:max-w-2xl rounded-[2rem] sm:rounded-[2.5rem] border border-slate-200/60 p-0 overflow-hidden"
-        style={{
-          background: 'rgba(255,255,255,0.7)',
-          backdropFilter: 'blur(24px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-        }}
-      >
-        <div className="px-5 sm:px-6 pt-6 sm:pt-7 pb-2 sm:pb-3 flex justify-between items-center bg-transparent">
-          <DialogTitle className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">
-            {editRoom ? 'แก้ไขห้องสอบ' : 'สร้างห้องสอบใหม่'}
-          </DialogTitle>
-        </div>
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void handleSubmit();
-          }}
-          className="px-5 sm:px-6 pb-6 sm:pb-7 space-y-3 max-h-[80vh] overflow-y-auto custom-scrollbar"
-        >
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
-              ชื่อห้องสอบ <span className="text-rose-400">*</span>
-            </label>
-            <Input
-              value={form.title}
-              onChange={e => setForm(p => ({ ...p, title: e.target.value }))}
-              placeholder="เช่น สอบกลางภาค คณิตศาสตร์ ม.3"
-              className="h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">แผนก</label>
-              <select
-                value={form.departmentId}
-                onChange={e => setForm(p => ({ ...p, departmentId: e.target.value as Department, gradeLevel: '', classId: '' }))}
-                className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none"
-              >
-                <option value="">เลือกแผนก</option>
-                {Object.entries(DEPARTMENT_CONFIG).map(([id, cfg]) => (
-                  <option key={id} value={id}>{cfg.label}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ระดับชั้น</label>
-              <select
-                value={form.gradeLevel}
-                onChange={e => setForm(p => ({ ...p, gradeLevel: e.target.value, classId: '' }))}
-                disabled={!form.departmentId}
-                className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none disabled:opacity-50"
-              >
-                <option value="">เลือกระดับชั้น</option>
-                {gradeOptions.map(g => (
-                  <option key={g} value={g}>{g}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ห้องเรียน</label>
-              <select
-                value={form.classId}
-                onChange={e => setForm(p => ({ ...p, classId: e.target.value }))}
-                disabled={!form.departmentId}
-                className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none disabled:opacity-50"
-              >
-                <option value="">เลือกห้องเรียน</option>
-                {classOptions.map(c => (
-                  <option key={c.id} value={c.id}>{c.gradeLevel}/{c.roomNumber}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">กลุ่มสาระ</label>
-              <select
-                value={form.subjectGroupId}
-                onChange={e => setForm(p => ({ ...p, subjectGroupId: e.target.value as SubjectGroupId, subjectId: '' }))}
-                className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none"
-              >
-                <option value="">เลือกกลุ่มสาระ</option>
-                {subjectGroupOptions.map(([id, cfg]) => (
-                  <option key={id} value={id}>{cfg.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">วิชา / สาระย่อย</label>
-              <select
-                value={form.subjectId}
-                onChange={e => setForm(p => ({ ...p, subjectId: e.target.value }))}
-                disabled={!form.departmentId}
-                className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none disabled:opacity-50"
-              >
-                <option value="">
-                  {subjectSelectMode === 'subgroup' ? 'เลือกวิชา/สาระย่อย' : 'เลือกรายวิชา'}
-                </option>
-                {subjectSelectMode === 'subgroup'
-                  ? subSubjectOptions.map((sub) => (
-                    <option key={sub} value={sub}>{sub}</option>
-                  ))
-                  : subjectOptions.map((s) => (
-                    <option key={s.id} value={s.id}>{s.code} {s.name}</option>
-                  ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                รหัสเข้าห้องสอบ <span className="text-rose-400">*</span>
-              </label>
-              <Input
-                value={form.password}
-                onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
-                placeholder="1234"
-                className="h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">เวลา (นาที)</label>
-              <Input
-                type="number"
-                min={1}
-                value={form.durationMinutes}
-                onChange={e => setForm(p => ({ ...p, durationMinutes: Number(e.target.value) }))}
-                className="h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">จำนวนครั้งที่สอบได้</label>
-              <select
-                value={form.maxAttempts}
-                onChange={e => setForm(p => ({ ...p, maxAttempts: Number(e.target.value) }))}
-                className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none"
-              >
-                <option value={0}>ไม่จำกัด</option>
-                <option value={1}>1 ครั้ง</option>
-                <option value={2}>2 ครั้ง</option>
-                <option value={3}>3 ครั้ง</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="space-y-2 rounded-xl bg-slate-50 p-3">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ตั้งค่าการสอบ</p>
-            {[
-              { key: 'shuffleQuestions', label: 'สับเปลี่ยนลำดับข้อ' },
-              { key: 'showResultImmediately', label: 'แสดงผลทันทีหลังส่ง' },
-            ].map((opt) => {
-              const isOn = Boolean(form[opt.key as keyof typeof form]);
-              return (
-                <label key={opt.key} className="flex items-center justify-between text-xs font-bold text-slate-600">
-                  <span>{opt.label}</span>
-                  <button
-                    type="button"
-                    onClick={() => setForm(p => ({ ...p, [opt.key]: !p[opt.key as keyof typeof p] }))}
-                    className={`h-6 w-11 rounded-full p-0.5 transition-colors ${isOn ? 'bg-slate-900' : 'bg-slate-300'}`}
-                  >
-                    <span
-                      className={`block h-5 w-5 rounded-full bg-white transition-transform ${isOn ? 'translate-x-5' : 'translate-x-0'}`}
-                    />
-                  </button>
-                </label>
-              );
-            })}
-          </div>
-
-          <DialogFooter className="pt-4">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={onClose}
-              className="rounded-xl font-bold text-slate-500 h-10"
-            >
-              ยกเลิก
-            </Button>
-            <Button
-              type="submit"
-              disabled={isSubmitting || !form.title || !form.password}
-              className="rounded-xl bg-slate-900 text-white font-bold px-10 h-10 border border-slate-800"
-            >
-              {isSubmitting ? 'กำลังบันทึก...' : editRoom ? 'บันทึกการแก้ไข' : 'สร้างห้องสอบ'}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-
 // ── Questions Panel ───────────────────────────────────────────────────────────
 // Two-card layout: LEFT = bank browser + question picker, RIGHT = selected questions per round.
 // Firebase efficiency: question sub-collections are fetched only when user opens a set (lazy).
 // Round configs are stored as IDs inside the ExamRoom document (no extra sub-collection reads).
 
-function QuestionsPanel({ room, onSave, onContentClick }: {
+// Round draft state for QuestionsPanel
+type RoundDraftEntry = {
+  questionSetId: string;
+  /** ลำดับชุดข้อสอบ (part) ในรอบนี้ */
+  setOrder?: string[];
+  questionIds: Set<string>;
+  questionSetByQuestionId: Record<string, string>;
+  questionPoints: Record<string, number>;
+};
+
+const EXAM_BANK_PAGE_SIZE = 8;
+
+function questionPlainText(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
+}
+
+function QuestionsPanel({
+  room,
+  onSave,
+  onContentClick,
+  mobileBankDrawerOpen = false,
+  onMobileBankDrawerOpenChange,
+}: {
   room: ExamRoom;
   onSave: (
     roundKey: string,
     questionSetId: string,
     questionIds: string[],
     questionSetByQuestionId: Record<string, string>,
+    questionPoints: Record<string, number>,
     totalPoints: number,
   ) => Promise<void>;
   onContentClick: (e: React.MouseEvent) => void;
+  mobileBankDrawerOpen?: boolean;
+  onMobileBankDrawerOpenChange?: (open: boolean) => void;
 }) {
   const maxAttempts = room.settings?.maxAttempts ?? 1;
   // Build round keys: unlimited (0) → show single "∞" slot; else 1..maxAttempts
@@ -773,25 +1056,24 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
     if (!roundKeys.includes(activeRound)) setActiveRound(roundKeys[0] ?? '1');
   }, [roundKeys, activeRound]);
 
+  useEffect(() => {
+    setExpandedPartSetId(null);
+  }, [activeRound]);
+
   // Per-round selection state (local, synced from saved room data)
-  const [roundDraft, setRoundDraft] = useState<Record<string, {
-    questionSetId: string;
-    questionIds: Set<string>;
-    questionSetByQuestionId: Record<string, string>;
-  }>>(() => {
-    const init: Record<string, {
-      questionSetId: string;
-      questionIds: Set<string>;
-      questionSetByQuestionId: Record<string, string>;
-    }> = {};
+  const [roundDraft, setRoundDraft] = useState<Record<string, RoundDraftEntry>>(() => {
+    const init: Record<string, RoundDraftEntry> = {};
     // Migrate legacy single-round data
     if (room.questionSetId && room.selectedQuestionIds) {
+      const questionSetByQuestionId = Object.fromEntries(
+        room.selectedQuestionIds.map(qid => [qid, room.questionSetId as string]),
+      );
       init['1'] = {
         questionSetId: room.questionSetId,
+        setOrder: deriveSetOrder(room.selectedQuestionIds, questionSetByQuestionId, room.questionSetId),
         questionIds: new Set(room.selectedQuestionIds),
-        questionSetByQuestionId: Object.fromEntries(
-          room.selectedQuestionIds.map(qid => [qid, room.questionSetId as string]),
-        ),
+        questionSetByQuestionId,
+        questionPoints: {},
       };
     }
     // Load per-round data
@@ -802,16 +1084,20 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
         );
         init[k] = {
           questionSetId: v.questionSetId,
+          setOrder: deriveSetOrder(v.questionIds, mapped, v.questionSetId),
           questionIds: new Set(v.questionIds),
           questionSetByQuestionId: mapped,
+          questionPoints: { ...(v.questionPoints ?? {}) },
         };
       });
     }
     return init;
   });
 
-  // Left panel state: which set is open for picking
-  const [openSetId, setOpenSetId] = useState<string | null>(null);
+  // Per-round: one whole question set (all questions in the set)
+  const [selectingSetId, setSelectingSetId] = useState<string | null>(null);
+  const [expandedPartSetId, setExpandedPartSetId] = useState<string | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<{ url: string; title: string } | null>(null);
   const [searchText, setSearchText] = useState('');
   const [filterGroup, setFilterGroup] = useState<SubjectGroupId | 'all'>('all');
   const [filterDepartment, setFilterDepartment] = useState<Department | 'all'>('all');
@@ -819,57 +1105,41 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
   const failedHydrationRef = useRef<Set<string>>(new Set());
 
   const { questionSets, isLoading: setsLoading, filterQuestionSets } = useQuestionSetBank();
-  // Lazy-load questions for the picker (left card)
-  const { questions, isLoading: qLoading } = useSetQuestions(openSetId);
+
+  const [isLgUp, setIsLgUp] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const onChange = () => {
+      setIsLgUp(mq.matches);
+      if (mq.matches) onMobileBankDrawerOpenChange?.(false);
+    };
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [onMobileBankDrawerOpenChange]);
+
+  const setBankDrawerOpen = (open: boolean) => {
+    onMobileBankDrawerOpenChange?.(open);
+  };
 
   // Cart-like cache: keep every loaded question so selections across multiple sets
   // can still be rendered on the right card without losing content.
-  const [questionCache, setQuestionCache] = useState<Map<string, (typeof questions)[number]>>(
+  const [questionCache, setQuestionCache] = useState<Map<string, Question>>(
     () => new Map(),
   );
   const [setQuestionIdsMap, setSetQuestionIdsMap] = useState<Map<string, Set<string>>>(
     () => new Map(),
   );
-
-  useEffect(() => {
-    if (!openSetId) return;
-    if (qLoading) return;
-    setQuestionCache(prev => {
-      const next = new Map(prev);
-      questions.forEach(q => next.set(q.id, q));
-      return next;
-    });
-    setSetQuestionIdsMap(prev => {
-      const next = new Map(prev);
-      next.set(openSetId, new Set(questions.map(q => q.id)));
-      return next;
-    });
-  }, [openSetId, qLoading, questions]);
-
   const rightCardQuestions = useMemo(() => Array.from(questionCache.values()), [questionCache]);
-  const [isHydratingSelected, setIsHydratingSelected] = useState(false);
-  const rightCardLoading = isHydratingSelected;
 
   const [isSaving, setIsSaving] = useState<string | null>(null); // round key being saved
   const [savedRound, setSavedRound] = useState<string | null>(null);
   const [confirmSaveRound, setConfirmSaveRound] = useState<{ rk: string; removedCount: number } | null>(null);
-  const [previewQuestion, setPreviewQuestion] = useState<any | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-
-  // Synchronize picker set with active round when switching rounds
-  useEffect(() => {
-    const draft = roundDraft[activeRound];
-    let timeoutId: any;
-    if (draft?.questionSetId && draft.questionSetId !== openSetId) {
-      setIsSyncing(true);
-      setOpenSetId(draft.questionSetId);
-      // Brief delay to allow hook to start loading
-      timeoutId = setTimeout(() => setIsSyncing(false), 300);
-    }
-    return () => { if (timeoutId) clearTimeout(timeoutId); };
-  }, [activeRound]); // Only sync when switching rounds
-
-  const openSet = openSetId ? questionSets.find(s => s.id === openSetId) : null;
+  const [isHydratingSelected, setIsHydratingSelected] = useState(false);
+  const rightCardLoading = isHydratingSelected || selectingSetId !== null;
 
   const subjectGroupOptions = useMemo(
     () =>
@@ -889,58 +1159,91 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
     [filterQuestionSets, searchText, filterGroup, filterDepartment, filterGradeLevel],
   );
 
-  // Currently selected IDs for the open set in the active round draft
-  const currentDraft = roundDraft[activeRound];
-  const draftIds = currentDraft?.questionIds ?? new Set<string>();
-  const draftSetByQid = currentDraft?.questionSetByQuestionId ?? {};
-  const pickerActive = openSetId !== null;
+  const hasActiveBankFilters =
+    searchText !== '' ||
+    filterGroup !== 'all' ||
+    filterDepartment !== 'all' ||
+    filterGradeLevel !== 'all';
 
-  const toggleQuestion = (id: string) => {
-    if (!openSetId) return;
+  const [bankPage, setBankPage] = useState(1);
+  const bankTotalPages = Math.max(1, Math.ceil(filteredSets.length / EXAM_BANK_PAGE_SIZE));
+  const filteredSetIdsKey = filteredSets.map((s) => s.id).join(',');
+
+  useEffect(() => {
+    setBankPage(1);
+  }, [filteredSetIdsKey]);
+
+  useEffect(() => {
+    setBankPage((page) => Math.min(page, bankTotalPages));
+  }, [bankTotalPages]);
+
+  const paginatedBankSets = useMemo(
+    () => filteredSets.slice(
+      (bankPage - 1) * EXAM_BANK_PAGE_SIZE,
+      bankPage * EXAM_BANK_PAGE_SIZE,
+    ),
+    [filteredSets, bankPage],
+  );
+
+  const bankRangeStart = filteredSets.length === 0 ? 0 : (bankPage - 1) * EXAM_BANK_PAGE_SIZE + 1;
+  const bankRangeEnd = Math.min(bankPage * EXAM_BANK_PAGE_SIZE, filteredSets.length);
+
+  const getDraftSetOrder = (draft: RoundDraftEntry | undefined): string[] => {
+    if (!draft) return [];
+    if (draft.setOrder?.length) return draft.setOrder;
+    return deriveSetOrder(draft.questionIds, draft.questionSetByQuestionId, draft.questionSetId);
+  };
+
+  const isSetInDraft = (draft: RoundDraftEntry | undefined, setId: string) =>
+    !!draft && getDraftSetOrder(draft).includes(setId);
+
+  const isSetSelectedInRound = (setId: string, rk = activeRound) =>
+    isSetInDraft(roundDraft[rk], setId);
+
+  const getSetStatsInDraft = (draft: RoundDraftEntry, setId: string) => {
+    const qids = Array.from(draft.questionIds).filter(
+      qid => draft.questionSetByQuestionId[qid] === setId,
+    );
+    const byId = new Map<string, Pick<Question, 'type' | 'payload'>>();
+    rightCardQuestions.forEach(q => byId.set(q.id, q));
+    const subset = new Set(qids);
+    const pts = sumSelectedQuestionPoints(subset, draft.questionPoints, byId);
+    return { count: qids.length, points: pts };
+  };
+
+  const getQuestionsForSetInDraft = (draft: RoundDraftEntry, setId: string): Question[] =>
+    Array.from(draft.questionIds)
+      .filter(qid => draft.questionSetByQuestionId[qid] === setId)
+      .map(qid => questionCache.get(qid))
+      .filter((q): q is Question => !!q)
+      .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+  const toggleExpandedPart = (setId: string) => {
+    setExpandedPartSetId(prev => (prev === setId ? null : setId));
+  };
+
+  const updateQuestionPoint = (rk: string, qid: string, raw: string) => {
+    const parsed = Number(raw);
+    const pts = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     setRoundDraft(prev => {
-      const existing = prev[activeRound];
-      const ids = existing ? new Set(existing.questionIds) : new Set<string>();
-      const setMap = existing ? { ...existing.questionSetByQuestionId } : {} as Record<string, string>;
-      if (ids.has(id)) {
-        ids.delete(id);
-        delete setMap[id];
-      } else {
-        // Prevent selecting the same question in another round
-        const usedInOtherRound = roundKeys
-          .filter(rk => rk !== activeRound)
-          .some(rk => prev[rk]?.questionIds.has(id));
-        if (usedInOtherRound) return prev;
-        ids.add(id);
-        setMap[id] = openSetId;
-      }
+      const round = prev[rk];
+      if (!round) return prev;
       return {
         ...prev,
-        [activeRound]: { questionSetId: openSetId, questionIds: ids, questionSetByQuestionId: setMap },
+        [rk]: {
+          ...round,
+          questionPoints: { ...round.questionPoints, [qid]: pts },
+        },
       };
     });
   };
 
-  const selectAll = () => {
-    if (!openSetId) return;
-    setRoundDraft(prev => {
-      const existing = prev[activeRound];
-      const ids = existing ? new Set(existing.questionIds) : new Set<string>();
-      const setMap = existing ? { ...existing.questionSetByQuestionId } : {} as Record<string, string>;
-      questions.forEach(q => {
-        const usedInOtherRound = roundKeys
-          .filter(rk => rk !== activeRound)
-          .some(rk => prev[rk]?.questionIds.has(q.id));
-        if (!usedInOtherRound) {
-          ids.add(q.id);
-          setMap[q.id] = openSetId;
-        }
-      });
-      return {
-        ...prev,
-        [activeRound]: { questionSetId: openSetId, questionIds: ids, questionSetByQuestionId: setMap },
-      };
-    });
+  const openPdfPreview = (url: string, title: string) => {
+    setPdfPreview({ url, title });
   };
+
+  const pdfPreviewButtonClass =
+    'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700';
 
   const clearRound = (rk: string) => {
     setRoundDraft(prev => {
@@ -950,27 +1253,136 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
     });
   };
 
-  const calcPoints = (ids: Set<string>, allQ: typeof questions) =>
-    allQ.filter(q => ids.has(q.id)).reduce((s, q) => {
-      if (q.type === 'essay') { const p = q.payload as { maxScore?: number }; return s + (p.maxScore ?? 0); }
-      return s + 1;
-    }, 0);
+  const removeSetFromRound = (rk: string, setId: string) => {
+    setRoundDraft(prev => {
+      const existing = prev[rk];
+      if (!existing) return prev;
+
+      const idsToRemove = Array.from(existing.questionIds).filter(
+        qid => existing.questionSetByQuestionId[qid] === setId,
+      );
+      if (idsToRemove.length === 0) return prev;
+
+      const nextIds = new Set(existing.questionIds);
+      const nextMap = { ...existing.questionSetByQuestionId };
+      const nextPts = { ...existing.questionPoints };
+      idsToRemove.forEach(qid => {
+        nextIds.delete(qid);
+        delete nextMap[qid];
+        delete nextPts[qid];
+      });
+
+      if (nextIds.size === 0) {
+        const next = { ...prev };
+        delete next[rk];
+        return next;
+      }
+
+      const nextOrder = getDraftSetOrder(existing).filter(id => id !== setId);
+      return {
+        ...prev,
+        [rk]: {
+          questionSetId: nextOrder[0] ?? existing.questionSetId,
+          setOrder: nextOrder,
+          questionIds: nextIds,
+          questionSetByQuestionId: nextMap,
+          questionPoints: nextPts,
+        },
+      };
+    });
+  };
+
+  const selectQuestionSetForRound = async (setId: string) => {
+    if (isSetSelectedInRound(setId)) {
+      removeSetFromRound(activeRound, setId);
+      return;
+    }
+
+    setSelectingSetId(setId);
+    try {
+      const snap = await getDocs(collection(db, QUESTION_SETS_COL, setId, 'questions'));
+      const qs = snap.docs
+        .map(d => ({ id: d.id, setId, ...d.data() } as Question))
+        .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+      if (qs.length === 0) {
+        toast.error('ชุดข้อสอบนี้ยังไม่มีข้อสอบ');
+        return;
+      }
+
+      const ids = new Set(qs.map(q => q.id));
+      const setMap = Object.fromEntries(qs.map(q => [q.id, setId]));
+      const ptsMap = Object.fromEntries(qs.map(q => [q.id, getDefaultQuestionPoints(q)]));
+
+      setQuestionCache(prev => {
+        const next = new Map(prev);
+        qs.forEach(q => next.set(q.id, q));
+        return next;
+      });
+      setSetQuestionIdsMap(prev => {
+        const next = new Map(prev);
+        next.set(setId, ids);
+        return next;
+      });
+
+      setRoundDraft(prev => {
+        const existing = prev[activeRound];
+        const mergedIds = new Set(existing?.questionIds ?? []);
+        qs.forEach(q => mergedIds.add(q.id));
+        const mergedOrder = existing
+          ? [...getDraftSetOrder(existing), setId]
+          : [setId];
+
+        return {
+          ...prev,
+          [activeRound]: {
+            questionSetId: existing?.questionSetId || setId,
+            setOrder: mergedOrder,
+            questionIds: mergedIds,
+            questionSetByQuestionId: {
+              ...(existing?.questionSetByQuestionId ?? {}),
+              ...setMap,
+            },
+            questionPoints: {
+              ...(existing?.questionPoints ?? {}),
+              ...ptsMap,
+            },
+          },
+        };
+      });
+    } catch (err) {
+      console.error('Error loading question set:', setId, err);
+      toast.error('โหลดชุดข้อสอบไม่สำเร็จ');
+    } finally {
+      setSelectingSetId(null);
+    }
+  };
+
+  const getDraftTotalPoints = (draft: RoundDraftEntry) => {
+    const byId = new Map<string, Pick<Question, 'type' | 'payload'>>();
+    rightCardQuestions.forEach(q => byId.set(q.id, q));
+    return sumSelectedQuestionPoints(draft.questionIds, draft.questionPoints, byId);
+  };
 
   const handleSaveRound = async (rk: string) => {
     const draft = roundDraft[rk];
     if (!draft) return;
-    // Points from cached questions (cart across sets); fallback = count
-    const cached = Array.from(questionCache.values());
-    const pts = cached.length > 0
-      ? calcPoints(draft.questionIds, cached)
-      : draft.questionIds.size;
+    const byId = new Map<string, Pick<Question, 'type' | 'payload'>>();
+    rightCardQuestions.forEach(q => byId.set(q.id, q));
+    const questionPoints: Record<string, number> = {};
+    draft.questionIds.forEach(qid => {
+      questionPoints[qid] = resolveQuestionPoints(qid, draft.questionPoints, byId.get(qid));
+    });
+    const pts = sumSelectedQuestionPoints(draft.questionIds, questionPoints, byId);
+    const setOrder = getDraftSetOrder(draft);
     setIsSaving(rk);
     try {
       await onSave(
         rk,
-        draft.questionSetId || openSetId || '',
+        setOrder[0] || draft.questionSetId || '',
         Array.from(draft.questionIds),
         draft.questionSetByQuestionId,
+        questionPoints,
         pts,
       );
       setSavedRound(rk);
@@ -1022,14 +1434,14 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
 
       setIsHydratingSelected(true);
       try {
-        const mergedMap = new Map<string, (typeof questions)[number]>();
+        const mergedMap = new Map<string, Question>();
         const mergedSetMap = new Map<string, Set<string>>();
         const fetchSet = async (setId: string) => {
           if (!setId || fetchedSetIds.has(setId)) return;
           fetchedSetIds.add(setId);
           try {
             const snap = await getDocs(collection(db, QUESTION_SETS_COL, setId, 'questions'));
-            const qs = snap.docs.map(d => ({ id: d.id, setId, ...d.data() })) as (typeof questions)[number][];
+            const qs = snap.docs.map(d => ({ id: d.id, setId, ...d.data() })) as Question[];
             mergedSetMap.set(setId, new Set(qs.map(q => q.id)));
             qs.forEach(q => mergedMap.set(q.id, q));
           } catch (err) {
@@ -1121,26 +1533,429 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
     };
     void hydrate();
     return () => { cancelled = true; };
-  }, [activeRound, questionCache, questionSets, questions, roundDraft, setQuestionIdsMap]);
+  }, [activeRound, questionCache, questionSets, roundDraft, setQuestionIdsMap]);
 
-  // ── Derived: total counts per round for the right card ──────────────────
-  const roundSummary = useMemo(() => {
-    const res: Record<string, { count: number }> = {};
-    roundKeys.forEach(rk => {
-      const draft = roundDraft[rk];
-      if (draft) {
-        res[rk] = { count: draft.questionIds.size };
-      }
-    });
-    return res;
-  }, [roundDraft, roundKeys]);
+  const renderSelectedPartsList = (rk: string, draft: RoundDraftEntry) => {
+    const setOrder = getDraftSetOrder(draft);
+    const totalPts = getDraftTotalPoints(draft);
+    const totalCount = draft.questionIds.size;
+
+    return (
+      <div className="flex flex-col gap-3 flex-1 min-h-0">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl shrink-0 bg-blue-50 border border-blue-200">
+          <HiCheckCircle className="w-3 h-3 text-blue-600 shrink-0" />
+          <p className="text-[11px] font-black text-blue-700 font-sukhumvit">
+            {setOrder.length} part · {totalCount} ข้อ · รวม {totalPts} คะแนน
+          </p>
+          <button
+            type="button"
+            onClick={() => clearRound(rk)}
+            className="ml-auto text-[10px] font-bold text-rose-500 hover:text-rose-600 font-sarabun"
+          >
+            ล้างทั้งหมด
+          </button>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2 scrollbar-hide overscroll-y-contain">
+          {setOrder.map((setId, index) => {
+            const set = questionSets.find(s => s.id === setId);
+            const grpCfg = set ? SUBJECT_GROUP_CONFIG[set.subjectGroup] : null;
+            const stats = getSetStatsInDraft(draft, setId);
+            const isExpanded = expandedPartSetId === setId;
+            const setQuestions = getQuestionsForSetInDraft(draft, setId);
+            const isOnlyPart = setOrder.length === 1;
+
+            return (
+              <div
+                key={setId}
+                className={cn(
+                  'rounded-2xl border transition-all flex flex-col min-h-0',
+                  isExpanded
+                    ? cn('border-blue-300 bg-white', isOnlyPart && 'flex-1')
+                    : 'shrink-0 border-slate-200/80 bg-white overflow-hidden',
+                )}
+              >
+                <div className="flex items-start gap-2 p-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleExpandedPart(setId)}
+                    className="flex flex-1 min-w-0 items-start gap-3 text-left rounded-xl -m-1 p-1 hover:bg-slate-50/80 transition-colors"
+                    aria-expanded={isExpanded}
+                  >
+                    <div
+                      className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                      style={{ background: grpCfg?.bg ?? 'rgba(226,232,240,0.5)' }}
+                    >
+                      <span className="text-[11px] font-black font-sukhumvit text-slate-700">
+                        {index + 1}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[9px] font-black uppercase tracking-wide text-blue-600 font-sukhumvit">
+                          Part {index + 1}
+                        </span>
+                        <p className="text-[13px] font-black font-sukhumvit text-slate-800 truncate">
+                          {set?.title ?? 'ชุดข้อสอบ'}
+                        </p>
+                        {set && !set.isPublished && (
+                          <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-600 shrink-0">
+                            ร่าง
+                          </span>
+                        )}
+                        {set?.examPdfUrl && (
+                          <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-600 shrink-0">
+                            PDF
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        {grpCfg && (
+                          <span
+                            className="text-[9px] font-bold font-sarabun px-1.5 py-0.5 rounded-md"
+                            style={{ color: grpCfg.color, background: grpCfg.bg }}
+                          >
+                            {grpCfg.name}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-slate-500 font-sarabun">
+                          {stats.count} ข้อ · {stats.points} คะแนน
+                        </span>
+                      </div>
+                    </div>
+                    <HiChevronDown
+                      className={cn(
+                        'w-4 h-4 shrink-0 text-slate-400 transition-transform mt-2',
+                        isExpanded && 'rotate-180 text-blue-500',
+                      )}
+                    />
+                  </button>
+                  <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+                    {set?.examPdfUrl && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openPdfPreview(set.examPdfUrl!, set.title);
+                        }}
+                        className={pdfPreviewButtonClass}
+                        title="ดู PDF"
+                        aria-label={`ดู PDF Part ${index + 1}`}
+                      >
+                        <HiEye className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (expandedPartSetId === setId) setExpandedPartSetId(null);
+                        removeSetFromRound(rk, setId);
+                      }}
+                      className="flex h-8 w-8 items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-500 shadow-sm transition-colors hover:bg-rose-50"
+                      title="ลบ part นี้"
+                      aria-label={`ลบ Part ${index + 1}`}
+                    >
+                      <HiXMark className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {isExpanded && (
+                  <div
+                    className={cn(
+                      'border-t border-slate-100 px-3 pb-3 pt-2 flex flex-col min-h-0 overflow-y-auto overscroll-y-contain scrollbar-hide',
+                      isOnlyPart ? 'flex-1' : 'max-h-[min(50vh,28rem)]',
+                    )}
+                  >
+                    {setQuestions.length === 0 ? (
+                      <div className="py-6 flex flex-col items-center justify-center gap-2 text-slate-400">
+                        <IndeterminateProgress />
+                        <p className="text-[10px] font-sarabun">กำลังโหลดข้อสอบ...</p>
+                      </div>
+                    ) : (
+                      setQuestions.map((q, qi) => {
+                        const pts = resolveQuestionPoints(q.id, draft.questionPoints, q);
+                        const plain = questionPlainText(q.questionText);
+                        return (
+                          <div
+                            key={q.id}
+                            className="flex items-start gap-2 rounded-xl border border-slate-100 bg-slate-50/60 px-2.5 py-2 mb-1.5 last:mb-0"
+                          >
+                            <span className="w-6 text-center text-[10px] font-black text-slate-500 shrink-0 pt-1 font-sukhumvit">
+                              {qi + 1}
+                            </span>
+                            <p className="flex-1 min-w-0 text-[11px] font-sarabun text-slate-700 line-clamp-2 leading-snug">
+                              {plain || `ข้อ ${qi + 1}`}
+                            </p>
+                            <label className="flex items-center gap-1 shrink-0">
+                              <input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={draft.questionPoints[q.id] ?? pts}
+                                onChange={(e) => updateQuestionPoint(rk, q.id, e.target.value)}
+                                className="w-14 h-8 rounded-lg border border-slate-200 bg-white px-1 text-center text-[11px] font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-300 font-sukhumvit"
+                                aria-label={`คะแนนข้อ ${qi + 1}`}
+                              />
+                              <span className="text-[9px] text-slate-400 font-sarabun hidden sm:inline">
+                                คะแนน
+                              </span>
+                            </label>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="text-[10px] text-slate-400 font-sarabun shrink-0 px-1">
+          แตะการ์ด part เพื่อกำหนดคะแนนแต่ละข้อ — เพิ่ม part ได้จากคลังด้านซ้าย
+        </p>
+      </div>
+    );
+  };
+
+  const renderQuestionBank = () => (
+    <div className="flex flex-col flex-1 min-h-0 gap-3">
+      <div className="shrink-0 flex flex-col gap-3 px-1.5">
+        <div className="relative">
+          <input
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            placeholder="ค้นหาชุดข้อสอบ..."
+            className="w-full h-9 rounded-xl bg-white/95 border border-slate-200 px-3 pr-9 text-[12px] font-bold outline-none text-slate-700 placeholder:text-slate-400 font-sarabun focus:ring-2 focus:ring-inset focus:ring-indigo-500/25"
+          />
+          {searchText && (
+            <button onClick={() => setSearchText('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+              <HiXMark className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex gap-2 min-w-0">
+          <select
+            value={filterGroup}
+            onChange={(e) => setFilterGroup(e.target.value as SubjectGroupId | 'all')}
+            className="h-9 flex-1 min-w-0 rounded-xl border border-slate-200 bg-white/95 pl-3 pr-8 text-[12px] font-bold text-slate-700 font-sukhumvit outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500/25 transition-all"
+          >
+            <option value="all">ทุกกลุ่มสาระ</option>
+            {subjectGroupOptions.map(([gid, cfg]) => (
+              <option key={gid} value={gid}>
+                {cfg.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filterDepartment}
+            onChange={(e) => {
+              const nextDepartment = e.target.value as Department | 'all';
+              setFilterDepartment(nextDepartment);
+              setFilterGradeLevel('all');
+            }}
+            className="h-9 flex-1 min-w-0 rounded-xl border border-slate-200 bg-white/95 pl-3 pr-8 text-[12px] font-bold text-slate-700 font-sukhumvit outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500/25 transition-all"
+          >
+            <option value="all">ทุกแผนก</option>
+            {Object.entries(DEPARTMENT_CONFIG).map(([deptId, cfg]) => (
+              <option key={deptId} value={deptId}>
+                {cfg.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filterGradeLevel}
+            onChange={(e) => setFilterGradeLevel(e.target.value)}
+            disabled={filterDepartment === 'all'}
+            className="h-9 flex-1 min-w-0 rounded-xl border border-slate-200 bg-white/95 pl-3 pr-8 text-[12px] font-bold text-slate-700 font-sukhumvit outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <option value="all">ทุกระดับชั้น</option>
+            {filterDepartment !== 'all' &&
+              (DEPARTMENT_CONFIG[filterDepartment]?.grades || []).map((grade) => (
+                <option key={grade} value={grade}>
+                  {grade}
+                </option>
+              ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto scrollbar-hide px-1.5">
+        {!hasActiveBankFilters ? (
+          <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white/50 py-10 text-center text-slate-400">
+            <HiBookOpen className="mb-3 h-10 w-10 opacity-40" />
+            <p className="font-sukhumvit text-[13px] font-black text-slate-600">
+              เลือกตัวกรองเพื่อแสดงชุดข้อสอบ
+            </p>
+            <p className="mt-1 max-w-xs font-sarabun text-[11px] font-medium text-slate-400">
+              เลือกกลุ่มสาระ แผนก ระดับชั้น หรือค้นหาชื่อชุดข้อสอบ
+            </p>
+          </div>
+        ) : setsLoading ? (
+          <div className="py-10 flex flex-col items-center justify-center gap-4">
+            <IndeterminateProgress />
+            <p className="text-slate-400 text-[12px] font-sarabun text-center">กำลังโหลด...</p>
+          </div>
+        ) : filteredSets.length === 0 ? (
+          <div className="py-10 text-center text-slate-400">
+            <HiDocumentText className="w-6 h-6 mx-auto mb-2 text-slate-300" />
+            <p className="text-[12px] font-sarabun">ไม่พบชุดข้อสอบ</p>
+          </div>
+        ) : paginatedBankSets.map(set => {
+          const grpCfg = SUBJECT_GROUP_CONFIG[set.subjectGroup];
+          const selectedInRound = isSetSelectedInRound(set.id);
+          const isLoadingThis = selectingSetId === set.id;
+          return (
+            <div
+              key={set.id}
+              className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl w-full transition-all ${
+                selectedInRound
+                  ? 'bg-white/90 border-[1.5px] border-blue-300'
+                  : 'bg-white/90 border border-slate-200/50'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => void selectQuestionSetForRound(set.id)}
+                disabled={isLoadingThis}
+                className="flex flex-1 min-w-0 items-center gap-3 text-left disabled:cursor-not-allowed"
+              >
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+                  style={{ background: grpCfg?.bg ?? 'rgba(226,232,240,0.5)' }}>
+                  <HiBookOpen className="w-3 h-3" style={{ color: grpCfg?.color ?? '#94a3b8' }} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-[12px] font-black font-sukhumvit text-slate-800 truncate">{set.title}</p>
+                    {!set.isPublished && (
+                      <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-600 shrink-0">ร่าง</span>
+                    )}
+                    {set.examPdfUrl && (
+                      <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-600 shrink-0">PDF</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    <span className="text-[9px] font-bold font-sarabun px-1.5 py-0.5 rounded-md"
+                      style={{ color: grpCfg?.color ?? '#6b7280', background: grpCfg?.bg ?? 'rgba(226,232,240,0.5)' }}>
+                      {grpCfg?.name ?? set.subjectGroup}
+                    </span>
+                    <span className="text-[9px] text-slate-400 font-sarabun">{set.questionCount} ข้อ</span>
+                  </div>
+                </div>
+              </button>
+              {set.examPdfUrl && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openPdfPreview(set.examPdfUrl!, set.title);
+                  }}
+                  className={pdfPreviewButtonClass}
+                  title="ดู PDF"
+                  aria-label={`ดู PDF ${set.title}`}
+                >
+                  <HiEye className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {isLoadingThis ? (
+                <div className="shrink-0 w-5 h-5">
+                  <IndeterminateProgress />
+                </div>
+              ) : selectedInRound ? (
+                <HiCheckCircle className="w-5 h-5 text-blue-600 shrink-0" />
+              ) : (
+                <HiChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
+              )}
+            </div>
+          );
+        })}
+        </div>
+
+        {hasActiveBankFilters && !setsLoading && filteredSets.length > 0 && (
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200/80 px-1.5 pt-2">
+            <p className="font-sarabun text-[10px] font-bold text-slate-500">
+              แสดง {bankRangeStart}–{bankRangeEnd} จาก {filteredSets.length} ชุด
+            </p>
+            {bankTotalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={bankPage === 1}
+                  onClick={() => setBankPage((p) => Math.max(1, p - 1))}
+                  className="h-7 w-7 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30"
+                  aria-label="หน้าก่อนหน้า"
+                >
+                  <HiChevronLeft className="h-4 w-4" />
+                </Button>
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: bankTotalPages }, (_, idx) => idx + 1).map((page) => {
+                    if (bankTotalPages > 5) {
+                      if (page !== 1 && page !== bankTotalPages && Math.abs(page - bankPage) > 1) {
+                        if (page === 2 || page === bankTotalPages - 1) {
+                          return (
+                            <span key={`ellipsis-${page}`} className="px-0.5 font-sarabun text-[10px] text-slate-300">
+                              …
+                            </span>
+                          );
+                        }
+                        return null;
+                      }
+                    }
+                    const isActive = bankPage === page;
+                    return (
+                      <button
+                        key={page}
+                        type="button"
+                        onClick={() => setBankPage(page)}
+                        className={cn(
+                          'h-7 min-w-[28px] rounded-lg px-1.5 font-sukhumvit text-[10px] font-black transition-all',
+                          isActive
+                            ? 'bg-slate-900 text-white shadow-sm'
+                            : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800',
+                        )}
+                      >
+                        {page}
+                      </button>
+                    );
+                  })}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={bankPage === bankTotalPages}
+                  onClick={() => setBankPage((p) => Math.min(bankTotalPages, p + 1))}
+                  className="h-7 w-7 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30"
+                  aria-label="หน้าถัดไป"
+                >
+                  <HiChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const mobileEmptyBankHint = isLgUp
+    ? 'เลือกชุดข้อสอบจากคลังด้านซ้าย — เพิ่มได้หลาย part'
+    : 'กดไอคอนหนังสือมุมขวาบนเพื่อเปิดคลังและเพิ่ม part';
 
   return (
-    <div className="flex flex-col gap-4">
+    <div
+      className="flex flex-col flex-1 min-h-0 gap-3 lg:gap-4 h-[calc(100dvh-10rem)] max-h-[calc(100dvh-10rem)]"
+      onClick={onContentClick}
+    >
       {/* Round tabs — shown only when maxAttempts > 1 */}
       {roundKeys.length > 1 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-sukhumvit shrink-0">รอบ</span>
+        <div className="flex items-center justify-center gap-2 flex-wrap lg:justify-start">
           {roundKeys.map(rk => {
             const hasDraft = !!roundDraft[rk]?.questionIds.size;
             const isActive = activeRound === rk;
@@ -1154,7 +1969,9 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
                 }}>
                 รอบ {rk}
                 {hasDraft && !isActive && (
-                  <span className="ml-1 text-[9px]">• {roundDraft[rk]!.questionIds.size}</span>
+                  <span className="ml-1 text-[9px]">
+                    • {getDraftSetOrder(roundDraft[rk]).length} part
+                  </span>
                 )}
               </button>
             );
@@ -1162,292 +1979,39 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
         </div>
       )}
 
-      {/* Two-card layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* Two-card layout — independent scroll per card */}
+      <div className="flex flex-1 min-h-0 flex-col lg:flex-row gap-4 items-stretch overflow-hidden">
 
-        {/* ── Card 1: Bank browser ── */}
-        <div className="flex flex-col gap-3 rounded-[1.75rem] p-4"
+        {/* ── Card 1: Bank browser (desktop only; mobile uses header book + drawer) ── */}
+        <div
+          className="hidden lg:flex flex-1 min-w-0 flex-col gap-3 rounded-[1.75rem] p-4 min-h-0 overflow-hidden"
           style={{
             background: 'rgba(248,250,252,0.8)',
             border: '1px solid rgba(226,232,240,0.6)',
-            minHeight: '420px',
-          }}>
+          }}
+        >
           <div className="flex items-center justify-between shrink-0">
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-sukhumvit">
-              {openSet ? openSet.title : 'คลังข้อสอบ'}
+              คลังข้อสอบ
             </p>
-            {openSet && (
-              <button onClick={() => setOpenSetId(null)}
-                className="flex items-center gap-1 text-[10px] font-bold text-slate-500 hover:text-slate-700 transition-colors font-sarabun">
-                <ArrowLeft size={11} /> กลับ
-              </button>
-            )}
           </div>
 
-          {!openSet ? (
-            <>
-              {/* Search */}
-              <div className="relative shrink-0">
-                <input
-                  value={searchText}
-                  onChange={e => setSearchText(e.target.value)}
-                  placeholder="ค้นหาชุดข้อสอบ..."
-                  className="w-full h-12 rounded-[1.25rem] bg-white/95 border border-slate-200 px-5 pr-10 text-[14px] font-bold outline-none text-slate-700 placeholder:text-slate-400 font-sarabun"
-                />
-                {searchText && (
-                  <button onClick={() => setSearchText('')}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-
-              {/* Group select */}
-              <div className="shrink-0">
-                <select
-                  value={filterGroup}
-                  onChange={(e) => setFilterGroup(e.target.value as SubjectGroupId | 'all')}
-                  className="h-11 w-full rounded-[1.1rem] border border-slate-200 bg-white/95 px-4 text-[13px] font-bold text-slate-700 font-sukhumvit outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                >
-                  <option value="all">ทุกกลุ่มสาระ</option>
-                  {subjectGroupOptions.map(([gid, cfg]) => (
-                    <option key={gid} value={gid}>
-                      {cfg.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Department select */}
-              <div className="shrink-0">
-                <select
-                  value={filterDepartment}
-                  onChange={(e) => {
-                    const nextDepartment = e.target.value as Department | 'all';
-                    setFilterDepartment(nextDepartment);
-                    setFilterGradeLevel('all');
-                  }}
-                  className="h-11 w-full rounded-[1.1rem] border border-slate-200 bg-white/95 px-4 text-[13px] font-bold text-slate-700 font-sukhumvit outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                >
-                  <option value="all">ทุกแผนก</option>
-                  {Object.entries(DEPARTMENT_CONFIG).map(([deptId, cfg]) => (
-                    <option key={deptId} value={deptId}>
-                      {cfg.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Grade level select */}
-              <div className="shrink-0">
-                <select
-                  value={filterGradeLevel}
-                  onChange={(e) => setFilterGradeLevel(e.target.value)}
-                  disabled={filterDepartment === 'all'}
-                  className="h-11 w-full rounded-[1.1rem] border border-slate-200 bg-white/95 px-4 text-[13px] font-bold text-slate-700 font-sukhumvit outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <option value="all">ทุกระดับชั้น</option>
-                  {filterDepartment !== 'all' &&
-                    (DEPARTMENT_CONFIG[filterDepartment]?.grades || []).map((grade) => (
-                      <option key={grade} value={grade}>
-                        {grade}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              {/* Set list */}
-              <div className="flex-1 overflow-y-auto flex flex-col gap-2 min-h-0 scrollbar-hide">
-                {setsLoading ? (
-                  <div className="py-10 flex flex-col items-center justify-center gap-4">
-                    <IndeterminateProgress />
-                    <p className="text-slate-400 text-[12px] font-sarabun text-center">กำลังโหลด...</p>
-                  </div>
-                ) : filteredSets.length === 0 ? (
-                  <div className="py-10 text-center text-slate-400">
-                    <FileText size={24} className="mx-auto mb-2 text-slate-300" />
-                    <p className="text-[12px] font-sarabun">ไม่พบชุดข้อสอบ</p>
-                  </div>
-                ) : filteredSets.map(set => {
-                  const grpCfg = SUBJECT_GROUP_CONFIG[set.subjectGroup];
-                  const selectedIds = roundDraft[activeRound]?.questionIds ?? new Set<string>();
-                  const selectedInThisSet = Array.from(selectedIds).reduce(
-                    (acc, qid) => acc + ((roundDraft[activeRound]?.questionSetByQuestionId?.[qid] === set.id) ? 1 : 0),
-                    0,
-                  );
-                  const usedInRound = selectedInThisSet > 0;
-                  return (
-                    <button key={set.id}
-                      onClick={() => setOpenSetId(set.id)}
-                      className="flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left w-full transition-all"
-                      style={{
-                        background: usedInRound ? 'rgba(99,102,241,0.07)' : 'rgba(255,255,255,0.9)',
-                        border: usedInRound ? '1.5px solid rgba(99,102,241,0.22)' : '1px solid rgba(226,232,240,0.5)',
-                      }}>
-                      <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
-                        style={{ background: grpCfg?.bg ?? 'rgba(226,232,240,0.5)' }}>
-                        <BookOpen size={12} style={{ color: grpCfg?.color ?? '#94a3b8' }} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <p className="text-[12px] font-black font-sukhumvit text-slate-800 truncate">{set.title}</p>
-                          {!set.isPublished && (
-                            <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-600 shrink-0">ร่าง</span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-[9px] font-bold font-sarabun px-1.5 py-0.5 rounded-md"
-                            style={{ color: grpCfg?.color ?? '#6b7280', background: grpCfg?.bg ?? 'rgba(226,232,240,0.5)' }}>
-                            {grpCfg?.name ?? set.subjectGroup}
-                          </span>
-                          <span className="text-[9px] text-slate-400 font-sarabun">{set.questionCount} ข้อ</span>
-                        </div>
-                      </div>
-                      {usedInRound && (
-                        <div className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg"
-                          style={{ background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.2)' }}>
-                          <CheckCircle2 size={10} className="text-indigo-500" />
-                          <span className="text-[9px] font-black text-indigo-600 font-sukhumvit">เลือกแล้ว {selectedInThisSet}</span>
-                        </div>
-                      )}
-                      <span className="text-slate-300 shrink-0 text-sm">›</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            /* ── Question picker (inside a set) ── */
-            <>
-              <div className="flex items-center gap-2 shrink-0">
-                <button onClick={selectAll}
-                  className="px-2 py-1 rounded-lg text-[10px] font-black text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-all font-sukhumvit">
-                  เลือกทั้งหมด
-                </button>
-                <button onClick={() => {
-                  if (!openSetId) return;
-                  setRoundDraft(prev => {
-                    const existing = prev[activeRound];
-                    if (!existing) return prev;
-                    const nextIds = new Set(
-                      Array.from(existing.questionIds).filter(
-                        id => existing.questionSetByQuestionId[id] !== openSetId,
-                      ),
-                    );
-                    if (nextIds.size === 0) {
-                      const next = { ...prev };
-                      delete next[activeRound];
-                      return next;
-                    }
-                    return {
-                      ...prev,
-                      [activeRound]: {
-                        questionSetId: existing.questionSetId,
-                        questionIds: nextIds,
-                        questionSetByQuestionId: Object.fromEntries(
-                          Array.from(nextIds).map(id => [id, existing.questionSetByQuestionId[id] ?? openSetId ?? '']),
-                        ),
-                      },
-                    };
-                  });
-                }}
-                  className="px-2 py-1 rounded-lg text-[10px] font-black text-slate-500 bg-slate-100 hover:bg-slate-200 transition-all font-sukhumvit">
-                  ล้าง
-                </button>
-                <span className="ml-auto text-[10px] text-slate-400 font-sarabun">
-                  {pickerActive ? draftIds.size : 0}/{questions.length} ข้อ
-                </span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto flex flex-col gap-2 min-h-0 scrollbar-hide">
-                {pickerActive && draftIds.size > 0 && (
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl shrink-0"
-                    style={{ background: 'rgba(99,102,241,0.07)', border: '1px solid rgba(99,102,241,0.16)' }}>
-                    <CheckCircle2 size={12} className="text-indigo-500 shrink-0" />
-                    <p className="text-[10px] font-black text-indigo-600 font-sukhumvit">
-                      ข้อสอบจากชุดนี้ถูกเลือกแล้ว {
-                        openSetId
-                          ? Array.from(draftIds).reduce((acc, qid) => acc + (draftSetByQid[qid] === openSetId ? 1 : 0), 0)
-                          : 0
-                      } ข้อ
-                    </p>
-                  </div>
-                )}
-                {qLoading ? (
-                  <div className="py-8 flex flex-col items-center justify-center gap-4">
-                    <IndeterminateProgress />
-                    <p className="text-slate-400 text-[12px] font-sarabun text-center">กำลังโหลด...</p>
-                  </div>
-                ) : questions.length === 0 ? (
-                  <div className="py-8 text-center text-slate-400">
-                    <FileText size={20} className="mx-auto mb-1.5 text-slate-300" />
-                    <p className="text-[12px] font-sarabun">ไม่มีข้อสอบในชุดนี้</p>
-                  </div>
-                ) : questions.map((q, idx) => {
-                  const isSelected = pickerActive && draftIds.has(q.id);
-                  const usedInOtherRound = roundKeys
-                    .filter(rk => rk !== activeRound)
-                    .some(rk => roundDraft[rk]?.questionIds.has(q.id));
-                  const diffCfg = DIFFICULTY_CONFIG[q.difficulty];
-                  const typeCfg = TYPE_CONFIG[q.type];
-                  return (
-                    <button key={q.id}
-                      onClick={() => !usedInOtherRound && toggleQuestion(q.id)}
-                      disabled={usedInOtherRound}
-                      className="flex items-start gap-2.5 px-3 py-2.5 rounded-2xl text-left w-full transition-all"
-                      style={{
-                        background: isSelected ? 'rgba(99,102,241,0.07)' : usedInOtherRound ? 'rgba(241,245,249,0.6)' : 'rgba(255,255,255,0.9)',
-                        border: isSelected ? '1.5px solid rgba(99,102,241,0.25)' : usedInOtherRound ? '1px solid rgba(226,232,240,0.4)' : '1px solid rgba(226,232,240,0.5)',
-                        opacity: usedInOtherRound ? 0.5 : 1,
-                        cursor: usedInOtherRound ? 'not-allowed' : 'pointer',
-                      }}>
-                      <div className="w-4.5 h-4.5 rounded-md shrink-0 mt-0.5 flex items-center justify-center"
-                        style={{
-                          width: 18, height: 18,
-                          background: isSelected ? '#6366f1' : 'rgba(226,232,240,0.6)',
-                          border: isSelected ? 'none' : '1.5px solid rgba(203,213,225,0.8)',
-                        }}>
-                        {isSelected && <Check size={10} className="text-white" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1 mb-0.5 flex-wrap">
-                          <span className="text-[9px] font-black text-slate-400">#{idx + 1}</span>
-                          <span className="text-[8px] font-black px-1 py-0.5 rounded-md"
-                            style={{ color: diffCfg.color, background: diffCfg.bg }}>{diffCfg.label}</span>
-                          <span className="text-[8px] font-black px-1 py-0.5 rounded-md"
-                            style={{ color: typeCfg.color, background: typeCfg.bg }}>{typeCfg.shortLabel}</span>
-                          {usedInOtherRound && (
-                            <span className="text-[8px] font-black px-1 py-0.5 rounded-md bg-amber-50 text-amber-500 shrink-0">ใช้แล้ว</span>
-                          )}
-                          <div onClick={(e) => { e.stopPropagation(); setPreviewQuestion(q); }}
-                            role="button"
-                            tabIndex={0}
-                            className="ml-auto w-5 h-5 rounded-md bg-indigo-50 hover:bg-indigo-100 flex items-center justify-center transition-all cursor-pointer">
-                            <Eye size={10} className="text-indigo-500" />
-                          </div>
-                        </div>
-                        <p className="text-[11px] font-bold text-slate-700 font-sarabun leading-snug line-clamp-3 [&_p]:m-0"
-                          dangerouslySetInnerHTML={{ __html: stripImagesFromHtml(q.questionText) }} />
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-            </>
-          )}
+          <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+            {renderQuestionBank()}
+          </div>
         </div>
 
-        {/* ── Card 2: Selected questions per round ── */}
-        <div className="flex flex-col gap-3 rounded-[1.75rem] p-4"
+        {/* ── Card 2: Selected question set per round ── */}
+        <div
+          className="flex flex-1 min-w-0 flex-col gap-3 rounded-[1.75rem] p-4 min-h-0 overflow-hidden"
           style={{
             background: 'rgba(255,255,255,0.9)',
             border: '1px solid rgba(226,232,240,0.6)',
-            minHeight: '420px',
-          }}>
+          }}
+        >
           <div className="flex items-center justify-between shrink-0">
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-sukhumvit">
-              ข้อสอบที่เลือก
+              ชุดข้อสอบที่เลือก
             </p>
             <div className="flex items-center gap-3">
               {roundKeys.length > 1 && (
@@ -1468,243 +2032,203 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
                   opacity: (isSaving === activeRound || !roundDraft[activeRound]) ? 0.5 : 1,
                 }}
               >
-                {savedRound === activeRound ? <Check size={11} /> : <Save size={11} />}
+                {savedRound === activeRound ? <HiCheck className="w-2.5 h-2.5" /> : <HiArrowDownTray className="w-2.5 h-2.5" />}
                 {savedRound === activeRound ? 'บันทึกแล้ว' : isSaving === activeRound ? 'กำลังบันทึก...' : 'บันทึก'}
               </button>
             </div>
           </div>
 
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
           {roundKeys.length === 1 ? (
-            /* Single round: simple card-style question list */
             (() => {
               const draft = roundDraft[roundKeys[0]!];
               if (!draft || draft.questionIds.size === 0) {
                 return (
-                  <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
-                    <FileText size={28} className="mb-2 text-slate-300" />
-                    <p className="text-[12px] font-sarabun">ยังไม่มีข้อสอบที่เลือก</p>
-                    <p className="text-[10px] text-slate-300 font-sarabun mt-1">เลือกจากคลังด้านซ้าย</p>
+                  <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-slate-400">
+                    <HiDocumentText className="w-7 h-7 mb-2 text-slate-300" />
+                    <p className="text-[12px] font-sarabun">ยังไม่มีชุดข้อสอบที่เลือก</p>
+                    <p className="text-[10px] text-slate-300 font-sarabun mt-1">{mobileEmptyBankHint}</p>
                   </div>
                 );
               }
-              return (
-                <div className="flex flex-col gap-3 flex-1 min-h-0">
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl shrink-0"
-                    style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
-                    <CheckCircle2 size={12} className="text-indigo-500 shrink-0" />
-                    <p className="text-[11px] font-black text-indigo-700 font-sukhumvit">
-                      เลือกแล้ว {draft.questionIds.size} ข้อ
-                    </p>
-                    <button onClick={() => clearRound(roundKeys[0]!)}
-                      className="ml-auto w-6 h-6 rounded-lg bg-rose-50 hover:bg-rose-100 flex items-center justify-center transition-all shrink-0">
-                      <X size={10} className="text-rose-400" />
-                    </button>
-                  </div>
-                  {rightCardLoading ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12">
-                      <div className="mb-4">
-                        <IndeterminateProgress />
-                      </div>
-                      <p className="text-[10px] font-sarabun">กำลังโหลดข้อสอบ...</p>
-                    </div>
-                  ) : (
-                    <div className="flex-1 overflow-y-auto flex flex-col gap-2 min-h-0 scrollbar-hide">
-                      {Array.from(draft.questionIds).map((qId, i) => {
-                        const q = rightCardQuestions.find(item => item.id === qId);
-                        if (!q) return (
-                          <div key={qId} className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-100 text-[10px] text-slate-400">
-                            #{i + 1} {qId.slice(-6)}
-                          </div>
-                        );
-                        const diffCfg = DIFFICULTY_CONFIG[q.difficulty];
-                        const typeCfg = TYPE_CONFIG[q.type];
-                        return (
-                          <div key={q.id}
-                            className="flex items-start gap-2.5 px-3 py-2.5 rounded-2xl bg-white border border-slate-100 transition-all hover:border-indigo-100">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1 mb-0.5 flex-wrap">
-                                <span className="text-[9px] font-black text-slate-400">#{i + 1}</span>
-                                <span className="text-[8px] font-black px-1 py-0.5 rounded-md"
-                                  style={{ color: diffCfg.color, background: diffCfg.bg }}>{diffCfg.label}</span>
-                                <span className="text-[8px] font-black px-1 py-0.5 rounded-md"
-                                  style={{ color: typeCfg.color, background: typeCfg.bg }}>{typeCfg.shortLabel}</span>
-                                <button onClick={(e) => { e.stopPropagation(); setPreviewQuestion(q); }}
-                                  className="ml-auto w-5 h-5 rounded-md bg-indigo-50 hover:bg-indigo-100 flex items-center justify-center transition-all">
-                                  <Eye size={10} className="text-indigo-500" />
-                                </button>
-                              </div>
-                              <p className="text-[11px] font-bold text-slate-700 font-sarabun leading-snug line-clamp-3 [&_p]:m-0"
-                                dangerouslySetInnerHTML={{ __html: stripImagesFromHtml(q.questionText) }} />
-                            </div>
-                            <button onClick={() => toggleQuestion(q.id)}
-                              className="w-6 h-6 rounded-lg bg-rose-50 hover:bg-rose-100 flex items-center justify-center transition-all shrink-0">
-                              <X size={10} className="text-rose-400" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })()
-          ) : (
-            /* Multi-round: show only the active round's selected questions as a clean list */
-            <div className="flex-1 overflow-y-auto flex flex-col gap-2 min-h-0 scrollbar-hide">
-              {(() => {
-                const rk = activeRound;
-                const draft = roundDraft[rk];
-                const summary = roundSummary[rk];
-
-                if (!summary || summary.count === 0) {
-                  return (
-                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12">
-                      <FileText size={28} className="mb-2 text-slate-300" />
-                      <p className="text-[12px] font-sarabun">ยังไม่มีข้อสอบที่เลือกในรอบนี้</p>
-                      <p className="text-[10px] text-slate-300 font-sarabun mt-1">เลือกจากคลังด้านซ้าย</p>
-                    </div>
-                  );
-                }
-
-                if (isSyncing || rightCardLoading) {
-                  return (
-                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12">
-                      <div className="mb-4">
-                        <IndeterminateProgress />
-                      </div>
-                      <p className="text-[10px] font-sarabun">กำลังโหลดข้อสอบ...</p>
-                    </div>
-                  );
-                }
-
+              if (rightCardLoading) {
                 return (
-                  <div className="flex flex-col gap-2">
-                    {Array.from(draft.questionIds).map((qId, i) => {
-                      const q = rightCardQuestions.find(item => item.id === qId);
-                      if (!q) {
-                        // If we have questionIds but q is not found, and we're not loading, 
-                        // it might be a momentary mismatch or the set changed.
-                        return (
-                          <div key={qId} className="px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-100 text-[10px] text-slate-400 flex items-center justify-between">
-                            <span>#{i + 1} {qId.slice(-6)} (ไม่พบข้อมูล)</span>
-                            <button onClick={(e) => { e.stopPropagation(); toggleQuestion(qId); }}
-                              className="w-6 h-6 rounded-lg bg-rose-50 hover:bg-rose-100 flex items-center justify-center transition-all shrink-0">
-                              <X size={10} className="text-rose-400" />
-                            </button>
-                          </div>
-                        );
-                      }
-                      const diffCfg = DIFFICULTY_CONFIG[q.difficulty];
-                      const typeCfg = TYPE_CONFIG[q.type];
-                      return (
-                        <div key={q.id}
-                          className="flex items-start gap-2.5 px-3 py-2.5 rounded-2xl transition-all bg-white border border-slate-100">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1 mb-0.5 flex-wrap">
-                              <span className="text-[9px] font-black text-slate-400">#{i + 1}</span>
-                              <span className="text-[8px] font-black px-1 py-0.5 rounded-md"
-                                style={{ color: diffCfg.color, background: diffCfg.bg }}>{diffCfg.label}</span>
-                              <span className="text-[8px] font-black px-1 py-0.5 rounded-md"
-                                style={{ color: typeCfg.color, background: typeCfg.bg }}>{typeCfg.shortLabel}</span>
-                              <button onClick={(e) => { e.stopPropagation(); setPreviewQuestion(q); }}
-                                className="ml-auto w-5 h-5 rounded-md bg-indigo-50 hover:bg-indigo-100 flex items-center justify-center transition-all">
-                                <Eye size={10} className="text-indigo-500" />
-                              </button>
-                            </div>
-                            <p className="text-[11px] font-bold text-slate-700 font-sarabun leading-snug line-clamp-3 [&_p]:m-0"
-                              dangerouslySetInnerHTML={{ __html: stripImagesFromHtml(q.questionText) }} />
-                          </div>
-                          <button onClick={(e) => { e.stopPropagation(); toggleQuestion(q.id); }}
-                            className="w-6 h-6 rounded-lg bg-rose-50 hover:bg-rose-100 flex items-center justify-center transition-all shrink-0">
-                            <X size={10} className="text-rose-400" />
-                          </button>
-                        </div>
-                      );
-                    })}
+                  <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12">
+                    <div className="mb-4">
+                      <IndeterminateProgress />
+                    </div>
+                    <p className="text-[10px] font-sarabun">กำลังโหลดชุดข้อสอบ...</p>
                   </div>
                 );
-              })()}
-            </div>
+              }
+              return renderSelectedPartsList(roundKeys[0]!, draft);
+            })()
+          ) : (
+            (() => {
+              const rk = activeRound;
+              const draft = roundDraft[rk];
+
+              if (!draft || draft.questionIds.size === 0) {
+                return (
+                  <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-slate-400 py-12">
+                    <HiDocumentText className="w-7 h-7 mb-2 text-slate-300" />
+                    <p className="text-[12px] font-sarabun">ยังไม่มีชุดข้อสอบที่เลือกในรอบนี้</p>
+                    <p className="text-[10px] text-slate-300 font-sarabun mt-1">{mobileEmptyBankHint}</p>
+                  </div>
+                );
+              }
+
+              if (rightCardLoading) {
+                return (
+                  <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-slate-400 py-12">
+                    <div className="mb-4">
+                      <IndeterminateProgress />
+                    </div>
+                    <p className="text-[10px] font-sarabun">กำลังโหลดชุดข้อสอบ...</p>
+                  </div>
+                );
+              }
+
+              return renderSelectedPartsList(rk, draft);
+            })()
           )}
+          </div>
         </div>
       </div>
 
-      {/* ── Question Preview Dialog ────────────────────────────────────────── */}
-      <Dialog open={!!previewQuestion} onOpenChange={() => setPreviewQuestion(null)}>
-        <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto rounded-[2rem] p-0 border border-slate-200/60 bg-slate-50/95 backdrop-blur-xl">
-          <DialogTitle className="sr-only">พรีวิวข้อสอบ</DialogTitle>
-          {previewQuestion && (
-            <div className="flex flex-col">
-              {/* Header */}
-              <div className="px-6 py-4 flex items-center justify-between border-b border-white/40 sticky top-0 bg-slate-50/50 backdrop-blur-md z-10">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-indigo-500 flex items-center justify-center text-white">
-                    <FileText size={16} />
-                  </div>
-                  <div>
-                    <div className="text-[14px] font-black text-slate-800 font-sukhumvit">พรีวิวข้อสอบ</div>
-                    <p className="text-[10px] text-slate-400 font-sarabun uppercase tracking-widest">
-                      {DIFFICULTY_CONFIG[previewQuestion.difficulty as keyof typeof DIFFICULTY_CONFIG]?.label} • {TYPE_CONFIG[previewQuestion.type as keyof typeof TYPE_CONFIG]?.label}
-                    </p>
-                  </div>
-                </div>
-                <button onClick={() => setPreviewQuestion(null)}
-                  className="w-8 h-8 rounded-full bg-white border border-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-all">
-                  <X size={16} />
-                </button>
+      {/* Mobile: side drawer for question bank */}
+      <Drawer
+        open={mobileBankDrawerOpen && !isLgUp}
+        onOpenChange={setBankDrawerOpen}
+        direction="right"
+      >
+        <DrawerContent
+          className={cn(
+            'h-dvh flex flex-col p-0 rounded-none',
+            'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+            'data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none',
+          )}
+        >
+          <DrawerHeader className="shrink-0 border-b border-slate-200/70 px-4 pb-3 pt-4">
+            <div className="relative flex min-h-10 items-center justify-center">
+              <div className="min-w-0 px-12 text-center">
+                <DrawerTitle className="truncate text-sm font-black text-slate-900 font-sukhumvit">
+                  คลังข้อสอบ
+                </DrawerTitle>
+                <DrawerDescription className="truncate text-[11px] text-slate-500 font-sarabun">
+                  แตะชุดข้อสอบเพื่อเพิ่มเป็น part ในรอบ {activeRound}
+                </DrawerDescription>
               </div>
-
-              {/* Content */}
-              <div className="p-8">
-                <div className="prose prose-slate max-w-none">
-                  <div className="flex flex-col text-[16px] text-slate-700 font-sarabun leading-relaxed break-words [&_img]:max-w-full [&_img]:rounded-2xl [&_img]:border [&_img]:border-slate-100 [&_img]:my-6 [&_img]:mx-auto cursor-pointer [&_img]:transition-all [&_img]:hover:brightness-110 [&_img]:order-last"
-                    dangerouslySetInnerHTML={{ __html: previewQuestion.questionText }}
-                    onClick={onContentClick} />
-                </div>
-
-                {/* Choices if available */}
-                {previewQuestion.type === 'multiple_choice' && (previewQuestion.payload as any)?.options && (
-                  <div className="mt-8 grid grid-cols-2 gap-3">
-                    {(previewQuestion.payload as any).options.map((choice: any, idx: number) => {
-                      const isCorrect = choice.isCorrect;
-                      return (
-                        <div key={idx} className="flex items-start gap-3 py-2.5 px-4 rounded-xl transition-all"
-                          style={{ 
-                            background: isCorrect ? 'rgba(16,185,129,0.05)' : 'white',
-                            border: isCorrect ? '1.5px solid rgba(16,185,129,0.3)' : '1px solid rgba(226,232,240,0.8)'
-                          }}>
-                          <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 mt-0.5"
-                            style={{ 
-                              background: isCorrect ? '#10b981' : 'rgba(241,245,249,0.9)',
-                              color: isCorrect ? 'white' : '#94a3b8',
-                              border: isCorrect ? 'none' : '1px solid rgba(226,232,240,0.8)'
-                            }}>
-                            {isCorrect ? <Check size={10} /> : String.fromCharCode(65 + idx)}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div 
-                              className="text-[14px] text-slate-700 font-sarabun leading-relaxed cursor-pointer break-words prose prose-slate prose-sm max-w-none [&_p]:m-0"
-                              dangerouslySetInnerHTML={{ __html: choice.text || '<span class="text-slate-400 font-normal italic">ไม่มีข้อความ</span>' }}
-                              onClick={onContentClick} 
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-6 bg-white/50 border-t border-white/40 flex justify-end">
-                <Button onClick={() => setPreviewQuestion(null)} className="rounded-xl px-6 font-black font-sukhumvit bg-slate-800 hover:bg-slate-900">
-                  ปิดหน้าต่าง
-                </Button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setBankDrawerOpen(false)}
+                className="absolute right-0 top-1/2 inline-flex size-9 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 active:scale-[0.98]"
+                aria-label="ปิด"
+              >
+                <HiOutlineXMark className="size-5" />
+              </button>
             </div>
+          </DrawerHeader>
+          <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-4 pt-3">
+            {renderQuestionBank()}
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      {/* Desktop: PDF side panel from left (no overlay — score panel stays interactive) */}
+      {pdfPreview && isLgUp && (
+        <aside
+          className="fixed inset-y-0 left-0 z-50 flex w-[min(560px,42vw)] flex-col border-r border-slate-200/80 bg-white shadow-2xl"
+          aria-label="PDF preview"
+        >
+          <div className="shrink-0 border-b border-slate-200/70 px-4 pb-3 pt-4">
+            <div className="relative flex min-h-10 items-center gap-3">
+              <div className="min-w-0 flex-1 pr-10">
+                <h2 className="truncate text-sm font-black text-slate-900 font-sukhumvit">
+                  {pdfPreview.title}
+                </h2>
+                <p className="truncate text-[11px] text-slate-500 font-sarabun">
+                  ตัวอย่างชุดข้อสอบ PDF
+                </p>
+              </div>
+              <a
+                href={pdfPreview.url}
+                target="_blank"
+                rel="noreferrer"
+                className="absolute right-10 top-1/2 inline-flex h-8 -translate-y-1/2 items-center rounded-xl border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 hover:bg-slate-50"
+              >
+                เปิดในแท็บใหม่
+              </a>
+              <button
+                type="button"
+                onClick={() => setPdfPreview(null)}
+                className="absolute right-0 top-1/2 inline-flex size-9 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 active:scale-[0.98]"
+                aria-label="ปิด"
+              >
+                <HiOutlineXMark className="size-5" />
+              </button>
+            </div>
+          </div>
+          <Suspense
+            fallback={
+              <div className="flex min-h-0 flex-1 items-center justify-center bg-slate-100">
+                <IndeterminateProgress className="w-40" />
+              </div>
+            }
+          >
+            <PdfPreviewFrame url={pdfPreview.url} />
+          </Suspense>
+        </aside>
+      )}
+
+      {/* Mobile: PDF preview dialog */}
+      <Dialog open={!!pdfPreview && !isLgUp} onOpenChange={(open) => !open && setPdfPreview(null)}>
+        <DialogContent
+          showCloseButton={false}
+          className="flex h-[min(90dvh,820px)] w-[calc(100%-2rem)] max-w-4xl flex-col gap-0 overflow-hidden rounded-[1.5rem] border border-slate-200/60 p-0"
+        >
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200/70 px-4 py-3">
+            <div className="min-w-0">
+              <DialogTitle className="truncate text-[15px] font-black text-slate-800 font-sukhumvit">
+                {pdfPreview?.title ?? 'ดู PDF'}
+              </DialogTitle>
+              <p className="text-[11px] text-slate-500 font-sarabun">ตัวอย่างชุดข้อสอบ PDF</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {pdfPreview?.url && (
+                <a
+                  href={pdfPreview.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hidden h-8 items-center rounded-xl border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 hover:bg-slate-50 sm:inline-flex"
+                >
+                  เปิดในแท็บใหม่
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => setPdfPreview(null)}
+                className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                aria-label="ปิด"
+              >
+                <HiXMark className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          {pdfPreview?.url && (
+            <Suspense
+              fallback={
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-slate-100">
+                  <IndeterminateProgress className="w-40" />
+                </div>
+              }
+            >
+              <PdfPreviewFrame url={pdfPreview.url} className="pt-0" />
+            </Suspense>
           )}
         </DialogContent>
       </Dialog>
- 
+
       <Dialog open={!!confirmSaveRound} onOpenChange={(open) => !open && setConfirmSaveRound(null)}>
         <DialogContent className="max-w-md rounded-[1.5rem] border border-slate-200/60 p-0 overflow-hidden bg-white">
           <div className="px-5 pt-5 pb-3">
@@ -1747,10 +2271,76 @@ function QuestionsPanel({ room, onSave, onContentClick }: {
 
 // ── Score Settings Panel ──────────────────────────────────────────────────────
 
+type MobileSaveAction = {
+  onSave: () => void;
+  disabled: boolean;
+  isSaving: boolean;
+  saved: boolean;
+};
 
-function ScoreSettingsPanel({ room, onSave }: {
+function ExamSettingsSaveButton({
+  onClick,
+  disabled,
+  isSaving,
+  saved,
+  variant = 'default',
+}: {
+  onClick: () => void;
+  disabled: boolean;
+  isSaving: boolean;
+  saved: boolean;
+  variant?: 'default' | 'compact';
+}) {
+  const label = saved
+    ? '✓ บันทึกเรียบร้อย'
+    : isSaving
+      ? 'กำลังบันทึก...'
+      : 'บันทึกการตั้งค่า';
+
+  if (variant === 'compact') {
+    const compactTitle = saved ? 'บันทึกเรียบร้อย' : isSaving ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า';
+    return (
+      <motion.button
+        whileTap={{ scale: 0.98 }}
+        onClick={onClick}
+        disabled={disabled}
+        title={compactTitle}
+        aria-label={compactTitle}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-40 shrink-0"
+      >
+        {saved ? (
+          <HiCheck className="h-5 w-5 text-emerald-600" />
+        ) : isSaving ? (
+          <span className="h-4 w-4 rounded-full border-2 border-slate-200 border-t-slate-700 animate-spin" />
+        ) : (
+          <HiArrowDownTray className="h-5 w-5 text-slate-700" />
+        )}
+      </motion.button>
+    );
+  }
+
+  return (
+    <motion.button
+      whileTap={{ scale: 0.98 }}
+      onClick={onClick}
+      disabled={disabled}
+      className="px-12 py-2.5 rounded-xl text-[13px] font-black text-white transition-all disabled:opacity-40 font-sukhumvit min-w-[200px]"
+      style={{
+        background: saved
+          ? 'linear-gradient(135deg,#059669,#10b981)'
+          : 'linear-gradient(135deg,#0f172a,#334155)',
+        boxShadow: saved ? '0 8px 20px -6px rgba(5,150,105,0.25)' : '0 8px 20px -6px rgba(15,23,42,0.2)',
+      }}
+    >
+      {label}
+    </motion.button>
+  );
+}
+
+function ScoreSettingsPanel({ room, onSave, onRegisterMobileSave }: {
   room: ExamRoom;
   onSave: (subjects: GradeBookSubjectLink[], scoreType: GradeScoreType) => Promise<void>;
+  onRegisterMobileSave?: (action: MobileSaveAction | null) => void;
 }) {
   const { classes, allClasses } = useClassroomManager();
   const { subjects: legacySubjects } = useCurriculum();
@@ -1843,6 +2433,7 @@ function ScoreSettingsPanel({ room, onSave }: {
             totalHours: versioned.totalHours ?? (versioned.periodsPerWeek ?? 1) * 18,
             category: (versioned.category === 'basic' ? 'core' : versioned.category === 'additional' ? 'added' : 'activity') as Subject['category'],
             department: dept,
+            subjectGroup: versioned.subjectGroup,
             semesters,
           } satisfies SubjectOption;
         }
@@ -1850,27 +2441,6 @@ function ScoreSettingsPanel({ room, onSave }: {
       })
       .filter((s): s is SubjectOption => s !== null);
   }, [classRoom, relatedClassRooms, legacySubjects, coursesByVersion]);
-
-  const handleSave = async () => {
-    const selectedSubjects = selectedSubjectIds
-      .map((id) => subjects.find((s) => s.id === id))
-      .filter((s): s is SubjectOption => !!s)
-      .map((s) => ({
-        subjectId: s.id,
-        subjectName: s.name,
-        subjectCode: s.code ?? '',
-      }));
-    const hasLinkedNow = currentLinked.length > 0;
-    if (selectedSubjects.length === 0 && !hasLinkedNow) return;
-    setIsSaving(true);
-    try {
-      await onSave(selectedSubjects, selectedScoreType);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   const currentLinked = (() => {
     const linked = room.settings?.gradeBookSubjects ?? [];
@@ -1885,6 +2455,47 @@ function ScoreSettingsPanel({ room, onSave }: {
     return [];
   })();
   const hasCurrentLinked = currentLinked.length > 0;
+
+  const handleSave = useCallback(async () => {
+    const selectedSubjects = selectedSubjectIds
+      .map((id) => subjects.find((s) => s.id === id))
+      .filter((s): s is SubjectOption => !!s)
+      .map((s) => ({
+        subjectId: s.id,
+        subjectName: s.name,
+        subjectCode: s.code ?? '',
+      }));
+    if (selectedSubjects.length === 0 && !hasCurrentLinked) return;
+    setIsSaving(true);
+    try {
+      await onSave(selectedSubjects, selectedScoreType);
+      setSaved(true);
+      toast.success('เชื่อมต่อวิชากับสมุดบันทึกคะแนนเรียบร้อยแล้ว');
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [selectedSubjectIds, subjects, hasCurrentLinked, onSave, selectedScoreType]);
+
+  const handleSaveRef = useRef(handleSave);
+  handleSaveRef.current = handleSave;
+
+  const stableMobileSave = useCallback(() => {
+    void handleSaveRef.current();
+  }, []);
+
+  const mobileSaveDisabled = (!selectedSubjectIds.length && !hasCurrentLinked) || isSaving;
+
+  useEffect(() => {
+    if (!onRegisterMobileSave) return;
+    onRegisterMobileSave({
+      onSave: stableMobileSave,
+      disabled: mobileSaveDisabled,
+      isSaving,
+      saved,
+    });
+    return () => onRegisterMobileSave(null);
+  }, [onRegisterMobileSave, stableMobileSave, mobileSaveDisabled, isSaving, saved]);
 
   const handleDisconnect = async () => {
     setIsSaving(true);
@@ -1936,15 +2547,7 @@ function ScoreSettingsPanel({ room, onSave }: {
         </div>
       )}
 
-      {/* Section label */}
       <div>
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 font-sukhumvit">
-          รายวิชาที่ผูกกับห้องเรียน{classRoom ? ` ${classRoom.gradeLevel}/${classRoom.roomNumber}` : ''}
-        </p>
-        <p className="text-[11px] text-slate-400 font-sarabun mb-3">
-          เลือกได้สูงสุด {maxLinkedSubjects} วิชา (ขณะนี้เลือก {selectedSubjectIds.length} วิชา)
-        </p>
-
         {!classRoom ? (
           <div className="py-8 text-center text-slate-400">
             <BookOpen size={28} className="mx-auto mb-2 text-slate-300" />
@@ -1961,6 +2564,8 @@ function ScoreSettingsPanel({ room, onSave }: {
           <div className="flex flex-col gap-2">
             {subjects.map(subject => {
               const isSelected = selectedSubjectIds.includes(subject.id);
+              const subjectGroupKey = subject.subjectGroup || subject.name;
+              const iconColors = getSubjectColors(subjectGroupKey);
               return (
                 <motion.button
                   key={subject.id}
@@ -1976,29 +2581,33 @@ function ScoreSettingsPanel({ room, onSave }: {
                   }}
                   className="flex items-center gap-3 px-4 py-3 rounded-2xl text-left w-full transition-all"
                   style={{
-                    background: isSelected ? 'rgba(99,102,241,0.08)' : 'rgba(248,250,252,0.8)',
-                    border: isSelected ? '1.5px solid rgba(99,102,241,0.35)' : '1px solid rgba(226,232,240,0.6)',
+                    background: isSelected ? '#ffffff' : 'rgba(248,250,252,0.8)',
+                    border: isSelected ? '1.5px solid rgba(37,99,235,0.45)' : '1px solid rgba(226,232,240,0.6)',
                   }}
                 >
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
-                    style={{ background: isSelected ? 'rgba(99,102,241,0.15)' : 'rgba(226,232,240,0.5)' }}>
-                    <FileText size={13} className={isSelected ? 'text-indigo-500' : 'text-slate-400'} />
+                  <div
+                    className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-sm"
+                    style={{
+                      background: `linear-gradient(135deg, ${iconColors[1]} 0%, ${iconColors[0]} 100%)`,
+                    }}
+                  >
+                    <SubjectIcon subjectGroup={subjectGroupKey} size={14} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className={`text-[13px] font-black font-sukhumvit truncate ${isSelected ? 'text-indigo-700' : 'text-slate-700'}`}>
+                    <p className={`text-[13px] font-black font-sukhumvit truncate ${isSelected ? 'text-blue-700' : 'text-slate-700'}`}>
                       {subject.name}
                     </p>
                     <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                       {subject.code && (
-                        <p className="text-[10px] font-bold text-slate-400 font-sarabun">{subject.code}</p>
+                        <p className={`text-[10px] font-bold font-sarabun ${isSelected ? 'text-blue-600' : 'text-slate-400'}`}>{subject.code}</p>
                       )}
-                      <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-md font-sarabun">
+                      <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-md font-sarabun">
                         เทอม {subject.semesters.join('/')}
                       </span>
                     </div>
                   </div>
                   {isSelected && (
-                    <div className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center shrink-0">
+                    <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
                       <Check size={11} className="text-white" />
                     </div>
                   )}
@@ -2011,23 +2620,41 @@ function ScoreSettingsPanel({ room, onSave }: {
 
 
 
-      {/* Save button */}
-      <div className="flex justify-center mt-6">
-        <motion.button
-          whileTap={{ scale: 0.98 }}
+      {/* Save button — desktop only (mobile uses header action) */}
+      <div className="hidden lg:flex justify-center mt-6">
+        <ExamSettingsSaveButton
           onClick={() => { void handleSave(); }}
           disabled={(!selectedSubjectIds.length && !hasCurrentLinked) || isSaving}
-          className="px-12 py-2.5 rounded-xl text-[13px] font-black text-white transition-all disabled:opacity-40 font-sukhumvit min-w-[200px]"
-          style={{
-            background: saved
-              ? 'linear-gradient(135deg,#059669,#10b981)'
-              : 'linear-gradient(135deg,#0f172a,#334155)',
-            boxShadow: saved ? '0 8px 20px -6px rgba(5,150,105,0.25)' : '0 8px 20px -6px rgba(15,23,42,0.2)',
-          }}
-        >
-          {saved ? '✓ บันทึกเรียบร้อย' : isSaving ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า'}
-        </motion.button>
+          isSaving={isSaving}
+          saved={saved}
+        />
       </div>
+    </div>
+  );
+}
+
+function RoomCreatorAvatar({
+  name,
+  photoURL,
+  className = 'w-5 h-5',
+}: {
+  name: string;
+  photoURL?: string;
+  className?: string;
+}) {
+  const initial = (name.trim().charAt(0) || '?').toUpperCase();
+  return (
+    <div
+      className={cn(
+        className,
+        'rounded-full overflow-hidden border border-slate-200 bg-slate-100 shrink-0 flex items-center justify-center',
+      )}
+    >
+      {photoURL ? (
+        <img src={photoURL} alt={name} className="w-full h-full object-cover" />
+      ) : (
+        <span className="text-[9px] font-black text-slate-500">{initial}</span>
+      )}
     </div>
   );
 }
@@ -2035,192 +2662,277 @@ function ScoreSettingsPanel({ room, onSave }: {
 // ── Room Card ─────────────────────────────────────────────────────────────────
 function RoomCard({
   room, onProctor, onChangeStatus, onDelete, onEdit, onOpenSettings, isStudent, onTakeExam,
-  canEdit, canDelete, myAttempt, onShowSummary,
+  canEdit, canDelete, myAttempt, onShowSummary, creatorPhotoURL,
 }: {
   room: ExamRoom;
   onProctor: () => void;
-  onChangeStatus: (status: ExamRoom['status']) => void;
+  onChangeStatus: (status: ExamRoom['status'], bypassConfirm?: boolean) => void;
   onDelete: () => void;
   onEdit: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: SettingsTab) => void;
   isStudent?: boolean;
   onTakeExam?: () => void;
   canEdit?: boolean;
   canDelete?: boolean;
   myAttempt?: ExamAttempt | null;
   onShowSummary: (room: ExamRoom, attempt: ExamAttempt) => void;
+  creatorPhotoURL?: string;
 }) {
-  const maxAttempts = room.settings?.maxAttempts ?? 1;
-  const completedRounds = room.completedRounds ?? 0;
-  const currentRound = room.currentRound ?? 0;
-  const roundLabel = maxAttempts === 0
-    ? `รอบที่ ${currentRound > 0 ? currentRound : completedRounds + 1}`
-    : `${completedRounds}/${maxAttempts} รอบ`;
+  const [showActions, setShowActions] = useState(false);
+  const needsQuestionSetup = Boolean(!isStudent && canEdit && !isExamRoomQuestionsConfigured(room));
+
+  const gradeLevel = getExamRoomGradeLevel(room);
+  const roomNumber = getExamRoomNumber(room);
+  const classBadgeLabel = formatClassRoomBadgeLabel(gradeLevel, roomNumber)
+    || (room.className?.trim() ? room.className.trim() : '');
+
+  const showStudentTakeExam = Boolean(isStudent && room.status === 'active');
+  const showStudentResults = Boolean(
+    isStudent && myAttempt && (myAttempt.status === 'submitted' || myAttempt.status === 'graded'),
+  );
+  const showStaffRoundControl = Boolean(
+    !isStudent && canEdit && (room.status === 'upcoming' || room.status === 'active'),
+  );
+  const showFooterActions = showStudentTakeExam || showStudentResults || showStaffRoundControl;
+
+  const hasScoreConnection = Boolean(
+    (room.settings?.gradeBookSubjects && room.settings.gradeBookSubjects.length > 0) ||
+    room.settings?.gradeBookSubjectId
+  );
+
+  const createdDateStr = useMemo(() => {
+    if (!room.createdAt) return '';
+    try {
+      return new Date(room.createdAt).toLocaleDateString('th-TH', {
+        day: 'numeric',
+        month: 'short',
+        year: '2-digit',
+      });
+    } catch {
+      return '';
+    }
+  }, [room.createdAt]);
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="rounded-[2rem] p-5 flex flex-col gap-4 transition-all duration-300"
-      style={{
-        background: 'rgba(255,255,255,0.92)',
-        border: '1px solid rgba(226,232,240,0.8)',
-      }}
+      className="rounded-2xl p-2.5 flex flex-col gap-2 transition-all duration-300 shadow-sm hover:shadow-md bg-white"
     >
-      {/* Top */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <StatusBadge status={room.status} />
-            {room.subjectName && (
-              <span className="text-[10px] font-bold text-slate-400 font-sarabun truncate">{room.subjectName}</span>
+      {/* Header */}
+      <div className="flex items-start gap-2 min-w-0">
+        <div className="flex-1 min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <RoomCardStatusPill room={room} />
+            {needsQuestionSetup && (
+              <span
+                className="inline-flex items-center justify-center"
+                title="ยังไม่ได้ตั้งค่าข้อสอบ — กดไอคอนตั้งค่าเพื่อเลือกชุดข้อสอบ"
+              >
+                <HiOutlineExclamationTriangle className="w-4 h-4 text-rose-500" aria-hidden />
+                <span className="sr-only">ยังไม่ได้ตั้งค่าข้อสอบ</span>
+              </span>
             )}
-          </div>
-          <h3 className="text-[15px] font-black text-slate-800 font-sukhumvit leading-tight">{room.title}</h3>
-          {room.className && (
-            <p className="text-[11px] text-slate-400 font-sarabun mt-0.5">ห้อง {room.className}</p>
-          )}
-        </div>
-        {/* Gear button → only for users with edit permission */}
-        {!isStudent && canEdit && (
-          <button
-            onClick={onOpenSettings}
-            className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:bg-slate-100 border border-slate-100 shrink-0"
-            title="ตั้งค่าห้องสอบ"
-          >
-            <Settings size={14} className="text-slate-400" />
-          </button>
-        )}
-      </div>
-
-      {/* Info row */}
-      <div className="grid grid-cols-2 gap-2">
-        <div className="flex flex-col items-center gap-0.5 py-2 rounded-2xl border border-slate-100"
-          style={{ background: 'rgba(248,250,252,0.8)' }}>
-          <Timer size={12} className="text-slate-400" />
-          <p className="text-[12px] font-black text-slate-700 font-sukhumvit">{room.durationMinutes} นาที</p>
-          <p className="text-[9px] text-slate-400 font-sarabun">เวลาสอบ</p>
-        </div>
-        <div className="flex flex-col items-center gap-0.5 py-2 rounded-2xl border border-slate-100"
-          style={{ background: room.status === 'active' ? 'rgba(5,150,105,0.08)' : 'rgba(248,250,252,0.8)' }}>
-          <Users size={12} className={room.status === 'active' ? 'text-emerald-500' : 'text-slate-400'} />
-          <p className={`text-[12px] font-black font-sukhumvit ${room.status === 'active' ? 'text-emerald-600' : 'text-slate-700'}`}>
-            {roundLabel}
-          </p>
-          <p className="text-[9px] text-slate-400 font-sarabun">รอบการสอบ</p>
-        </div>
-      </div>
-
-      {/* Time info */}
-      <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-sarabun">
-        <Clock size={11} />
-        {room.status === 'active' && (
-          <div className="flex items-center gap-2">
-            <span>กำลังสอบ <b className="text-emerald-600">รอบที่ {room.currentRound ?? 1}</b></span>
-            <CountdownTimer startTime={room.startTime} durationMinutes={room.durationMinutes} />
-          </div>
-        )}
-        {room.status === 'upcoming' && (room.completedRounds ?? 0) > 0 && (
-          <span>รอเปิด <b className="text-slate-700">รอบที่ {(room.completedRounds ?? 0) + 1}</b></span>
-        )}
-        {room.status === 'upcoming' && (room.completedRounds ?? 0) === 0 && (
-          <span className="text-slate-400">รอเปิดสอบ</span>
-        )}
-        {room.status === 'closed' && <span className="text-slate-400">สิ้นสุดการสอบทุกรอบแล้ว</span>}
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-2 pt-1">
-        {isStudent ? (
-          /* Student view */
-          <div className="flex items-center gap-2 flex-1">
             {room.status === 'active' && (
-              <motion.button whileTap={{ scale: 0.98 }}
-                onClick={onTakeExam}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold text-white flex-1 justify-center transition-all border border-indigo-200/50"
-                style={{ background: 'linear-gradient(135deg,#6366f1,#818cf8)' }}>
-                <BookOpen size={12} /> ทำข้อสอบ
-              </motion.button>
+              <CountdownTimer
+                startTime={room.startTime}
+                durationMinutes={room.durationMinutes}
+                onExpire={() => onChangeStatus('closed', true)}
+              />
             )}
-            {myAttempt && (myAttempt.status === 'submitted' || myAttempt.status === 'graded') && (
-              <div className="flex items-center gap-2 flex-1">
-                <motion.button whileTap={{ scale: 0.98 }}
-                  onClick={() => window.location.href = `/exam/${room.id}`}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold flex-1 justify-center transition-all border"
-                  style={{
-                    background: myAttempt.score !== null && myAttempt.score !== undefined
-                      ? 'rgba(5,150,105,0.08)' : 'rgba(248,250,252,0.9)',
-                    borderColor: myAttempt.score !== null && myAttempt.score !== undefined
-                      ? 'rgba(5,150,105,0.25)' : 'rgba(226,232,240,0.8)',
-                    color: myAttempt.score !== null && myAttempt.score !== undefined ? '#059669' : '#64748b',
-                  }}>
-                  <FileText size={12} />
-                  {myAttempt.score !== null && myAttempt.score !== undefined
-                    ? `${myAttempt.score}/${room.totalPoints ?? '?'} คะแนน`
-                    : 'ดูผลสอบ'}
-                </motion.button>
-                
-                <motion.button whileTap={{ scale: 0.9 }}
-                  onClick={() => onShowSummary(room, myAttempt)}
-                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-all border shrink-0"
-                  style={{
-                    background: 'rgba(99,102,241,0.08)',
-                    borderColor: 'rgba(99,102,241,0.2)',
-                    color: '#6366f1'
-                  }}
-                  title="สรุปคะแนน">
-                  <BarChart2 size={14} />
-                </motion.button>
+          </div>
+        </div>
+        {!isStudent && (canEdit || canDelete) && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            {hasScoreConnection && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenSettings('score-settings');
+                }}
+                className="shrink-0 inline-flex items-center justify-center p-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 transition-all text-emerald-600 hover:text-emerald-700 cursor-pointer"
+                title="เชื่อมต่อคะแนนกับรายวิชาแล้ว - คลิกเพื่อดูวิชาที่เชื่อมต่อ"
+              >
+                <Link2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {canEdit && (
+              <RoomCardIconButton onClick={onProctor} title="Proctor">
+                <HiEye className="w-4 h-4" />
+              </RoomCardIconButton>
+            )}
+            <RoomCardIconButton
+              onClick={() => setShowActions((prev) => !prev)}
+              title={showActions ? 'กลับ' : 'จัดการห้องสอบ'}
+            >
+              {showActions ? (
+                <HiXMark className="w-4 h-4" />
+              ) : (
+                <HiSquares2X2 className="w-4 h-4" />
+              )}
+            </RoomCardIconButton>
+          </div>
+        )}
+      </div>
+
+      <AnimatePresence mode="wait" initial={false}>
+        {showActions ? (
+          <motion.div
+            key="actions"
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.15 }}
+          >
+            <RoomCardActionsPanel
+              canEdit={canEdit}
+              canDelete={canDelete}
+              needsQuestionSetup={needsQuestionSetup}
+              onEdit={onEdit}
+              onOpenSettings={onOpenSettings}
+              onDelete={onDelete}
+              onClose={() => setShowActions(false)}
+            />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="details"
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.15 }}
+            className="flex flex-col gap-2"
+          >
+            <div className="space-y-1 min-w-0">
+              <h3
+                className="text-[13px] font-black text-slate-800 font-sukhumvit leading-snug truncate"
+                title={room.title}
+              >
+                {room.title}
+              </h3>
+              {room.teacherName && (
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <RoomCreatorAvatar
+                    name={room.teacherName}
+                    photoURL={creatorPhotoURL ?? room.teacherPhotoURL}
+                  />
+                  <span className="text-[10px] font-bold text-slate-600 font-sarabun truncate">
+                    {room.teacherName}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {classBadgeLabel && (
+              <div className="flex flex-nowrap items-center gap-1 min-w-0 overflow-hidden">
+                {gradeLevel ? (
+                  <GradeLevelBadge gradeLevel={gradeLevel} roomNumber={roomNumber || undefined} />
+                ) : (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit text-slate-600 bg-slate-100 border border-slate-200 shrink-0">
+                    ห้อง {classBadgeLabel}
+                  </span>
+                )}
+                {room.subjectName && (
+                  <>
+                    <span className="text-[10px] text-slate-300">·</span>
+                    <span className="text-[10px] text-slate-500 font-sarabun truncate">{room.subjectName}</span>
+                  </>
+                )}
+                {room.subjectGroupId && SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId] && (
+                  <>
+                    <span className="text-[10px] text-slate-300"> · </span>
+                    <span
+                      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit leading-none max-w-[180px] truncate"
+                      style={{
+                        color: SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].color,
+                        backgroundColor: SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].bg,
+                        border: `1px solid ${SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].border}`,
+                      }}
+                      title={SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].name}
+                    >
+                      {SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].name}
+                    </span>
+                  </>
+                )}
+                {createdDateStr && (
+                  <span className="text-[10px] text-slate-400 font-sarabun shrink-0 ml-auto">
+                    {createdDateStr}
+                  </span>
+                )}
               </div>
             )}
-          </div>
+
+            {showFooterActions && (
+              <div className="flex items-center gap-1.5 pt-0.5">
+        {isStudent ? (
+          <>
+            {showStudentTakeExam && (
+              <motion.button
+                whileTap={{ scale: 0.98 }}
+                onClick={onTakeExam}
+                className="flex items-center justify-center gap-1 h-7 px-3 rounded-lg text-[10px] font-bold text-white flex-1 min-w-0 transition-colors bg-indigo-600 hover:bg-indigo-700"
+              >
+                <HiBookOpen className="w-3 h-3 shrink-0" />
+                <span className="truncate">ทำข้อสอบ</span>
+              </motion.button>
+            )}
+            {showStudentResults && (
+              <>
+                <motion.button
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => { window.location.href = `/exam/${room.id}`; }}
+                  className="flex items-center justify-center gap-1 h-8 px-3 rounded-lg text-[10px] font-bold flex-1 min-w-0 border border-slate-200/80 bg-slate-50 text-slate-600"
+                >
+                  <HiDocumentText className="w-3 h-3 shrink-0" />
+                  <span className="truncate">
+                    {myAttempt!.score !== null && myAttempt!.score !== undefined
+                      ? `${myAttempt!.score}/${room.totalPoints ?? '?'}`
+                      : 'ดูผล'}
+                  </span>
+                </motion.button>
+                <motion.button
+                  whileTap={{ scale: 0.92 }}
+                  onClick={() => onShowSummary(room, myAttempt!)}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors"
+                  title="สรุปคะแนน"
+                >
+                  <HiPresentationChartLine className="w-3.5 h-3.5" />
+                </motion.button>
+              </>
+            )}
+          </>
         ) : (
           <>
-            {canEdit && (
-              <motion.button whileTap={{ scale: 0.98 }}
-                onClick={onProctor}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-bold text-white flex-1 justify-center transition-all"
-                style={{ background: '#0f172a' }}>
-                <Eye size={12} /> Proctor
-              </motion.button>
-            )}
-
-            {canEdit && room.status === 'upcoming' && (
-              <motion.button whileTap={{ scale: 0.98 }}
+            {room.status === 'upcoming' && (
+              <motion.button
+                whileTap={{ scale: 0.98 }}
                 onClick={() => onChangeStatus('active')}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-bold flex-1 justify-center transition-all"
-                style={{ background: '#d1fae5', color: '#059669' }}>
-                <Play size={12} />
-                เปิดสอบ{(room.completedRounds ?? 0) > 0 ? ` รอบ ${(room.completedRounds ?? 0) + 1}` : ''}
+                className="flex items-center justify-center gap-1 h-7 px-2.5 rounded-lg text-[10px] font-bold w-full min-w-0 bg-emerald-100 text-emerald-700 hover:bg-emerald-200/80 transition-colors"
+              >
+                <HiPlay className="w-3 h-3 shrink-0" />
+                <span className="truncate">
+                  รอบ {(room.completedRounds ?? 0) + 1}
+                </span>
               </motion.button>
             )}
-            {canEdit && room.status === 'active' && (
-              <motion.button whileTap={{ scale: 0.98 }}
+            {room.status === 'active' && (
+              <motion.button
+                whileTap={{ scale: 0.98 }}
                 onClick={() => onChangeStatus('closed')}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-bold flex-1 justify-center transition-all"
-                style={{ background: '#ffe4e6', color: '#e11d48' }}>
-                <Square size={12} /> ปิดสอบรอบ {room.currentRound ?? 1}
-              </motion.button>
-            )}
-
-            {canEdit && (
-              <motion.button whileTap={{ scale: 0.95 }}
-                onClick={onEdit}
-                className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:bg-slate-100">
-                <Pencil size={13} className="text-slate-400" />
-              </motion.button>
-            )}
-
-            {canDelete && (
-              <motion.button whileTap={{ scale: 0.95 }}
-                onClick={onDelete}
-                className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:bg-rose-50">
-                <Trash2 size={13} className="text-rose-400" />
+                className="flex items-center justify-center gap-1 h-7 px-2.5 rounded-lg text-[10px] font-bold w-full min-w-0 bg-rose-100 text-rose-600 hover:bg-rose-200/80 transition-colors"
+              >
+                <HiStop className="w-3 h-3 shrink-0" />
+                <span className="truncate">ปิด รอบ {room.currentRound ?? 1}</span>
               </motion.button>
             )}
           </>
         )}
-      </div>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -2236,9 +2948,10 @@ const SCORE_COLLECTION_CONFIG: Record<ScoreCollectionTypeLocal, { label: string;
   final: { label: 'ปลายภาค', desc: 'สอบปลายภาคเรียน', color: '#059669', bg: 'rgba(5,150,105,0.08)', border: 'rgba(5,150,105,0.25)' },
 };
 
-function ScoreConfigPanel({ room, onSave }: {
+function ScoreConfigPanel({ room, onSave, onRegisterMobileSave }: {
   room: ExamRoom;
   onSave: (data: Partial<ExamRoom['settings']>) => Promise<void>;
+  onRegisterMobileSave?: (action: MobileSaveAction | null) => void;
 }) {
   const [enabled, setEnabled] = useState<boolean>(
     room.settings?.scoreCollectionEnabled ?? false,
@@ -2246,37 +2959,45 @@ function ScoreConfigPanel({ room, onSave }: {
   const [scoreType, setScoreType] = useState<ScoreCollectionTypeLocal>(
     (room.settings?.scoreCollectionType as ScoreCollectionTypeLocal) ?? 'classwork',
   );
-  const [maxScore, setMaxScore] = useState<number>(
-    room.settings?.scoreCollectionMaxScore ?? room.totalPoints ?? 100,
-  );
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     setIsSaving(true);
     try {
       await onSave({
         scoreCollectionEnabled: enabled,
         scoreCollectionType: scoreType,
-        scoreCollectionMaxScore: maxScore,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } finally {
       setIsSaving(false);
     }
-  };
+  }, [enabled, scoreType, onSave]);
 
-  const cfg = SCORE_COLLECTION_CONFIG[scoreType];
+  const handleSaveRef = useRef(handleSave);
+  handleSaveRef.current = handleSave;
+
+  const stableMobileSave = useCallback(() => {
+    void handleSaveRef.current();
+  }, []);
+
+  useEffect(() => {
+    if (!onRegisterMobileSave) return;
+    onRegisterMobileSave({
+      onSave: stableMobileSave,
+      disabled: isSaving,
+      isSaving,
+      saved,
+    });
+    return () => onRegisterMobileSave(null);
+  }, [onRegisterMobileSave, stableMobileSave, isSaving, saved]);
 
   return (
     <div className="flex flex-col gap-5">
       {/* Toggle */}
-      <div className="flex items-center justify-between px-4 py-4 rounded-2xl"
-        style={{
-          background: enabled ? 'rgba(99,102,241,0.06)' : 'rgba(248,250,252,0.8)',
-          border: `1px solid ${enabled ? 'rgba(99,102,241,0.2)' : 'rgba(226,232,240,0.8)'}`,
-        }}>
+      <div className="flex items-center justify-between px-4 py-4 rounded-2xl bg-white border border-slate-200">
         <div>
           <p className="text-[13px] font-black text-slate-800 font-sukhumvit">นำคะแนนไปคำนวณในสมุดบันทึกคะแนน</p>
           <p className="text-[11px] text-slate-400 font-sarabun mt-0.5">
@@ -2287,7 +3008,7 @@ function ScoreConfigPanel({ room, onSave }: {
           type="button"
           onClick={() => setEnabled(v => !v)}
           className="relative h-7 w-[52px] rounded-full p-1 transition-colors duration-200 shrink-0"
-          style={{ background: enabled ? '#6366f1' : '#cbd5e1' }}
+          style={{ background: enabled ? '#10b981' : '#cbd5e1' }}
         >
           <span
             className="block h-5 w-5 rounded-full bg-white border border-slate-200 transition-transform duration-200"
@@ -2309,7 +3030,7 @@ function ScoreConfigPanel({ room, onSave }: {
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 font-sukhumvit">
                 ประเภทการเก็บคะแนน
               </p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-2">
                 {(Object.entries(SCORE_COLLECTION_CONFIG) as [ScoreCollectionTypeLocal, typeof SCORE_COLLECTION_CONFIG[ScoreCollectionTypeLocal]][]).map(([type, c]) => {
                   const isActive = scoreType === type;
                   return (
@@ -2319,17 +3040,16 @@ function ScoreConfigPanel({ room, onSave }: {
                       onClick={() => setScoreType(type)}
                       className="flex flex-col gap-1 px-4 py-3 rounded-2xl text-left transition-all"
                       style={{
-                        background: isActive ? c.bg : 'rgba(248,250,252,0.8)',
-                        border: isActive ? `1.5px solid ${c.border}` : '1px solid rgba(226,232,240,0.6)',
+                        background: isActive ? '#ffffff' : 'rgba(248,250,252,0.8)',
+                        border: isActive ? '1.5px solid rgba(37,99,235,0.45)' : '1px solid rgba(226,232,240,0.6)',
                       }}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-[13px] font-black font-sukhumvit" style={{ color: isActive ? c.color : '#475569' }}>
+                        <span className={`text-[13px] font-black font-sukhumvit ${isActive ? 'text-blue-600' : 'text-slate-600'}`}>
                           {c.label}
                         </span>
                         {isActive && (
-                          <div className="w-4 h-4 rounded-full flex items-center justify-center shrink-0"
-                            style={{ background: c.color }}>
+                          <div className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 bg-blue-600">
                             <Check size={9} className="text-white" />
                           </div>
                         )}
@@ -2340,81 +3060,18 @@ function ScoreConfigPanel({ room, onSave }: {
                 })}
               </div>
             </div>
-
-            {/* Max score */}
-            <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 font-sukhumvit">
-                คะแนนเต็ม
-              </p>
-              <div className="flex items-center gap-3 px-4 py-3 rounded-2xl"
-                style={{ background: 'rgba(248,250,252,0.8)', border: '1px solid rgba(226,232,240,0.6)' }}>
-                <div className="flex-1">
-                  <p className="text-[11px] text-slate-500 font-sarabun mb-1">กำหนดตามจำนวนข้อสอบ</p>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={1}
-                      max={1000}
-                      value={maxScore}
-                      onChange={e => setMaxScore(Math.max(1, Number(e.target.value)))}
-                      className="w-24 h-9 rounded-xl bg-white border border-slate-200 px-3 text-[14px] font-black text-slate-800 font-sukhumvit outline-none focus:border-indigo-300 transition-colors"
-                    />
-                    <span className="text-[12px] font-bold text-slate-500 font-sarabun">คะแนน</span>
-                  </div>
-                </div>
-                {/* Quick-set buttons */}
-                <div className="flex flex-col gap-1">
-                  {[10, 20, 30, 50, 100].map(v => (
-                    <button key={v} onClick={() => setMaxScore(v)}
-                      className="px-3 py-1 rounded-lg text-[10px] font-black transition-all font-sukhumvit"
-                      style={{
-                        background: maxScore === v ? cfg.bg : 'rgba(241,245,249,0.8)',
-                        color: maxScore === v ? cfg.color : '#64748b',
-                        border: maxScore === v ? `1px solid ${cfg.border}` : '1px solid transparent',
-                      }}>
-                      {v}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {room.questionCount > 0 && (
-                <button
-                  onClick={() => setMaxScore(room.questionCount)}
-                  className="mt-1.5 text-[10px] font-bold text-indigo-400 hover:text-indigo-600 transition-colors font-sarabun"
-                >
-                  ใช้จำนวนข้อสอบ ({room.questionCount} ข้อ) เป็นคะแนนเต็ม
-                </button>
-              )}
-            </div>
-
-            {/* Summary chip */}
-            <div className="flex items-center gap-2 px-4 py-3 rounded-2xl"
-              style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}>
-              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: cfg.color }} />
-              <p className="text-[12px] font-bold font-sarabun" style={{ color: cfg.color }}>
-                เก็บเป็นคะแนน<span className="font-black">{cfg.label}</span> เต็ม <span className="font-black">{maxScore}</span> คะแนน
-              </p>
-            </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Save */}
-      <div className="flex justify-center mt-6">
-        <motion.button
-          whileTap={{ scale: 0.98 }}
+      {/* Save — desktop only (mobile uses header action) */}
+      <div className="hidden lg:flex justify-center mt-6">
+        <ExamSettingsSaveButton
           onClick={() => { void handleSave(); }}
           disabled={isSaving}
-          className="px-12 py-2.5 rounded-xl text-[13px] font-black text-white transition-all disabled:opacity-40 font-sukhumvit min-w-[200px]"
-          style={{
-            background: saved
-              ? 'linear-gradient(135deg,#059669,#10b981)'
-              : 'linear-gradient(135deg,#0f172a,#334155)',
-            boxShadow: saved ? '0 8px 20px -6px rgba(5,150,105,0.25)' : '0 8px 20px -6px rgba(15,23,42,0.2)',
-          }}
-        >
-          {saved ? '✓ บันทึกเรียบร้อย' : isSaving ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า'}
-        </motion.button>
+          isSaving={isSaving}
+          saved={saved}
+        />
       </div>
     </div>
   );
@@ -2423,23 +3080,23 @@ function ScoreConfigPanel({ room, onSave }: {
 // ── Room Detail View (inline 4-tab settings) ──────────────────────────────────
 type SettingsTab = 'takers' | 'questions' | 'score-settings' | 'score-config' | 'score-summary';
 
-const TAB_CONFIG: Record<SettingsTab, { label: string; icon: React.ElementType }> = {
-  takers: { label: 'รายชื่อ', icon: Users },
-  questions: { label: 'ข้อสอบ', icon: FileText },
-  'score-settings': { label: 'รายวิชา', icon: BookOpen },
-  'score-config': { label: 'เก็บคะแนน', icon: SlidersHorizontal },
-  'score-summary': { label: 'สรุปคะแนน', icon: CheckCircle2 },
+const TAB_CONFIG: Record<SettingsTab, { label: string; icon: IconType }> = {
+  takers: { label: 'รายชื่อ', icon: HiUsers },
+  questions: { label: 'ข้อสอบ', icon: HiDocumentText },
+  'score-settings': { label: 'รายวิชา', icon: HiBookOpen },
+  'score-config': { label: 'เก็บคะแนน', icon: HiAdjustmentsHorizontal },
+  'score-summary': { label: 'สรุปคะแนน', icon: HiPresentationChartLine },
 };
 
 function RoomDetailView({
   room, attempts, onBack, onUpdateRoom, onChangeStatus, onEdit, onDelete, onProctor, headerPortalEl,
-  canEdit, canDelete, onContentClick, onResetStudent, onResetAll,
+  canEdit, canDelete, onContentClick, onResetStudent, onResetAll, onRecalculateScores, initialTab,
 }: {
   room: ExamRoom;
   attempts: ExamAttempt[];
   onBack: () => void;
   onUpdateRoom: (roomId: string, data: Partial<ExamRoom>) => Promise<void>;
-  onChangeStatus: (status: ExamRoom['status']) => void;
+  onChangeStatus: (status: ExamRoom['status'], bypassConfirm?: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
   onProctor: () => void;
@@ -2449,28 +3106,116 @@ function RoomDetailView({
   onContentClick: (e: React.MouseEvent) => void;
   onResetStudent?: (studentId: string, studentName: string) => void;
   onResetAll?: () => void;
+  onRecalculateScores?: (roomId: string, round: number) => Promise<void>;
+  initialTab?: SettingsTab;
 }) {
-  const { user } = useAuth();
-  const teachingMgr = useTeachingManager(user?.uid ?? '');
-  const [activeTab, setActiveTab] = useState<SettingsTab>('takers');
-  const [takersPage, setTakersPage] = useState(1);
-  const [summaryPage, setSummaryPage] = useState(1);
-  const [showSummaryAsPercent, setShowSummaryAsPercent] = useState(false);
+  const { user, role } = useAuth();
+  const canViewAllSubjects = role === 'admin' || role === 'sysadmin';
+  const teachingMgr = useTeachingManager(user?.uid ?? '', canViewAllSubjects);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'takers');
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
   const [summaryView, setSummaryView] = useState<'table' | 'dashboard'>('table');
-  const [viewportHeight, setViewportHeight] = useState<number>(
-    typeof window !== 'undefined' ? window.innerHeight : 900,
+  const [scoreDetail, setScoreDetail] = useState<{
+    student: {
+      id: string;
+      fullName: string;
+      studentCode: string;
+      photoURL?: string;
+      gender?: 'male' | 'female';
+    };
+    initialRound?: number;
+  } | null>(null);
+  const [manualGradingRound, setManualGradingRound] = useState<number | null>(null);
+  const [roundEssayMeta, setRoundEssayMeta] = useState<
+    Record<number, { hasManualEssay: boolean; pendingCount: number }>
+  >({});
+  const [mobileSelectedRound, setMobileSelectedRound] = useState<number | null>(null);
+  const [mobileTabMenuOpen, setMobileTabMenuOpen] = useState(false);
+  const [roomActionsMenuOpen, setRoomActionsMenuOpen] = useState(false);
+  const [mobileSaveAction, setMobileSaveAction] = useState<MobileSaveAction | null>(null);
+  const registerMobileSave = useCallback((action: MobileSaveAction | null) => {
+    setMobileSaveAction((prev) => {
+      if (!prev && !action) return prev;
+      if (!prev || !action) return action;
+      if (
+        prev.disabled === action.disabled &&
+        prev.isSaving === action.isSaving &&
+        prev.saved === action.saved
+      ) {
+        return prev;
+      }
+      return action;
+    });
+  }, []);
+  const [questionBankDrawerOpen, setQuestionBankDrawerOpen] = useState(false);
+  const [headerMobilePortalEl, setHeaderMobilePortalEl] = useState<HTMLElement | null>(null);
+  const [headerRightActionsEl, setHeaderRightActionsEl] = useState<HTMLElement | null>(null);
+  const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
+  const [isLgUp, setIsLgUp] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true,
   );
 
   useEffect(() => {
-    const onResize = () => setViewportHeight(window.innerHeight);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    setHeaderMobilePortalEl(document.getElementById('header-portal-center-mobile'));
+    setHeaderRightActionsEl(document.getElementById('header-portal-right-actions'));
+    setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
   }, []);
 
-  // Auto page size based on current display height.
-  // Tuned for table rows (after switching "รายชื่อ" from cards to table).
-  const takersPageSize = Math.max(6, Math.floor((viewportHeight - 360) / 56));
-  const summaryPageSize = Math.max(6, Math.floor((viewportHeight - 360) / 56));
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const onChange = () => {
+      setIsLgUp(mq.matches);
+      setMobileTabMenuOpen(false);
+      setRoomActionsMenuOpen(false);
+      setMobileSaveAction(null);
+      if (mq.matches) setQuestionBankDrawerOpen(false);
+    };
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  // Re-grade submitted attempts when opening the score summary tab
+  useEffect(() => {
+    if (activeTab !== 'score-summary' || !onRecalculateScores) return;
+
+    const roundsToRecalc = new Set<number>();
+    attempts.forEach((att) => {
+      const round = normalizeExamRound(att.round);
+      const score = resolveAttemptTotalScore(att);
+      const answerCount = att.answers ? Object.keys(att.answers).length : 0;
+      if (att.status === 'submitted' && score === null && answerCount > 0) {
+        roundsToRecalc.add(round);
+        return;
+      }
+      if (att.status === 'graded' && score === 0 && answerCount > 0) {
+        const manualTotal = Object.values(att.manualScores ?? {}).reduce(
+          (sum, value) => sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0),
+          0,
+        );
+        if (manualTotal > 0) return;
+        roundsToRecalc.add(round);
+      }
+    });
+
+    if (roundsToRecalc.size === 0) return;
+    void Promise.all(
+      [...roundsToRecalc].map((round) => onRecalculateScores(room.id, round)),
+    );
+  }, [activeTab, room.id, attempts, onRecalculateScores]);
+
+  useEffect(() => {
+    setMobileTabMenuOpen(false);
+    setRoomActionsMenuOpen(false);
+    setQuestionBankDrawerOpen(false);
+    setMobileSaveAction(null);
+  }, [activeTab]);
 
   const visibleTabs = (Object.entries(TAB_CONFIG) as [SettingsTab, typeof TAB_CONFIG[SettingsTab]][])
     .filter(([key]) => {
@@ -2478,11 +3223,24 @@ function RoomDetailView({
       return true;
     });
 
+  const activeTabConfig = TAB_CONFIG[activeTab];
+
   // Compute student list for this room's class
   const classStudents = useMemo(() => {
     if (!room.classId) return [] as ReturnType<typeof teachingMgr.getStudentsForClass>;
     return teachingMgr.getStudentsForClass(room.classId);
   }, [room.classId, teachingMgr.getStudentsForClass]);
+
+  const isClassRosterLoading = Boolean(room.classId) && !teachingMgr.isRosterDataLoaded;
+
+  const studentIdentityLookup = useMemo(
+    () => enrichStudentIdentityLookupFromAttempts(
+      buildStudentIdentityLookup(classStudents),
+      classStudents,
+      attempts,
+    ),
+    [classStudents, attempts],
+  );
 
   const roundNumbers = useMemo(() => {
     const maxAttempts = room.settings?.maxAttempts ?? 1;
@@ -2496,35 +3254,115 @@ function RoomDetailView({
     return merged.length > 0 ? merged : [1];
   }, [room.settings?.maxAttempts, attempts]);
 
-  const attemptsByStudentRound = useMemo(() => {
-    const byStudent = new Map<string, Map<number, ExamAttempt>>();
+  const defaultMobileRound = useMemo(() => {
+    const preferred = normalizeExamRound(room.currentRound);
+    const hasForPreferred = attempts.some(
+      (a) => normalizeExamRound(a.round) === preferred,
+    );
+    if (hasForPreferred) return preferred;
+    const attemptRounds = attempts
+      .map((a) => normalizeExamRound(a.round))
+      .filter((r) => r > 0);
+    if (attemptRounds.length === 0) {
+      return roundNumbers.includes(preferred) ? preferred : (roundNumbers[0] ?? 1);
+    }
+    return Math.max(...attemptRounds);
+  }, [room.currentRound, attempts, roundNumbers]);
 
-    attempts.forEach((att) => {
-      const studentId = String(att.studentId || '').trim();
-      if (!studentId) return;
-      const round = Number(att.round);
-      if (!Number.isFinite(round) || round <= 0) return;
+  const activeMobileRound = mobileSelectedRound ?? defaultMobileRound;
 
-      const studentRounds = byStudent.get(studentId) ?? new Map<number, ExamAttempt>();
-      const prev = studentRounds.get(round);
-      if (!prev) {
-        studentRounds.set(round, att);
-        byStudent.set(studentId, studentRounds);
-        return;
-      }
+  useEffect(() => {
+    setMobileSelectedRound(null);
+  }, [room.id]);
 
-      const prevStamp = Number(prev.submittedAt ?? prev.lastSavedAt ?? prev.startedAt ?? 0);
-      const nextStamp = Number(att.submittedAt ?? att.lastSavedAt ?? att.startedAt ?? 0);
-      if (nextStamp >= prevStamp) {
-        studentRounds.set(round, att);
-      }
-      byStudent.set(studentId, studentRounds);
+  useEffect(() => {
+    if (mobileSelectedRound !== null && !roundNumbers.includes(mobileSelectedRound)) {
+      setMobileSelectedRound(null);
+    }
+  }, [roundNumbers, mobileSelectedRound]);
+
+  const takersRound = activeMobileRound;
+
+  const attemptsByStudentRound = useMemo(
+    () => indexAttemptsByStudentRound(attempts, studentIdentityLookup),
+    [attempts, studentIdentityLookup],
+  );
+
+  useEffect(() => {
+    if (activeTab !== 'score-summary') return;
+
+    let cancelled = false;
+    void Promise.all(
+      roundNumbers.map(async (round) => {
+        try {
+          const { questions } = await fetchRoomRoundExamData(room, round);
+          const manualEssays = getManualEssayQuestions(questions);
+          return {
+            round,
+            hasManualEssay: manualEssays.length > 0,
+            pendingCount: countPendingManualAttempts(attempts, round, manualEssays),
+          };
+        } catch {
+          return { round, hasManualEssay: false, pendingCount: 0 };
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      const next: Record<number, { hasManualEssay: boolean; pendingCount: number }> = {};
+      entries.forEach(({ round, hasManualEssay, pendingCount }) => {
+        next[round] = { hasManualEssay, pendingCount };
+      });
+      setRoundEssayMeta(next);
     });
 
-    return byStudent;
-  }, [attempts]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, room, roundNumbers, attempts]);
+
+  const openManualGrading = useCallback((round: number) => {
+    if (!roundEssayMeta[round]?.hasManualEssay) {
+      toast.info('รอบนี้ไม่มีข้ออัตนัยที่ต้องตรวจ');
+      return;
+    }
+    setManualGradingRound(round);
+  }, [roundEssayMeta]);
+
+  const renderRoundHeader = useCallback((round: number) => {
+    const meta = roundEssayMeta[round];
+    return (
+      <div className="inline-flex items-center justify-center gap-1.5">
+        <span>ครั้ง {round}</span>
+        {meta?.hasManualEssay && (
+          <button
+            type="button"
+            onClick={() => openManualGrading(round)}
+            className="relative inline-flex h-6 w-6 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors"
+            title={`ตรวจข้ออัตนัย${meta.pendingCount > 0 ? ` (${meta.pendingCount} รอตรวจ)` : ''}`}
+          >
+            <HiMiniPencil size={12} />
+            {meta.pendingCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-rose-500 px-0.5 text-[8px] font-black text-white">
+                {meta.pendingCount > 9 ? '9+' : meta.pendingCount}
+              </span>
+            )}
+          </button>
+        )}
+      </div>
+    );
+  }, [openManualGrading, roundEssayMeta]);
 
   const summaryStudents = useMemo(() => {
+    if (room.classId && !teachingMgr.isRosterDataLoaded) {
+      return [] as {
+        id: string;
+        fullName: string;
+        studentCode: string;
+        photoURL?: string;
+        gender?: 'male' | 'female';
+      }[];
+    }
+
     if (classStudents.length > 0) {
       return classStudents.map(({ student }: { student: unknown }) => {
         const s = (student && typeof student === 'object')
@@ -2536,6 +3374,9 @@ function RoomDetailView({
         const studentName = typeof s.studentName === 'string' ? s.studentName : '';
         const studentCode = typeof s.studentCode === 'string' ? s.studentCode : '-';
         const studentId = typeof s.id === 'string' ? s.id : '';
+        const photoURL = typeof s.photoURL === 'string' ? s.photoURL : undefined;
+        const gender: 'male' | 'female' | undefined =
+          s.gender === 'male' ? 'male' : s.gender === 'female' ? 'female' : undefined;
         const fullName = firstName
           ? `${prefix}${firstName} ${lastName}`.trim()
           : (studentName || 'ไม่ทราบชื่อ');
@@ -2543,11 +3384,19 @@ function RoomDetailView({
           id: studentId || `${studentCode}-${fullName}`,
           fullName,
           studentCode,
+          photoURL,
+          gender,
         };
       });
     }
 
-    const map = new Map<string, { id: string; fullName: string; studentCode: string }>();
+    const map = new Map<string, {
+      id: string;
+      fullName: string;
+      studentCode: string;
+      photoURL?: string;
+      gender?: 'male' | 'female';
+    }>();
     attempts.forEach((att) => {
       const studentId = String(att.studentId || '').trim();
       if (!studentId) return;
@@ -2559,43 +3408,8 @@ function RoomDetailView({
       });
     });
     return Array.from(map.values());
-  }, [classStudents, attempts]);
+  }, [classStudents, attempts, room.classId, teachingMgr.isRosterDataLoaded]);
 
-  const takersTotalItems = classStudents.length > 0 ? classStudents.length : attempts.length;
-  const takersPageCount = Math.max(1, Math.ceil(takersTotalItems / takersPageSize));
-  const safeTakersPage = Math.min(takersPage, takersPageCount);
-  const takersStart = (safeTakersPage - 1) * takersPageSize;
-  const pagedClassStudents = useMemo(
-    () => classStudents.slice(takersStart, takersStart + takersPageSize),
-    [classStudents, takersStart, takersPageSize],
-  );
-  const pagedAttempts = useMemo(
-    () => attempts.slice(takersStart, takersStart + takersPageSize),
-    [attempts, takersStart, takersPageSize],
-  );
-
-  const summaryPageCount = Math.max(1, Math.ceil(summaryStudents.length / summaryPageSize));
-  const safeSummaryPage = Math.min(summaryPage, summaryPageCount);
-  const summaryStart = (safeSummaryPage - 1) * summaryPageSize;
-  const pagedSummaryStudents = useMemo(
-    () => summaryStudents.slice(summaryStart, summaryStart + summaryPageSize),
-    [summaryStudents, summaryStart, summaryPageSize],
-  );
-  const bestScoreByStudent = useMemo(() => {
-    const map = new Map<string, number | null>();
-    summaryStudents.forEach((student) => {
-      const studentRounds = attemptsByStudentRound.get(student.id);
-      const scored = roundNumbers
-        .map((r) => studentRounds?.get(r)?.score)
-        .filter((score): score is number => typeof score === 'number');
-      map.set(student.id, scored.length > 0 ? Math.max(...scored) : null);
-    });
-    return map;
-  }, [summaryStudents, attemptsByStudentRound, roundNumbers]);
-  const highestBestScore = useMemo(() => {
-    const values = Array.from(bestScoreByStudent.values()).filter((score): score is number => typeof score === 'number');
-    return values.length > 0 ? Math.max(...values) : null;
-  }, [bestScoreByStudent]);
   const getRoundTotalPoints = useCallback((round: number) => {
     const roundKey = String(round);
     const roundPoints =
@@ -2606,10 +3420,6 @@ function RoomDetailView({
       ?? 0;
     return Number(roundPoints) > 0 ? Number(roundPoints) : 0;
   }, [room.roundQuestions, room.totalPoints]);
-  const lowestBestScore = useMemo(() => {
-    const values = Array.from(bestScoreByStudent.values()).filter((score): score is number => typeof score === 'number');
-    return values.length > 0 ? Math.min(...values) : null;
-  }, [bestScoreByStudent]);
 
   const bestPercentByStudent = useMemo(() => {
     const map = new Map<string, number | null>();
@@ -2617,16 +3427,112 @@ function RoomDetailView({
       const studentRounds = attemptsByStudentRound.get(student.id);
       const bestPercent = roundNumbers
         .map((round) => {
-          const score = studentRounds?.get(round)?.score;
+          const score = resolveAttemptTotalScore(studentRounds?.get(round));
           const total = getRoundTotalPoints(round);
-          if (typeof score !== 'number' || total <= 0) return null;
-          return (score / total) * 100;
+          if (score === null || total <= 0) return null;
+          return rawPointsToPercent(score, total);
         })
         .filter((v): v is number => typeof v === 'number');
       map.set(student.id, bestPercent.length > 0 ? Math.max(...bestPercent) : null);
     });
     return map;
   }, [summaryStudents, attemptsByStudentRound, roundNumbers, getRoundTotalPoints]);
+
+  const highestBestPercent = useMemo(() => {
+    const values = Array.from(bestPercentByStudent.values()).filter((v): v is number => typeof v === 'number');
+    return values.length > 0 ? Math.max(...values) : null;
+  }, [bestPercentByStudent]);
+
+  const lowestBestPercent = useMemo(() => {
+    const values = Array.from(bestPercentByStudent.values()).filter((v): v is number => typeof v === 'number');
+    return values.length > 0 ? Math.min(...values) : null;
+  }, [bestPercentByStudent]);
+
+  const pagedSummaryRows = useMemo(() => {
+    return summaryStudents.map((student) => {
+      const studentRounds = attemptsByStudentRound.get(student.id);
+      const bestScorePercent = bestPercentByStudent.get(student.id) ?? null;
+      const bestScorePercentDisplay = bestScorePercent !== null ? Math.round(bestScorePercent) : null;
+      const isTopScorer = highestBestPercent !== null && bestScorePercent === highestBestPercent;
+      const isLowestScorer = lowestBestPercent !== null && bestScorePercent === lowestBestPercent;
+      const rowHighlightClass = isTopScorer
+        ? 'bg-emerald-50/70'
+        : isLowestScorer
+          ? 'bg-rose-50/60'
+          : '';
+      const bestScoreClass = isTopScorer
+        ? 'bg-emerald-100 text-emerald-700'
+        : isLowestScorer
+          ? 'bg-rose-100 text-rose-700'
+          : 'bg-blue-50 text-blue-700';
+
+      return {
+        student,
+        bestScorePercent: bestScorePercentDisplay,
+        isTopScorer,
+        isLowestScorer,
+        rowHighlightClass,
+        bestScoreClass,
+        attemptsByRound: studentRounds ?? new Map<number, ExamAttempt>(),
+        hasAnyAttempt: (studentRounds?.size ?? 0) > 0,
+        rounds: roundNumbers.map((round) => {
+          const att = studentRounds?.get(round);
+          const roundScore = resolveAttemptTotalScore(att);
+          const roundTotal = getRoundTotalPoints(round);
+          const roundScorePercent = roundScore !== null && roundTotal > 0
+            ? Math.round(rawPointsToPercent(roundScore, roundTotal))
+            : null;
+          const isInProgress = !!att && att.status === 'in_progress';
+          const isPending = !!att
+            && att.status === 'submitted'
+            && roundScore === null;
+          const needsManualReview = !!att?.pendingManualGrading;
+          return {
+            round,
+            att,
+            roundScore,
+            roundScorePercent,
+            hasScore: roundScorePercent !== null,
+            isPending,
+            isInProgress,
+            needsManualReview,
+            roundTotal,
+          };
+        }),
+      };
+    });
+  }, [
+    summaryStudents,
+    attemptsByStudentRound,
+    bestPercentByStudent,
+    highestBestPercent,
+    lowestBestPercent,
+    roundNumbers,
+    getRoundTotalPoints,
+  ]);
+
+  const openScoreDetail = useCallback((
+    student: {
+      id: string;
+      fullName: string;
+      studentCode: string;
+      photoURL?: string;
+      gender?: 'male' | 'female';
+    },
+    attemptsByRound: Map<number, ExamAttempt>,
+    initialRound?: number,
+  ) => {
+    if (attemptsByRound.size === 0) {
+      toast.info('ยังไม่มีข้อมูลการสอบของนักเรียนคนนี้');
+      return;
+    }
+    setScoreDetail({ student, initialRound });
+  }, []);
+
+  const scoreDetailAttemptsByRound = useMemo(() => {
+    if (!scoreDetail) return new Map<number, ExamAttempt>();
+    return attemptsByStudentRound.get(scoreDetail.student.id) ?? new Map<number, ExamAttempt>();
+  }, [scoreDetail, attemptsByStudentRound]);
 
   const summaryDashboard = useMemo(() => {
     const percentValues = Array.from(bestPercentByStudent.values()).filter((v): v is number => typeof v === 'number');
@@ -2657,8 +3563,8 @@ function RoomDetailView({
     const roundStats = roundNumbers.map((round) => {
       const total = getRoundTotalPoints(round);
       const scores = summaryStudents
-        .map((student) => attemptsByStudentRound.get(student.id)?.get(round)?.score)
-        .filter((score): score is number => typeof score === 'number');
+        .map((student) => resolveAttemptTotalScore(attemptsByStudentRound.get(student.id)?.get(round)))
+        .filter((score): score is number => score !== null);
       const avgRaw = scores.length > 0 ? scores.reduce((sum, v) => sum + v, 0) / scores.length : 0;
       const avgRoundPercent = total > 0 ? (avgRaw / total) * 100 : 0;
       return {
@@ -2688,21 +3594,45 @@ function RoomDetailView({
     questionSetId: string,
     questionIds: string[],
     questionSetByQuestionId: Record<string, string>,
+    questionPoints: Record<string, number>,
     totalPoints: number,
   ) => {
-    const roundQuestions = {
-      ...(room.roundQuestions ?? {}),
-      [roundKey]: { questionSetId, questionIds, questionSetByQuestionId, totalPoints },
+    const savedEntry = {
+      questionSetId,
+      questionIds,
+      questionSetByQuestionId,
+      questionPoints,
+      totalPoints,
     };
+    const previousEntry = room.roundQuestions?.[roundKey];
+    const roundQuestions = propagateRoundConfigToEmptyRounds(
+      room.roundQuestions ?? {},
+      roundKey,
+      savedEntry,
+      room.settings?.maxAttempts ?? 1,
+      { previousEntryForSavedRound: previousEntry },
+    );
     // Also mirror into top-level legacy fields for round "1" / "∞"
     const isFirstRound = roundKey === '1' || roundKey === '∞';
     await onUpdateRoom(room.id, {
       ...(isFirstRound ? { questionSetId, selectedQuestionIds: questionIds, questionCount: questionIds.length, totalPoints } : {}),
       roundQuestions,
     });
+
+    if (onRecalculateScores) {
+      const roundsToRecalc = new Set<number>();
+      attempts.forEach((att) => {
+        if (att.status === 'submitted' || att.status === 'graded') {
+          roundsToRecalc.add(att.round);
+        }
+      });
+      await Promise.all(
+        [...roundsToRecalc].map((round) => onRecalculateScores(room.id, round)),
+      );
+    }
   };
 
-  const handleSaveScoreSettings = async (
+  const handleSaveScoreSettings = useCallback(async (
     subjects: GradeBookSubjectLink[],
     scoreType: GradeScoreType,
   ) => {
@@ -2717,154 +3647,280 @@ function RoomDetailView({
         gradeBookScoreType: scoreType,
       },
     });
-  };
+  }, [onUpdateRoom, room.id, room.settings]);
 
-  const handleSaveScoreConfig = async (data: Partial<ExamRoom['settings']>) => {
+  const handleSaveScoreConfig = useCallback(async (data: Partial<ExamRoom['settings']>) => {
     await onUpdateRoom(room.id, {
       settings: { ...room.settings, ...data },
     });
-  };
+  }, [onUpdateRoom, room.id, room.settings]);
+
+  const ActiveTabIcon = activeTabConfig.icon;
+  const closeRoomActionsMenu = () => setRoomActionsMenuOpen(false);
+
+  const roomActionsMenu = canEdit ? (
+    <div className="pointer-events-auto relative flex items-center gap-2 shrink-0">
+      {!isLgUp && activeTab === 'questions' && (
+        <button
+          type="button"
+          onClick={() => setQuestionBankDrawerOpen(true)}
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+          title="คลังข้อสอบ"
+          aria-label="คลังข้อสอบ"
+        >
+          <HiBookOpen className="h-5 w-5" />
+        </button>
+      )}
+      {!isLgUp && mobileSaveAction && (
+        <ExamSettingsSaveButton
+          variant="compact"
+          onClick={mobileSaveAction.onSave}
+          disabled={mobileSaveAction.disabled}
+          isSaving={mobileSaveAction.isSaving}
+          saved={mobileSaveAction.saved}
+        />
+      )}
+      <div className="relative flex items-center shrink-0">
+      <button
+        type="button"
+        onClick={() => setRoomActionsMenuOpen((open) => !open)}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+        title="เมนูจัดการห้องสอบ"
+        aria-label="เมนูจัดการห้องสอบ"
+        aria-expanded={roomActionsMenuOpen}
+      >
+        <HiBars3 className="h-5 w-5" />
+      </button>
+
+      {roomActionsMenuOpen && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-[90] bg-black/20"
+            aria-label="ปิดเมนูจัดการห้องสอบ"
+            onClick={closeRoomActionsMenu}
+          />
+          <div
+            className={`z-[100] w-[min(260px,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl ${
+              isLgUp ? 'absolute right-0 top-full mt-2' : 'fixed right-4 top-14'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                closeRoomActionsMenu();
+                onProctor();
+              }}
+              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              <Eye size={16} className="shrink-0 text-slate-500" />
+              <span>Proctor</span>
+            </button>
+
+            {room.status === 'upcoming' && (
+              <button
+                type="button"
+                onClick={() => {
+                  closeRoomActionsMenu();
+                  onChangeStatus('active');
+                }}
+                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-emerald-700 transition-colors hover:bg-emerald-50"
+              >
+                <Play size={16} fill="currentColor" className="shrink-0" />
+                <span>เริ่มรอบ {(room.completedRounds ?? 0) + 1}</span>
+              </button>
+            )}
+
+            {room.status === 'active' && (
+              <button
+                type="button"
+                onClick={() => {
+                  closeRoomActionsMenu();
+                  onChangeStatus('closed');
+                }}
+                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-rose-700 transition-colors hover:bg-rose-50"
+              >
+                <Square size={16} fill="currentColor" className="shrink-0" />
+                <span>ปิด รอบ {room.currentRound ?? 1}</span>
+              </button>
+            )}
+
+            {onResetAll && attempts.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  closeRoomActionsMenu();
+                  onResetAll();
+                }}
+                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-amber-700 transition-colors hover:bg-amber-50"
+              >
+                <RotateCcw size={16} className="shrink-0" />
+                <span>รีเซ็ตทั้งหมด</span>
+              </button>
+            )}
+
+            <div className="my-1 h-px bg-slate-100" />
+
+            <button
+              type="button"
+              onClick={() => {
+                closeRoomActionsMenu();
+                onEdit();
+              }}
+              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              <Pencil size={16} className="shrink-0 text-slate-500" />
+              <span>แก้ไขห้องสอบ</span>
+            </button>
+
+            {canDelete && (
+              <button
+                type="button"
+                onClick={() => {
+                  closeRoomActionsMenu();
+                  onDelete();
+                }}
+                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-rose-600 transition-colors hover:bg-rose-50"
+              >
+                <Trash2 size={16} className="shrink-0" />
+                <span>ลบห้องสอบ</span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
+      </div>
+    </div>
+  ) : null;
+
+  const roomActionsMenuPortal =
+    roomActionsMenu && isLgUp && headerRightActionsEl
+      ? createPortal(roomActionsMenu, headerRightActionsEl)
+      : roomActionsMenu && !isLgUp && headerMobileActionsEl
+        ? createPortal(roomActionsMenu, headerMobileActionsEl)
+        : null;
 
   return (
     <motion.div
       initial={{ opacity: 0, x: 24 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 24 }}
-      className="flex flex-col h-full gap-4"
+      className="flex flex-col flex-1 min-h-0 h-full gap-3 lg:gap-4"
     >
 
 
       {/* ── 4 Tabs + Content panel ── */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden" onClick={onContentClick}>
-        {/* Tab bar - rendered into header portal if available */}
-        {headerPortalEl ? createPortal(
-          <div className="flex items-center gap-2 h-10 border border-black/[0.07] p-1 rounded-full bg-white/60 backdrop-blur-md">
+        {/* Tab bar - desktop header portal + mobile menu button */}
+        {isLgUp && headerPortalEl ? createPortal(
+          <div className="pointer-events-auto flex items-center gap-2 h-10 border border-black/[0.07] p-1 rounded-full bg-white/60 backdrop-blur-md">
             <button
+              type="button"
               onClick={onBack}
-              className="h-8 pl-2 pr-3 rounded-full text-black/45 hover:bg-black/5 flex items-center gap-1 transition-all"
+              className="h-8 pl-2 pr-3 rounded-full text-black/45 hover:bg-black/5 flex items-center gap-1 transition-all cursor-pointer"
               title="กลับหน้าหลัก"
             >
-              <ArrowLeft size={12} strokeWidth={3} />
+              <HiArrowLeft className="w-3 h-3 shrink-0" />
               <span className="text-[10px] font-black uppercase">กลับ</span>
             </button>
 
             {room.status === 'active' && (
-              <div className="flex items-center px-2 border-l border-black/5">
-                <CountdownTimer startTime={room.startTime} durationMinutes={room.durationMinutes} />
+              <div className="flex items-center gap-2 pl-1 pr-0.5 border-l border-black/5">
+                <ExamRoomLiveIndicator />
+                <CountdownTimer
+                  startTime={room.startTime}
+                  durationMinutes={room.durationMinutes}
+                  onExpire={() => onChangeStatus('closed', true)}
+                />
               </div>
             )}
 
             <div className="w-[1px] h-4 bg-black/[0.07] mx-1" />
 
             {visibleTabs.map(([key, cfg]) => {
-              const Icon = cfg.icon;
               const isActive = activeTab === key;
               return (
                 <button
                   key={key}
+                  type="button"
                   onClick={() => setActiveTab(key)}
-                  className={`h-8 px-4 rounded-full text-[11px] font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${
+                  className={`h-8 px-4 rounded-full text-[11px] font-bold transition-all whitespace-nowrap flex items-center cursor-pointer ${
                     isActive
                       ? 'bg-blue-600 text-white border border-blue-700'
                       : 'text-black/45 hover:bg-black/5'
                   }`}
                 >
-                  <Icon size={12} className={isActive ? 'text-white' : 'text-black/40'} />
                   <span>{cfg.label}</span>
                 </button>
               );
             })}
           </div>,
           headerPortalEl
-        ) : (
-          <div className="flex justify-center border-b border-slate-100 px-2 pt-2 gap-1 shrink-0">
-            {visibleTabs.map(([key, cfg]) => {
-              const Icon = cfg.icon;
-              const isActive = activeTab === key;
-              return (
+        ) : null}
+
+        {!isLgUp && headerMobilePortalEl ? createPortal(
+          <div className="lg:hidden pointer-events-auto relative flex items-center justify-center min-w-0 max-w-[calc(100vw-112px)]">
+            <button
+              type="button"
+              onClick={() => setMobileTabMenuOpen((open) => !open)}
+              className="flex min-w-0 items-center gap-1.5 text-slate-800 transition-colors hover:text-slate-600"
+              aria-label="เปิดเมนูแท็บ"
+              aria-expanded={mobileTabMenuOpen}
+            >
+              {room.status === 'active' && <ExamRoomLiveIndicator />}
+              <ActiveTabIcon className="h-3.5 w-3.5 shrink-0 text-slate-600" />
+              <span className="truncate text-[12px] font-black font-sukhumvit">
+                {activeTabConfig.label}
+              </span>
+              <HiChevronDown
+                className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform ${mobileTabMenuOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {mobileTabMenuOpen && (
+              <>
                 <button
-                  key={key}
-                  onClick={() => setActiveTab(key)}
-                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-t-xl text-[12px] font-black transition-all font-sukhumvit relative"
-                  style={{
-                    color: isActive ? '#0f172a' : '#94a3b8',
-                    background: isActive ? 'rgba(248,250,252,1)' : 'transparent',
-                  }}
-                >
-                  <Icon size={13} />
-                  <span className="hidden sm:inline">{cfg.label}</span>
-                  {isActive && (
-                    <motion.div
-                      layoutId="tab-underline"
-                      className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-slate-800"
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
+                  type="button"
+                  className="fixed inset-0 z-[90] bg-black/20"
+                  aria-label="ปิดเมนูแท็บ"
+                  onClick={() => setMobileTabMenuOpen(false)}
+                />
+                <div className="fixed left-1/2 top-14 z-[100] w-[min(280px,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                  {visibleTabs.map(([key, cfg]) => {
+                    const Icon = cfg.icon;
+                    const isActive = activeTab === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setActiveTab(key)}
+                        className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit transition-colors ${
+                          isActive
+                            ? 'bg-blue-600 text-white'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                        <span>{cfg.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>,
+          headerMobilePortalEl
+        ) : null}
+
+        {roomActionsMenuPortal}
 
         {/* Tab content */}
-        <div className="flex-1 overflow-y-auto scrollbar-hide p-5">
-          {canEdit && (
-            <div className="flex flex-wrap items-center gap-2 mb-6 p-3 rounded-2xl bg-white border border-slate-200">
-              <div className="flex items-center gap-2 mr-auto px-2">
-                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                <span className="text-[12px] font-bold text-slate-800">จัดการห้องสอบ</span>
-              </div>
-              
-              <div className="flex items-center gap-1.5">
-                <button onClick={onProctor}
-                  className="h-9 px-4 rounded-xl text-[12px] font-bold text-slate-600 hover:bg-slate-50 border border-slate-200 flex items-center gap-2 transition-all">
-                  <Eye size={14} /> Proctor
-                </button>
-                
-                {room.status === 'upcoming' && (
-                  <button onClick={() => onChangeStatus('active')}
-                    className="h-9 px-4 rounded-xl text-[12px] font-bold flex items-center gap-2 transition-all bg-emerald-600 text-white border border-emerald-700 hover:bg-emerald-700">
-                    <Play size={14} fill="currentColor" /> เปิดสอบ
-                  </button>
-                )}
-                
-                {room.status === 'active' && (
-                  <button onClick={() => onChangeStatus('closed')}
-                    className="h-9 px-4 rounded-xl text-[12px] font-bold flex items-center gap-2 transition-all bg-rose-600 text-white border border-rose-700 hover:bg-rose-700">
-                    <Square size={14} fill="currentColor" /> ปิดสอบ
-                  </button>
-                )}
-
-                <div className="w-[1px] h-4 bg-slate-200 mx-1" />
-
-                {/* Reset All */}
-                {onResetAll && attempts.length > 0 && (
-                  <button
-                    onClick={onResetAll}
-                    className="h-9 px-3 rounded-xl text-[12px] font-bold flex items-center gap-2 transition-all text-amber-600 hover:bg-amber-50 border border-amber-200"
-                    title="รีเซ็ตการสอบทั้งหมด"
-                  >
-                    <RotateCcw size={14} />
-                    รีเซ็ตทั้งหมด
-                  </button>
-                )}
-
-                <div className="w-[1px] h-4 bg-slate-200 mx-1" />
-
-                <button onClick={onEdit}
-                  className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-50 border border-slate-200 transition-all">
-                  <Pencil size={14} />
-                </button>
-                
-                {canDelete && (
-                  <button onClick={onDelete}
-                    className="w-9 h-9 rounded-xl flex items-center justify-center text-rose-400 hover:bg-rose-50 border border-rose-100 transition-all">
-                    <Trash2 size={14} />
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div
+            className={`flex-1 min-h-0 flex flex-col ${
+              activeTab === 'questions' ? 'overflow-hidden' : 'overflow-y-auto scrollbar-hide'
+            }`}
+          >
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -2872,9 +3928,14 @@ function RoomDetailView({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.15 }}
+              className={`flex flex-col flex-1 min-h-0 ${activeTab === 'questions' ? 'overflow-hidden' : ''}`}
             >
               {activeTab === 'takers' && (
                 (() => {
+                  if (isClassRosterLoading) {
+                    return <TakersListSkeleton />;
+                  }
+
                   // Fallback: If no classId or no students found, just show attempts
                   if (attempts.length === 0 && classStudents.length === 0) {
                     return (
@@ -2886,7 +3947,7 @@ function RoomDetailView({
                   }
 
                   const rows = classStudents.length > 0
-                    ? pagedClassStudents.map(({ student }: { student: unknown }) => {
+                    ? classStudents.map(({ student }: { student: unknown }) => {
                         const s = (student && typeof student === 'object')
                           ? (student as Record<string, unknown>)
                           : {};
@@ -2897,174 +3958,297 @@ function RoomDetailView({
                         const lastName = typeof s.lastName === 'string' ? s.lastName : '';
                         const studentName = typeof s.studentName === 'string' ? s.studentName : '';
                         const fullName = `${prefix}${firstName} ${lastName}`.trim() || studentName || 'ไม่ทราบชื่อ';
-                        const attempt = attempts.find(a => a.studentId === studentId);
+                        const photoURL = typeof s.photoURL === 'string' ? s.photoURL : undefined;
+                        const gender: 'male' | 'female' | undefined =
+                          s.gender === 'male' ? 'male' : s.gender === 'female' ? 'female' : undefined;
+                        const identity = {
+                          id: studentId,
+                          authUid: typeof s.authUid === 'string' ? s.authUid : undefined,
+                          userId: typeof s.userId === 'string' ? s.userId : undefined,
+                          studentCode: typeof s.studentCode === 'string' ? s.studentCode : undefined,
+                          email: typeof s.email === 'string' ? s.email : undefined,
+                        };
+                        const attempt = findTakerAttemptForStudent(
+                          attempts,
+                          identity,
+                          attemptsByStudentRound,
+                          takersRound,
+                        );
                         return {
                           key: studentId || `${studentCode}-${fullName}`,
+                          studentId,
                           fullName,
                           studentCode,
+                          photoURL,
+                          gender,
                           attempt,
                         };
                       })
-                    : pagedAttempts.map((att) => ({
-                        key: att.id,
-                        fullName: att.studentName || 'ไม่ทราบชื่อ',
-                        studentCode: '-',
-                        attempt: att,
-                      }));
+                    : attempts.length > 0
+                      ? attempts.map((att) => ({
+                          key: att.id,
+                          studentId: att.studentId,
+                          fullName: att.studentName || 'ไม่ทราบชื่อ',
+                          studentCode: '-',
+                          photoURL: undefined,
+                          gender: undefined,
+                          attempt: att,
+                        }))
+                      : [];
+
+                  const displayRows = rows.map((row) => {
+                    const att = row.attempt;
+                    const score = resolveAttemptTotalScore(att);
+                    const attemptRound = att ? normalizeExamRound(att.round) : takersRound;
+                    const roundTotal = getRoundTotalPoints(attemptRound);
+                    const scorePercent = score !== null && roundTotal > 0
+                      ? Math.round(rawPointsToPercent(score, roundTotal))
+                      : null;
+                    const hasScore = scorePercent !== null;
+                    const submittedAt = att?.submittedAt
+                      ? new Date(att.submittedAt).toLocaleString('th-TH')
+                      : '-';
+                    const statusLabel = !att
+                      ? 'ยังไม่เข้าสอบ'
+                      : att.status === 'submitted' || att.status === 'graded'
+                        ? 'ส่งแล้ว'
+                        : 'เข้าสอบ';
+                    const statusClass = !att
+                      ? 'bg-slate-100 text-slate-500'
+                      : att.status === 'submitted' || att.status === 'graded'
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-amber-50 text-amber-700';
+                    return {
+                      ...row,
+                      att,
+                      score,
+                      scorePercent,
+                      hasScore,
+                      submittedAt,
+                      statusLabel,
+                      statusClass,
+                    };
+                  });
 
                   return (
-                    <div className="space-y-3">
-                      <div className="rounded-2xl border border-slate-200 bg-white/80 overflow-hidden">
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full text-left">
+                    <div className="flex flex-col w-full gap-3 md:flex-1 md:min-h-0">
+                      <MobileRoundSelect
+                        rounds={roundNumbers}
+                        value={activeMobileRound}
+                        onChange={setMobileSelectedRound}
+                        className="md:hidden px-1.5"
+                      />
+                      {/* Mobile: card list */}
+                      <div className={cn('md:hidden flex flex-col gap-2.5', PORTAL_CARD_LIST_PADDING)}>
+                        {displayRows.map((row, index) => (
+                          <motion.div
+                            key={row.key}
+                            className={MOBILE_STUDENT_CARD_OUTER}
+                            initial={{ opacity: 0, y: 8 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: index * 0.02 }}
+                            whileTap={{ scale: 0.99 }}
+                          >
+                            <div className={MOBILE_STUDENT_CARD_SHELL}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                                <StudentAvatar
+                                  photoURL={row.photoURL}
+                                  studentId={row.studentId || row.key}
+                                  name={row.fullName}
+                                  gender={row.gender}
+                                  className="h-10 w-10 shrink-0 rounded-xl"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <p
+                                    className="text-[13px] font-bold text-slate-800 font-sukhumvit truncate"
+                                    title={row.fullName}
+                                  >
+                                    {row.fullName}
+                                  </p>
+                                  <p className="text-[11px] text-blue-600 font-sarabun tabular-nums mt-0.5">
+                                    รหัส {row.studentCode}
+                                  </p>
+                                </div>
+                              </div>
+                              <span
+                                className={`inline-flex shrink-0 items-center justify-center px-2 py-1 rounded-lg text-[10px] font-bold font-sarabun whitespace-nowrap ${row.statusClass}`}
+                              >
+                                {row.statusLabel}
+                              </span>
+                            </div>
+                            <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-3">
+                                <div>
+                                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-wide font-sukhumvit mb-0.5">
+                                    คะแนน รอบ {activeMobileRound} (%)
+                                  </p>
+                                  {row.hasScore ? (
+                                    <span className="inline-flex items-center justify-center min-w-8 px-2 py-0.5 rounded-lg bg-blue-50 text-blue-700 text-[13px] font-black font-sukhumvit tabular-nums">
+                                      {row.scorePercent}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-[12px] text-slate-300 font-bold">-</span>
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-wide font-sukhumvit mb-0.5">
+                                    ส่งล่าสุด
+                                  </p>
+                                  <p className="text-[10px] text-slate-500 font-sarabun tabular-nums truncate">
+                                    {row.submittedAt}
+                                  </p>
+                                </div>
+                              </div>
+                              {canEdit && onResetStudent && row.att && (
+                                <motion.button
+                                  type="button"
+                                  whileTap={{ scale: 0.92 }}
+                                  onClick={() => onResetStudent(row.att!.studentId, row.fullName)}
+                                  className="w-9 h-9 shrink-0 rounded-lg flex items-center justify-center text-amber-500 hover:bg-amber-50 border border-amber-200 transition-colors"
+                                  title={`รีเซ็ตการสอบของ ${row.fullName}`}
+                                >
+                                  <RotateCcw size={14} />
+                                </motion.button>
+                              )}
+                            </div>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </div>
+
+                      {/* Desktop: table */}
+                      <div className="hidden md:flex flex-1 min-h-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white/80 w-full">
+                        <div className="overflow-x-auto w-full">
+                          <table className="w-full table-fixed text-left">
+                            <colgroup>
+                              <col />
+                              <col className="w-[6.5rem]" />
+                              <col className="w-[7.5rem]" />
+                              <col className="w-[4.5rem]" />
+                              <col className="w-[10rem]" />
+                            </colgroup>
                             <thead>
                               <tr className="bg-slate-50/90 border-b border-slate-200">
                                 <th className="px-4 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit">
                                   นักเรียน
                                 </th>
-                                <th className="px-4 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit whitespace-nowrap">
-                                  รหัสนักเรียน
+                                <th className="px-3 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit whitespace-nowrap text-center">
+                                  รหัส
                                 </th>
-                                <th className="px-4 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit whitespace-nowrap text-center">
+                                <th className="px-3 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit whitespace-nowrap text-center">
                                   สถานะ
                                 </th>
-                                <th className="px-4 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit whitespace-nowrap text-center">
-                                  คะแนน
+                                <th className="px-3 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit whitespace-nowrap text-center">
+                                  คะแนน (%)
                                 </th>
-                                <th className="px-4 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit whitespace-nowrap text-center">
+                                <th className="px-3 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit whitespace-nowrap text-center">
                                   ส่งล่าสุด
                                 </th>
                               </tr>
                             </thead>
                             <tbody>
-                              {rows.map((row) => {
-                                const att = row.attempt;
-                                const hasScore = typeof att?.score === 'number';
-                                const submittedAt = att?.submittedAt ? new Date(att.submittedAt).toLocaleString('th-TH') : '-';
-                                const statusLabel = !att
-                                  ? 'ยังไม่เข้าสอบ'
-                                  : att.status === 'submitted' || att.status === 'graded'
-                                    ? 'ส่งแล้ว'
-                                    : 'กำลังทำ';
-                                const statusClass = !att
-                                  ? 'bg-slate-100 text-slate-500'
-                                  : att.status === 'submitted' || att.status === 'graded'
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : 'bg-amber-50 text-amber-700';
-
-                                return (
-                                  <tr key={row.key} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/50">
-                                    <td className="px-4 py-3">
-                                      <p className="text-[13px] font-bold text-slate-800 font-sukhumvit">{row.fullName}</p>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <span className="text-[12px] text-slate-500 font-sarabun">{row.studentCode}</span>
-                                    </td>
-                                    <td className="px-4 py-3 text-center">
-                                      <span className={`inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-bold font-sarabun ${statusClass}`}>
-                                        {statusLabel}
+                              {displayRows.map((row) => (
+                                <tr key={row.key} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/50">
+                                  <td className="px-4 py-3 min-w-0">
+                                    <p className="text-[13px] font-bold text-slate-800 font-sukhumvit truncate" title={row.fullName}>
+                                      {row.fullName}
+                                    </p>
+                                  </td>
+                                  <td className="px-3 py-3 text-center">
+                                    <span className="text-[12px] text-blue-600 font-sarabun tabular-nums">{row.studentCode}</span>
+                                  </td>
+                                  <td className="px-3 py-3 text-center">
+                                    <span className={`inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-bold font-sarabun whitespace-nowrap ${row.statusClass}`}>
+                                      {row.statusLabel}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-3 text-center">
+                                    {row.hasScore ? (
+                                      <span className="inline-flex items-center justify-center min-w-8 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-[12px] font-black font-sukhumvit tabular-nums">
+                                        {row.scorePercent}%
                                       </span>
-                                    </td>
-                                    <td className="px-4 py-3 text-center">
-                                      {hasScore ? (
-                                        <span className="inline-flex items-center justify-center min-w-10 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-[12px] font-black font-sukhumvit">
-                                          {att?.score}
-                                        </span>
-                                      ) : (
-                                        <span className="text-[12px] text-slate-300 font-bold">-</span>
-                                      )}
-                                    </td>
-                                    <td className="px-4 py-3 text-center">
-                                      <span className="text-[11px] text-slate-400 font-sarabun">{submittedAt}</span>
-                                    </td>
-                                    {canEdit && onResetStudent && att && (
-                                      <td className="px-3 py-3 text-center">
+                                    ) : (
+                                      <span className="text-[12px] text-slate-300 font-bold">-</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-3">
+                                    <div className="flex items-center justify-center gap-1 min-w-0">
+                                      <span className="text-[11px] text-slate-400 font-sarabun truncate tabular-nums">
+                                        {row.submittedAt}
+                                      </span>
+                                      {canEdit && onResetStudent && row.att && (
                                         <button
                                           onClick={() => onResetStudent(
-                                            att.studentId,
+                                            row.att!.studentId,
                                             row.fullName,
                                           )}
-                                          className="w-7 h-7 rounded-lg flex items-center justify-center text-amber-500 hover:bg-amber-50 border border-amber-200 transition-all"
+                                          className="w-7 h-7 shrink-0 rounded-lg flex items-center justify-center text-amber-500 hover:bg-amber-50 border border-amber-200 transition-all"
                                           title={`รีเซ็ตการสอบของ ${row.fullName}`}
                                         >
                                           <RotateCcw size={12} />
                                         </button>
-                                      </td>
-                                    )}
-                                  </tr>
-                                );
-                              })}
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
                             </tbody>
                           </table>
                         </div>
                       </div>
 
-                      {takersTotalItems > takersPageSize && (
-                        <div className="flex items-center justify-between px-1 pt-2">
-                          <p className="text-[11px] text-slate-400 font-sarabun">
-                            หน้า {safeTakersPage}/{takersPageCount} • {takersTotalItems} คน
-                          </p>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => setTakersPage((p) => Math.max(1, p - 1))}
-                              disabled={safeTakersPage <= 1}
-                              className="h-8 px-3 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              ก่อนหน้า
-                            </button>
-                            <button
-                              onClick={() => setTakersPage((p) => Math.min(takersPageCount, p + 1))}
-                              disabled={safeTakersPage >= takersPageCount}
-                              className="h-8 px-3 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              ถัดไป
-                            </button>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   );
                 })()
               )}
               {activeTab === 'questions' && (
-                <QuestionsPanel room={room} onSave={handleSaveQuestions} onContentClick={onContentClick} />
+                <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                  <QuestionsPanel
+                    room={room}
+                    onSave={handleSaveQuestions}
+                    onContentClick={onContentClick}
+                    mobileBankDrawerOpen={questionBankDrawerOpen}
+                    onMobileBankDrawerOpenChange={setQuestionBankDrawerOpen}
+                  />
+                </div>
               )}
               {activeTab === 'score-settings' && (
-                <ScoreSettingsPanel room={room} onSave={handleSaveScoreSettings} />
+                <ScoreSettingsPanel
+                  room={room}
+                  onSave={handleSaveScoreSettings}
+                  onRegisterMobileSave={!isLgUp ? registerMobileSave : undefined}
+                />
               )}
               {activeTab === 'score-config' && (
-                <ScoreConfigPanel room={room} onSave={handleSaveScoreConfig} />
+                <ScoreConfigPanel
+                  room={room}
+                  onSave={handleSaveScoreConfig}
+                  onRegisterMobileSave={!isLgUp ? registerMobileSave : undefined}
+                />
               )}
               {activeTab === 'score-summary' && (
-                summaryStudents.length === 0 ? (
+                isClassRosterLoading ? (
+                  <ScoreSummarySkeleton />
+                ) : summaryStudents.length === 0 ? (
                   <div className="py-16 text-center text-slate-400">
                     <CheckCircle2 size={32} className="mx-auto mb-3 text-slate-300" />
                     <p className="text-[14px] font-sarabun">ยังไม่มีข้อมูลสรุปคะแนน</p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-col items-center justify-center gap-2 text-center md:flex-row md:items-center md:justify-between md:text-left">
                       <p className="text-[12px] font-bold text-slate-500 font-sarabun">
                         {summaryView === 'table'
                           ? 'แสดงคะแนนสอบรายครั้งของนักเรียนทั้งหมด'
                           : 'แดชบอร์ดสรุปสถิติภาพรวมของห้องสอบ'}
                       </p>
-                      <div className="flex items-center gap-4 bg-slate-100/50 px-3 py-1.5 rounded-2xl border border-slate-200/60 shadow-sm">
-                        <label className="flex items-center gap-2.5 cursor-pointer select-none group">
-                          <span className="text-[11px] font-bold text-slate-500 group-hover:text-slate-700 transition-colors font-sarabun">
-                            แสดงเป็นเปอร์เซ็นต์
-                          </span>
-                          <Switch
-                            checked={showSummaryAsPercent}
-                            onCheckedChange={setShowSummaryAsPercent}
-                            title="สลับการแสดงผลคะแนนดิบ/เปอร์เซ็นต์"
-                          />
-                        </label>
-                        <div className="h-4 w-px bg-slate-300" />
+                      <div className="flex items-center gap-4">
                         <p className="text-[11px] font-black text-slate-400 font-sukhumvit uppercase tracking-widest">
-                          {summaryStudents.length} คน • {roundNumbers.length} รอบ
+                          {summaryStudents.length} คน
+                          <span className="hidden md:inline"> • {roundNumbers.length} รอบ</span>
                         </p>
-                        <div className="h-4 w-px bg-slate-300" />
+                        <div className="hidden md:block h-4 w-px bg-slate-300" />
                         <button
                           onClick={() => setSummaryView((prev) => (prev === 'table' ? 'dashboard' : 'table'))}
                           className="h-8 px-3 rounded-xl border border-slate-200 bg-white text-[11px] font-black font-sukhumvit text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-all flex items-center gap-1.5"
@@ -3076,9 +4260,160 @@ function RoomDetailView({
                       </div>
                     </div>
 
+                    <MobileRoundSelect
+                      rounds={roundNumbers}
+                      value={activeMobileRound}
+                      onChange={setMobileSelectedRound}
+                      className="md:hidden px-1.5"
+                    />
+
                     {summaryView === 'table' ? (
                       <>
-                        <div className="rounded-2xl border border-slate-200 bg-white/80 overflow-hidden">
+                        {/* Mobile: card list */}
+                        <div className={cn('md:hidden flex flex-col gap-2.5', PORTAL_CARD_LIST_PADDING)}>
+                          {pagedSummaryRows.map((row, index) => (
+                            <motion.div
+                              key={row.student.id}
+                              className={MOBILE_STUDENT_CARD_OUTER}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: index * 0.02 }}
+                              whileTap={{ scale: 0.99 }}
+                            >
+                              <div className={cn(MOBILE_STUDENT_CARD_SHELL, row.rowHighlightClass)}>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                                  <StudentAvatar
+                                    photoURL={row.student.photoURL}
+                                    studentId={row.student.id}
+                                    name={row.student.fullName}
+                                    gender={row.student.gender}
+                                    className="h-10 w-10 shrink-0 rounded-xl"
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      {row.hasAnyAttempt ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => openScoreDetail(row.student, row.attemptsByRound)}
+                                          className="text-[13px] font-bold text-slate-800 font-sukhumvit truncate text-left hover:text-blue-700 hover:underline underline-offset-2"
+                                          title={row.student.fullName}
+                                        >
+                                          {row.student.fullName}
+                                        </button>
+                                      ) : (
+                                        <p
+                                          className="text-[13px] font-bold text-slate-800 font-sukhumvit truncate"
+                                          title={row.student.fullName}
+                                        >
+                                          {row.student.fullName}
+                                        </p>
+                                      )}
+                                      {row.isTopScorer && (
+                                        <span className="inline-flex shrink-0 items-center px-2 py-0.5 rounded-md text-[10px] font-black font-sukhumvit bg-emerald-100 text-emerald-700">
+                                          สูงสุด
+                                        </span>
+                                      )}
+                                      {!row.isTopScorer && row.isLowestScorer && (
+                                        <span className="inline-flex shrink-0 items-center px-2 py-0.5 rounded-md text-[10px] font-black font-sukhumvit bg-rose-100 text-rose-700">
+                                          ต่ำสุด
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[11px] text-blue-600 font-sarabun tabular-nums mt-0.5">
+                                      รหัส {row.student.studentCode}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="shrink-0 text-center">
+                                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-wide font-sukhumvit mb-0.5">
+                                    สูงสุด (%)
+                                  </p>
+                                  {row.bestScorePercent !== null ? (
+                                    <span
+                                      className={cn(
+                                        'inline-flex items-center justify-center min-w-8 px-2 py-0.5 rounded-lg text-[13px] font-black font-sukhumvit tabular-nums',
+                                        row.bestScoreClass,
+                                      )}
+                                    >
+                                      {row.bestScorePercent}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-[12px] text-slate-300 font-bold">-</span>
+                                  )}
+                                </div>
+                              </div>
+                              {(() => {
+                                const roundData = row.rounds.find((item) => item.round === activeMobileRound);
+                                if (!roundData) return null;
+                                const {
+                                  round,
+                                  roundScore,
+                                  roundScorePercent,
+                                  hasScore,
+                                  isPending,
+                                  isInProgress,
+                                  needsManualReview,
+                                  roundTotal,
+                                } = roundData;
+                                return (
+                              <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1">
+                                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-wide font-sukhumvit">
+                                    ครั้ง {round}
+                                  </p>
+                                  {roundEssayMeta[round]?.hasManualEssay && (
+                                    <button
+                                      type="button"
+                                      onClick={() => openManualGrading(round)}
+                                      className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-700"
+                                      title="ตรวจข้ออัตนัย"
+                                    >
+                                      <HiMiniPencil size={10} />
+                                    </button>
+                                  )}
+                                </div>
+                                {hasScore ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openScoreDetail(row.student, row.attemptsByRound, round)}
+                                    className={cn(
+                                      'inline-flex items-center justify-center gap-1 min-w-8 px-2 py-0.5 rounded-lg text-[12px] font-black font-sukhumvit tabular-nums hover:opacity-90',
+                                      needsManualReview
+                                        ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                        : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+                                    )}
+                                    title={`${roundScore}/${roundTotal || '-'} คะแนน (${roundScorePercent}%)${needsManualReview ? ' — รอตรวจข้ออัตนัย' : ''} — ดูรายละเอียด`}
+                                  >
+                                    {roundScorePercent}%
+                                    {needsManualReview && <HiMiniPencil size={10} className="shrink-0" />}
+                                  </button>
+                                ) : isInProgress ? (
+                                  <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-lg bg-blue-50 text-blue-600 text-[10px] font-bold font-sarabun">
+                                    กำลังสอบ
+                                  </span>
+                                ) : isPending ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openScoreDetail(row.student, row.attemptsByRound, round)}
+                                    className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-lg bg-amber-50 text-amber-600 text-[10px] font-bold font-sarabun hover:bg-amber-100"
+                                    title="ดูรายละเอียดคำตอบ"
+                                  >
+                                    รอตรวจ
+                                  </button>
+                                ) : (
+                                  <span className="text-[12px] text-slate-300 font-bold">-</span>
+                                )}
+                              </div>
+                                );
+                              })()}
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+
+                        {/* Desktop: table */}
+                        <div className="hidden md:block rounded-2xl border border-slate-200 bg-white/80 overflow-hidden">
                           <div className="overflow-x-auto">
                             <table className="min-w-full text-left">
                               <thead>
@@ -3091,123 +4426,110 @@ function RoomDetailView({
                                       key={round}
                                       className="px-4 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit text-center whitespace-nowrap"
                                     >
-                                      ครั้ง {round}
+                                      {renderRoundHeader(round)}
                                     </th>
                                   ))}
                                   <th className="px-4 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit text-center whitespace-nowrap">
-                                    สูงสุด
+                                    สูงสุด (%)
                                   </th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {pagedSummaryStudents.map((student) => {
-                                  const studentRounds = attemptsByStudentRound.get(student.id);
-                                  const bestScore = bestScoreByStudent.get(student.id) ?? null;
-                                  const isTopScorer = highestBestScore !== null && bestScore === highestBestScore;
-                                  const isLowestScorer = lowestBestScore !== null && bestScore === lowestBestScore;
-                                  const rowHighlightClass = isTopScorer
-                                    ? 'bg-emerald-50/70'
-                                    : isLowestScorer
-                                      ? 'bg-rose-50/60'
-                                      : '';
-                                  const bestScoreClass = isTopScorer
-                                    ? 'bg-emerald-100 text-emerald-700'
-                                    : isLowestScorer
-                                      ? 'bg-rose-100 text-rose-700'
-                                      : 'bg-blue-50 text-blue-700';
-
-                                  return (
-                                    <tr key={student.id} className={`border-b border-slate-100 last:border-b-0 hover:bg-slate-50/50 ${rowHighlightClass}`}>
-                                      <td className="px-4 py-3">
-                                        <div className="flex items-center gap-2">
-                                          <p className="text-[13px] font-bold text-slate-800 font-sukhumvit">{student.fullName}</p>
-                                          {isTopScorer && (
-                                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black font-sukhumvit bg-emerald-100 text-emerald-700">
-                                              สูงสุด
-                                            </span>
-                                          )}
-                                          {!isTopScorer && isLowestScorer && (
-                                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black font-sukhumvit bg-rose-100 text-rose-700">
-                                              ต่ำสุด
-                                            </span>
-                                          )}
-                                        </div>
-                                        <p className="text-[11px] text-slate-400 font-sarabun">รหัส {student.studentCode}</p>
-                                      </td>
-
-                                      {roundNumbers.map((round) => {
-                                        const att = studentRounds?.get(round);
-                                        const hasScore = typeof att?.score === 'number';
-                                        const isPending = !!att && !hasScore;
-                                        const roundTotal = getRoundTotalPoints(round);
-                                        const percentText = hasScore && roundTotal > 0
-                                          ? `${(((att.score as number) / roundTotal) * 100).toFixed(1)}%`
-                                          : null;
-
-                                        return (
-                                          <td key={`${student.id}-${round}`} className="px-4 py-3 text-center">
-                                            {hasScore ? (
-                                              <span
-                                                className="inline-flex items-center justify-center min-w-10 px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-[12px] font-black font-sukhumvit"
-                                                title={`${att.score}/${roundTotal || '-'} คะแนน`}
-                                              >
-                                                {showSummaryAsPercent ? (percentText ?? '-') : att.score}
-                                              </span>
-                                            ) : isPending ? (
-                                              <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg bg-amber-50 text-amber-600 text-[11px] font-bold font-sarabun">
-                                                รอตรวจ
-                                              </span>
-                                            ) : (
-                                              <span className="text-[12px] text-slate-300 font-bold">-</span>
-                                            )}
-                                          </td>
-                                        );
-                                      })}
-
-                                      <td className="px-4 py-3 text-center">
-                                        {bestScore !== null ? (
-                                        <span className={`inline-flex items-center justify-center min-w-10 px-2 py-1 rounded-lg text-[12px] font-black font-sukhumvit ${bestScoreClass}`}>
-                                            {showSummaryAsPercent
-                                              ? (() => {
-                                                  const bestPercent = bestPercentByStudent.get(student.id);
-                                                  return typeof bestPercent === 'number' ? `${bestPercent.toFixed(1)}%` : '-';
-                                                })()
-                                              : bestScore}
+                                {pagedSummaryRows.map((row) => (
+                                  <tr
+                                    key={row.student.id}
+                                    className={cn(
+                                      'border-b border-slate-100 last:border-b-0 hover:bg-slate-50/50',
+                                      row.rowHighlightClass,
+                                    )}
+                                  >
+                                    <td className="px-4 py-3">
+                                      <div className="flex items-center gap-2">
+                                        {row.hasAnyAttempt ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => openScoreDetail(row.student, row.attemptsByRound)}
+                                            className="text-[13px] font-bold text-slate-800 font-sukhumvit text-left hover:text-blue-700 hover:underline underline-offset-2"
+                                          >
+                                            {row.student.fullName}
+                                          </button>
+                                        ) : (
+                                          <p className="text-[13px] font-bold text-slate-800 font-sukhumvit">
+                                            {row.student.fullName}
+                                          </p>
+                                        )}
+                                        {row.isTopScorer && (
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black font-sukhumvit bg-emerald-100 text-emerald-700">
+                                            สูงสุด
                                           </span>
+                                        )}
+                                        {!row.isTopScorer && row.isLowestScorer && (
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black font-sukhumvit bg-rose-100 text-rose-700">
+                                            ต่ำสุด
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[11px] text-blue-600 font-sarabun">
+                                        รหัส {row.student.studentCode}
+                                      </p>
+                                    </td>
+
+                                    {row.rounds.map(({ round, roundScore, roundScorePercent, hasScore, isPending, isInProgress, needsManualReview, roundTotal }) => (
+                                      <td key={`${row.student.id}-${round}`} className="px-4 py-3 text-center">
+                                        {hasScore ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => openScoreDetail(row.student, row.attemptsByRound, round)}
+                                            className={cn(
+                                              'inline-flex items-center justify-center gap-1 min-w-10 px-2 py-1 rounded-lg text-[12px] font-black font-sukhumvit hover:opacity-90',
+                                              needsManualReview
+                                                ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                                : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+                                            )}
+                                            title={`${roundScore}/${roundTotal || '-'} คะแนน (${roundScorePercent}%)${needsManualReview ? ' — รอตรวจข้ออัตนัย' : ''} — ดูรายละเอียด`}
+                                          >
+                                            {roundScorePercent}%
+                                            {needsManualReview && <HiMiniPencil size={11} className="shrink-0" />}
+                                          </button>
+                                        ) : isInProgress ? (
+                                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg bg-blue-50 text-blue-600 text-[11px] font-bold font-sarabun">
+                                            กำลังสอบ
+                                          </span>
+                                        ) : isPending ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => openScoreDetail(row.student, row.attemptsByRound, round)}
+                                            className="inline-flex items-center justify-center px-2 py-1 rounded-lg bg-amber-50 text-amber-600 text-[11px] font-bold font-sarabun hover:bg-amber-100"
+                                            title="ดูรายละเอียดคำตอบ"
+                                          >
+                                            รอตรวจ
+                                          </button>
                                         ) : (
                                           <span className="text-[12px] text-slate-300 font-bold">-</span>
                                         )}
                                       </td>
-                                    </tr>
-                                  );
-                                })}
+                                    ))}
+
+                                    <td className="px-4 py-3 text-center">
+                                      {row.bestScorePercent !== null ? (
+                                        <span
+                                          className={cn(
+                                            'inline-flex items-center justify-center min-w-10 px-2 py-1 rounded-lg text-[12px] font-black font-sukhumvit',
+                                            row.bestScoreClass,
+                                          )}
+                                        >
+                                          {row.bestScorePercent}%
+                                        </span>
+                                      ) : (
+                                        <span className="text-[12px] text-slate-300 font-bold">-</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
                               </tbody>
                             </table>
                           </div>
                         </div>
-                        {summaryStudents.length > summaryPageSize && (
-                          <div className="flex items-center justify-between px-1 pt-2">
-                            <p className="text-[11px] text-slate-400 font-sarabun">
-                              หน้า {safeSummaryPage}/{summaryPageCount} • {summaryStudents.length} คน
-                            </p>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => setSummaryPage((p) => Math.max(1, p - 1))}
-                                disabled={safeSummaryPage <= 1}
-                                className="h-8 px-3 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                              >
-                                ก่อนหน้า
-                              </button>
-                              <button
-                                onClick={() => setSummaryPage((p) => Math.min(summaryPageCount, p + 1))}
-                                disabled={safeSummaryPage >= summaryPageCount}
-                                className="h-8 px-3 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                              >
-                                ถัดไป
-                              </button>
-                            </div>
-                          </div>
-                        )}
                       </>
                     ) : (
                       <div className="space-y-4">
@@ -3317,8 +4639,26 @@ function RoomDetailView({
               )}
             </motion.div>
           </AnimatePresence>
+          </div>
         </div>
       </div>
+      <StudentExamScoreDetailDrawer
+        open={scoreDetail !== null}
+        onClose={() => setScoreDetail(null)}
+        room={room}
+        student={scoreDetail?.student ?? null}
+        attemptsByRound={scoreDetailAttemptsByRound}
+        roundNumbers={roundNumbers}
+        initialRound={scoreDetail?.initialRound}
+      />
+      <ExamManualGradingDrawer
+        open={manualGradingRound !== null}
+        onClose={() => setManualGradingRound(null)}
+        room={room}
+        round={manualGradingRound ?? 1}
+        students={summaryStudents}
+        attempts={attempts}
+      />
     </motion.div>
   );
 }
@@ -3326,20 +4666,98 @@ function RoomDetailView({
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function ExamManager() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const examShell = useExamShell();
   const { role, user } = useAuth();
   const isStudent = role === 'student';
   const { canEdit: canEditExam, canDelete: canDeleteExam } = useMyPermissions();
   const canEdit = canEditExam('exams');
   const canDelete = canDeleteExam('exams');
-  const { rooms, isLoading, createRoom, updateRoom, updateRoomStatus, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts } = useExamRoom();
+  const { rooms, isLoading, createRoom, updateRoom, updateRoomStatus, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores } = useExamRoom();
+
+  const handleRecalculateScores = useCallback(async (roomId: string, round: number) => {
+    await calculateRoomScores(roomId, round, { includeGraded: true });
+  }, [calculateRoomScores]);
+  const [teacherPhotoById, setTeacherPhotoById] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const missingIds = [...new Set(
+      rooms
+        .filter((room) => room.teacherId && !room.teacherPhotoURL && !teacherPhotoById[room.teacherId])
+        .map((room) => room.teacherId),
+    )];
+    if (missingIds.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, string> = {};
+      await Promise.all(missingIds.map(async (teacherId) => {
+        try {
+          const snap = await getDoc(doc(db, 'users', teacherId));
+          if (!snap.exists()) return;
+          const photoURL = snap.data().photoURL;
+          if (typeof photoURL === 'string' && photoURL.trim()) {
+            next[teacherId] = photoURL.trim();
+          }
+        } catch {
+          /* ignore lookup errors */
+        }
+      }));
+      if (cancelled || Object.keys(next).length === 0) return;
+      setTeacherPhotoById((prev) => ({ ...prev, ...next }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rooms, teacherPhotoById]);
   const [showCreate, setShowCreate] = useState(false);
+  const [createPrefill, setCreatePrefill] = useState<CreateRoomPrefill | null>(null);
   const [editingRoom, setEditingRoom] = useState<ExamRoom | null>(null);
   const [proctoringRoom, setProctoringRoom] = useState<ExamRoom | null>(null);
   const [filterStatus, setFilterStatus] = useState<'all' | ExamRoom['status']>('all');
-  const [roomSearchText] = useState('');
+  const [filterDepartment, setFilterDepartment] = useState<Department | 'all'>('all');
+  const [filterGradeLevel, setFilterGradeLevel] = useState<string>('all');
+  const [filterRoomNumber, setFilterRoomNumber] = useState<string>('all');
+  const [filterSubjectGroup, setFilterSubjectGroup] = useState<SubjectGroupId | 'all'>('all');
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
+  const [mobileStatusMenuOpen, setMobileStatusMenuOpen] = useState(false);
+  const [roomSearchText, setRoomSearchText] = useState('');
   const [detailRoom, setDetailRoom] = useState<ExamRoom | null>(null);
+  const [detailRoomTab, setDetailRoomTab] = useState<SettingsTab | undefined>(undefined);
+
+  useEffect(() => {
+    const state = location.state as {
+      openCreateExam?: boolean;
+      prefill?: {
+        title?: string;
+        subjectId?: string;
+        classId?: string;
+        gradeLevel?: string;
+      };
+    } | null;
+    if (!state?.openCreateExam) return;
+    setShowCreate(true);
+    setCreatePrefill(state.prefill ?? null);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, navigate]);
+
+  useEffect(() => {
+    if (!detailRoom) {
+      setDetailRoomTab(undefined);
+    }
+  }, [detailRoom]);
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const swipeStartX = useRef<number | null>(null);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [rooms, filterStatus, filterDepartment, filterGradeLevel, filterRoomNumber, filterSubjectGroup, roomSearchText]);
+
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [roomToDelete, setRoomToDelete] = useState<ExamRoom | null>(null);
+  const [closeRoomConfirm, setCloseRoomConfirm] = useState<ExamRoom | null>(null);
   const [summaryData, setSummaryData] = useState<{ room: ExamRoom, attempt: ExamAttempt } | null>(null);
   // Reset exam state
   const [resetConfirm, setResetConfirm] = useState<{
@@ -3353,6 +4771,17 @@ export default function ExamManager() {
     return rooms.find((r) => r.id === detailRoom.id) ?? detailRoom;
   }, [rooms, detailRoom]);
 
+  useEffect(() => {
+    setMobileStatusMenuOpen(false);
+  }, [liveDetailRoom]);
+
+  useEffect(() => {
+    if (!mobileStatusMenuOpen) return;
+    const close = () => setMobileStatusMenuOpen(false);
+    window.addEventListener('scroll', close, true);
+    return () => window.removeEventListener('scroll', close, true);
+  }, [mobileStatusMenuOpen]);
+
   const handleContentClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.tagName === 'IMG' && (target as HTMLImageElement).src) {
@@ -3361,68 +4790,360 @@ export default function ExamManager() {
   };
 
 
-  const headerRightPortalEl =
-    typeof document !== 'undefined'
-      ? document.getElementById('header-portal-right-actions')
-      : null;
-  const headerCenterPortalEl =
-    typeof document !== 'undefined'
-      ? document.getElementById('header-portal-center')
-      : null;
+  const [headerRightPortalEl, setHeaderRightPortalEl] = useState<HTMLElement | null>(null);
+  const [headerCenterPortalEl, setHeaderCenterPortalEl] = useState<HTMLElement | null>(null);
+  const [headerMobileActionsPortalEl, setHeaderMobileActionsPortalEl] = useState<HTMLElement | null>(null);
+  const [headerMobileBackPortalEl, setHeaderMobileBackPortalEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setHeaderRightPortalEl(document.getElementById('header-portal-right-actions'));
+    setHeaderCenterPortalEl(document.getElementById('header-portal-center'));
+    setHeaderMobileActionsPortalEl(document.getElementById('header-portal-mobile-actions'));
+    setHeaderMobileBackPortalEl(document.getElementById('header-portal-mobile-back'));
+  }, []);
+
+  useEffect(() => {
+    const defaultBack = document.getElementById('portal-default-mobile-back');
+    if (!defaultBack) return;
+    defaultBack.style.display = liveDetailRoom ? 'none' : '';
+  }, [liveDetailRoom]);
+
+  useEffect(() => {
+    examShell?.setHideNav(Boolean(liveDetailRoom));
+    return () => examShell?.setHideNav(false);
+  }, [examShell, liveDetailRoom]);
+
+  const examFilterOptions = useMemo(() => {
+    const departments = new Set<Department>();
+    const gradesByDept = new Map<string, Set<string>>();
+    const roomsByDeptGrade = new Map<string, Set<string>>();
+
+    rooms.forEach((room) => {
+      const dept = (room.departmentId || 'secondary') as Department;
+      if (dept in DEPARTMENT_CONFIG) departments.add(dept);
+
+      const grade = getExamRoomGradeLevel(room);
+      if (!grade) return;
+
+      if (!gradesByDept.has(dept)) gradesByDept.set(dept, new Set());
+      gradesByDept.get(dept)!.add(grade);
+
+      const roomNumber = getExamRoomNumber(room);
+      if (roomNumber) {
+        const key = `${dept}|${grade}`;
+        if (!roomsByDeptGrade.has(key)) roomsByDeptGrade.set(key, new Set());
+        roomsByDeptGrade.get(key)!.add(roomNumber);
+      }
+    });
+
+    return { departments: Array.from(departments), gradesByDept, roomsByDeptGrade };
+  }, [rooms]);
+
+  const availableGradeLevels = useMemo(() => {
+    if (filterDepartment === 'all') {
+      const allGrades = new Set<string>();
+      examFilterOptions.gradesByDept.forEach((grades) => grades.forEach((grade) => allGrades.add(grade)));
+      return sortGradeLevels(Array.from(allGrades), 'all');
+    }
+    return sortGradeLevels(
+      Array.from(examFilterOptions.gradesByDept.get(filterDepartment) ?? []),
+      filterDepartment,
+    );
+  }, [filterDepartment, examFilterOptions]);
+
+  const availableRoomNumbers = useMemo(() => {
+    if (filterDepartment === 'all' || filterGradeLevel === 'all') return [] as string[];
+    const key = `${filterDepartment}|${filterGradeLevel}`;
+    return Array.from(examFilterOptions.roomsByDeptGrade.get(key) ?? []).sort((a, b) =>
+      a.localeCompare(b, 'th', { numeric: true }),
+    );
+  }, [filterDepartment, filterGradeLevel, examFilterOptions]);
+
+  const hasStructureFilter =
+    filterDepartment !== 'all'
+    || filterGradeLevel !== 'all'
+    || filterRoomNumber !== 'all'
+    || filterSubjectGroup !== 'all'
+    || roomSearchText.trim().length > 0;
 
   const filtered = useMemo(() => {
-    return rooms.filter(r => {
-      const matchStatus = filterStatus === 'all' || r.status === filterStatus;
-      const matchSearch = r.title.toLowerCase().includes(roomSearchText.toLowerCase()) || 
-                          (r.className?.toLowerCase() || '').includes(roomSearchText.toLowerCase());
-      return matchStatus && matchSearch;
-    });
-  }, [rooms, filterStatus, roomSearchText]);
+    return rooms
+      .filter((room) => {
+      const matchStatus = filterStatus === 'all' || room.status === filterStatus;
+      const matchSearch = room.title.toLowerCase().includes(roomSearchText.toLowerCase()) ||
+        (room.className?.toLowerCase() || '').includes(roomSearchText.toLowerCase());
 
-  const statsMap = {
-    all: rooms.length,
-    upcoming: rooms.filter(r => r.status === 'upcoming').length,
-    active: rooms.filter(r => r.status === 'active').length,
-    closed: rooms.filter(r => r.status === 'closed').length,
+      const dept = (room.departmentId || 'secondary') as Department;
+      const matchDepartment = filterDepartment === 'all' || dept === filterDepartment;
+
+      const grade = getExamRoomGradeLevel(room);
+      const matchGrade = filterGradeLevel === 'all' || grade === filterGradeLevel;
+
+      const roomNumber = getExamRoomNumber(room);
+      const matchRoom = filterRoomNumber === 'all' || roomNumber === filterRoomNumber;
+
+      const matchSubjectGroup = filterSubjectGroup === 'all' || room.subjectGroupId === filterSubjectGroup;
+
+      return matchStatus && matchSearch && matchDepartment && matchGrade && matchRoom && matchSubjectGroup;
+    })
+      .sort((a, b) => {
+        const timeA = a.createdAt ?? 0;
+        const timeB = b.createdAt ?? 0;
+        if (timeA !== timeB) return timeB - timeA;
+        return a.title.localeCompare(b.title, 'th', { numeric: true });
+      });
+  }, [rooms, filterStatus, filterDepartment, filterGradeLevel, filterRoomNumber, filterSubjectGroup, roomSearchText]);
+
+  const CARDS_PER_PAGE = 12;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / CARDS_PER_PAGE));
+  const paginatedRooms = useMemo(() => {
+    const start = (currentPage - 1) * CARDS_PER_PAGE;
+    return filtered.slice(start, start + CARDS_PER_PAGE);
+  }, [filtered, currentPage]);
+
+  const rangeStart = filtered.length === 0 ? 0 : (currentPage - 1) * CARDS_PER_PAGE + 1;
+  const rangeEnd = Math.min(currentPage * CARDS_PER_PAGE, filtered.length);
+
+  const statusFilterOptions: ReadonlyArray<{
+    key: typeof filterStatus;
+    label: string;
+  }> = [
+    { key: 'all', label: 'ทั้งหมด' },
+    { key: 'upcoming', label: 'รอเปิด' },
+    { key: 'active', label: 'กำลังสอบ' },
+    { key: 'closed', label: 'ปิดแล้ว' },
+  ];
+
+  const handleStatusFilterChange = (key: typeof filterStatus) => {
+    setFilterStatus(key);
+    setDetailRoom(null);
+    setMobileStatusMenuOpen(false);
   };
-  const statusFilterOptions = [
-    { key: 'all', label: 'ทั้งหมด', color: '#6366f1', activeBg: 'rgba(99,102,241,0.12)', activeBorder: 'rgba(99,102,241,0.3)' },
-    { key: 'upcoming', label: 'รอเปิด', color: '#f59e0b', activeBg: 'rgba(245,158,11,0.12)', activeBorder: 'rgba(245,158,11,0.3)' },
-    { key: 'active', label: 'กำลังสอบ', color: '#059669', activeBg: 'rgba(5,150,105,0.12)', activeBorder: 'rgba(5,150,105,0.3)' },
-    { key: 'closed', label: 'ปิดแล้ว', color: '#94a3b8', activeBg: 'rgba(148,163,184,0.15)', activeBorder: 'rgba(148,163,184,0.35)' },
-  ] as const;
 
-  const statusFilterPills = (
-    <div className="flex gap-1.5 items-center px-1 overflow-x-auto scrollbar-hide flex-nowrap">
-      {statusFilterOptions.map((s) => {
-        const isActive = filterStatus === s.key;
-        return (
-          <button
-            key={s.key}
-            onClick={() => { setFilterStatus(s.key as typeof filterStatus); setDetailRoom(null); }}
-            className="px-4 sm:px-6 h-9 sm:h-10 rounded-full text-[12px] sm:text-[13px] font-black transition-all font-sukhumvit border flex items-center gap-2 flex-shrink-0"
-            style={{
-              background: isActive ? s.activeBg : 'white',
-              color: isActive ? s.color : '#64748b',
-              borderColor: isActive ? s.activeBorder : 'rgba(226,232,240,0.8)',
-            }}
-          >
-            <div className="w-1.5 h-1.5 rounded-full" style={{ background: s.color }} />
-            {s.label}
-            <span className="ml-1 opacity-40 text-[10px]">
-              {statsMap[s.key as keyof typeof statsMap]}
-            </span>
-          </button>
-        );
-      })}
+  const desktopStatusFilterSelect = (
+    <div className="relative hidden items-center lg:flex">
+      <span
+        className="pointer-events-none absolute left-3 h-1.5 w-1.5 rounded-full"
+        style={{ backgroundColor: EXAM_STATUS_FILTER_COLORS[filterStatus] }}
+        aria-hidden
+      />
+      <select
+        value={filterStatus}
+        onChange={(e) => handleStatusFilterChange(e.target.value as typeof filterStatus)}
+        className={EXAM_STATUS_FILTER_SELECT_CLASS}
+        aria-label="กรองตามสถานะห้องสอบ"
+      >
+        {statusFilterOptions.map((option) => (
+          <option key={option.key} value={option.key}>
+            {option.label}
+          </option>
+        ))}
+      </select>
     </div>
   );
 
-  const handleChangeStatus = async (roomId: string, status: ExamRoom['status']) => {
+  const mobileStatusFilterButton = (
+    <div className="relative shrink-0 lg:hidden">
+      <button
+        type="button"
+        onClick={() => setMobileStatusMenuOpen((open) => !open)}
+        className={cn(
+          'flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm transition-colors hover:bg-slate-50',
+          filterStatus !== 'all' && 'border-slate-300',
+        )}
+        title="กรองตามสถานะห้องสอบ"
+        aria-label="กรองตามสถานะห้องสอบ"
+        aria-expanded={mobileStatusMenuOpen}
+      >
+        <span
+          className="h-2 w-2 rounded-full"
+          style={{ backgroundColor: EXAM_STATUS_FILTER_COLORS[filterStatus] }}
+        />
+      </button>
+
+      {mobileStatusMenuOpen && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-[90]"
+            aria-label="ปิดเมนูสถานะห้องสอบ"
+            onClick={() => setMobileStatusMenuOpen(false)}
+          />
+          <div className="absolute right-0 top-full z-[100] mt-2 w-44 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+            {statusFilterOptions.map((option) => {
+              const isActive = filterStatus === option.key;
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => handleStatusFilterChange(option.key)}
+                  className={cn(
+                    'flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left font-sukhumvit text-[13px] font-bold transition-colors',
+                    isActive ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50',
+                  )}
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: EXAM_STATUS_FILTER_COLORS[option.key] }}
+                    aria-hidden
+                  />
+                  <span className="flex-1">{option.label}</span>
+                  {isActive && <HiCheck className="h-4 w-4 shrink-0" aria-hidden />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  const handleDepartmentFilterChange = (dept: Department | 'all') => {
+    setFilterDepartment(dept);
+    setFilterGradeLevel('all');
+    setFilterRoomNumber('all');
+    setDetailRoom(null);
+  };
+
+  const handleGradeFilterChange = (grade: string) => {
+    setFilterGradeLevel(grade);
+    setFilterRoomNumber('all');
+    setDetailRoom(null);
+  };
+
+  const handleRoomFilterChange = (roomNumber: string) => {
+    setFilterRoomNumber(roomNumber);
+    setDetailRoom(null);
+  };
+
+  const subjectGroups = useMemo(() => {
+    return Object.entries(SUBJECT_GROUP_CONFIG).sort(([, a], [, b]) => a.order - b.order);
+  }, []);
+
+  const resetStructureFilters = () => {
+    setFilterDepartment('all');
+    setFilterGradeLevel('all');
+    setFilterRoomNumber('all');
+    setFilterSubjectGroup('all');
+    setRoomSearchText('');
+    setDetailRoom(null);
+  };
+
+  const structureFilterFields = (
+    <div className="flex w-full flex-col gap-2">
+      <div className="flex w-full flex-col gap-2 lg:flex-row lg:flex-nowrap lg:items-center lg:gap-1.5">
+        <select
+          value={filterDepartment}
+          onChange={(e) => handleDepartmentFilterChange(e.target.value as Department | 'all')}
+          className={cn(
+            EXAM_FILTER_SELECT_CLASS,
+            'lg:flex-1',
+            filterDepartment === 'all' && 'text-slate-400',
+          )}
+        >
+          <option value="all">แผนก</option>
+          {examFilterOptions.departments.map((dept) => (
+            <option key={dept} value={dept}>{DEPARTMENT_CONFIG[dept].label}</option>
+          ))}
+        </select>
+
+        <select
+          value={filterGradeLevel}
+          onChange={(e) => handleGradeFilterChange(e.target.value)}
+          disabled={availableGradeLevels.length === 0}
+          className={cn(
+            EXAM_FILTER_SELECT_CLASS,
+            'lg:flex-1',
+            filterGradeLevel === 'all' && 'text-slate-400',
+          )}
+        >
+          <option value="all">ระดับชั้น</option>
+          {availableGradeLevels.map((grade) => (
+            <option key={grade} value={grade}>{grade}</option>
+          ))}
+        </select>
+
+        <select
+          value={filterRoomNumber}
+          onChange={(e) => handleRoomFilterChange(e.target.value)}
+          disabled={filterGradeLevel === 'all' || availableRoomNumbers.length === 0}
+          className={cn(
+            EXAM_FILTER_SELECT_CLASS,
+            'lg:flex-1',
+            filterRoomNumber === 'all' && 'text-slate-400',
+          )}
+        >
+          <option value="all">ห้อง</option>
+          {availableRoomNumbers.map((roomNumber) => (
+            <option key={roomNumber} value={roomNumber}>{roomNumber}</option>
+          ))}
+        </select>
+
+        <select
+          value={filterSubjectGroup}
+          onChange={(e) => {
+            setFilterSubjectGroup(e.target.value as SubjectGroupId | 'all');
+            setDetailRoom(null);
+          }}
+          className={cn(
+            EXAM_FILTER_SELECT_CLASS,
+            'lg:flex-1',
+            filterSubjectGroup === 'all' && 'text-slate-400',
+          )}
+        >
+          <option value="all">กลุ่มสาระ</option>
+          {subjectGroups.map(([id, group]) => (
+            <option key={id} value={id}>{group.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {hasStructureFilter && (
+        <button
+          type="button"
+          onClick={() => {
+            resetStructureFilters();
+            setMobileFilterOpen(false);
+          }}
+          className="inline-flex h-9 items-center self-start rounded-xl border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-50 font-sukhumvit"
+        >
+          ล้างตัวกรอง
+        </button>
+      )}
+    </div>
+  );
+
+  const examStructureFilters = (
+    <div className="mb-3 hidden flex-col gap-2 lg:flex">
+      {structureFilterFields}
+    </div>
+  );
+
+  const handleChangeStatus = async (roomId: string, status: ExamRoom['status'], bypassConfirm = false) => {
+    if (status === 'closed' && !bypassConfirm) {
+      const room = rooms.find((r) => r.id === roomId);
+      if (room) {
+        setCloseRoomConfirm(room);
+        return;
+      }
+    }
     try {
       await updateRoomStatus(roomId, status);
     } catch (err) {
+      if (err instanceof Error && err.message === 'EXAM_ROOM_QUESTIONS_NOT_SAVED') {
+        toast.error('กรุณาเปิดแท็บ「ข้อสอบ」เลือกชุดข้อสอบ แล้วกด「บันทึก」ก่อนเปิดห้องสอบ');
+        return;
+      }
       console.error('Failed to update room status:', err);
+    }
+  };
+
+  const handleConfirmCloseRoom = async () => {
+    if (!closeRoomConfirm) return;
+    try {
+      await updateRoomStatus(closeRoomConfirm.id, 'closed');
+      setCloseRoomConfirm(null);
+    } catch (err) {
+      console.error('Failed to close room:', err);
     }
   };
 
@@ -3466,44 +5187,100 @@ export default function ExamManager() {
   };
 
   return (
-    <div className="relative w-full bg-transparent overflow-hidden h-full">
-      {headerRightPortalEl && !liveDetailRoom && canEdit && !isStudent &&
+    <div className={cn('relative w-full flex flex-col', liveDetailRoom && 'min-h-0 flex-1')}>
+      {headerRightPortalEl && !liveDetailRoom &&
         createPortal(
-          <button
-            onClick={() => setShowCreate(true)}
-            className="flex items-center justify-center w-9 h-9 rounded-full text-white transition-all border border-slate-800"
-            style={{ background: '#0f172a' }}
-            title="สร้างห้องสอบ"
-          >
-            <Plus size={18} />
-          </button>,
-          headerRightPortalEl
+          <div className="hidden lg:flex items-center gap-1.5">
+            {desktopStatusFilterSelect}
+            {canEdit && !isStudent && (
+              <button
+                onClick={() => setShowCreate(true)}
+                className="flex items-center justify-center w-9 h-9 rounded-full text-white transition-all border border-blue-700 bg-blue-600 hover:bg-blue-700"
+                title="สร้างห้องสอบ"
+              >
+                <Plus size={18} />
+              </button>
+            )}
+          </div>,
+          headerRightPortalEl,
         )}
-      {headerCenterPortalEl && !liveDetailRoom && createPortal(
-        <div className="hidden lg:flex items-center justify-center py-1">
-          {statusFilterPills}
+      {headerMobileActionsPortalEl && !liveDetailRoom && createPortal(
+        <div className="pointer-events-auto flex items-center gap-1.5">
+          <ExamMobileFilterTriggerButton
+            onClick={() => setMobileFilterOpen(true)}
+            title="ตัวกรองห้องสอบ"
+            hasActiveFilters={hasStructureFilter}
+          />
+          {mobileStatusFilterButton}
+          {canEdit && !isStudent && (
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-black shadow-sm transition-colors hover:bg-slate-50"
+              title="สร้างห้องสอบ"
+              aria-label="สร้างห้องสอบ"
+            >
+              <Plus className="h-5 w-5" />
+            </motion.button>
+          )}
         </div>,
-        headerCenterPortalEl
+        headerMobileActionsPortalEl,
       )}
-      <div className="max-w-[1400px] mx-auto flex flex-col h-full gap-4 pb-10 pt-4 px-6">
-
-        {!liveDetailRoom && (
-          <div className="lg:hidden flex items-center justify-center w-full overflow-hidden">
-            {statusFilterPills}
-          </div>
-        )}
+      {!liveDetailRoom && (
+        <ExamRoomsMobileFilterDrawer
+          open={mobileFilterOpen}
+          onOpenChange={setMobileFilterOpen}
+          filterDepartment={filterDepartment}
+          filterGradeLevel={filterGradeLevel}
+          filterRoomNumber={filterRoomNumber}
+          filterSubjectGroup={filterSubjectGroup}
+          searchText={roomSearchText}
+          availableGradeLevels={availableGradeLevels}
+          availableRoomNumbers={availableRoomNumbers}
+          hasActiveFilters={hasStructureFilter}
+          canCreate={canEdit && !isStudent}
+          onDepartmentChange={handleDepartmentFilterChange}
+          onGradeChange={handleGradeFilterChange}
+          onRoomChange={handleRoomFilterChange}
+          onSubjectGroupChange={(group) => {
+            setFilterSubjectGroup(group);
+            setDetailRoom(null);
+          }}
+          onSearchChange={setRoomSearchText}
+          onClearFilters={resetStructureFilters}
+          onCreateRoom={() => setShowCreate(true)}
+        />
+      )}
+      {headerMobileBackPortalEl && liveDetailRoom && createPortal(
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          type="button"
+          onClick={() => setDetailRoom(null)}
+          className="lg:hidden flex h-9 w-9 rounded-full items-center justify-center text-slate-700 transition-colors border border-slate-200 bg-white shadow-sm hover:bg-slate-50"
+          title="กลับรายการห้องสอบ"
+          aria-label="กลับรายการห้องสอบ"
+        >
+          <HiArrowLeft className="w-5 h-5" />
+        </motion.button>,
+        headerMobileBackPortalEl,
+      )}
+      <div className={cn('w-full flex flex-col gap-4', liveDetailRoom ? 'flex-1 min-h-0' : 'pb-24 lg:pb-0')}>
 
         {/* ── Main area: grid OR detail ── */}
-        <div className="flex-1 min-h-0">
+        <div className={liveDetailRoom ? 'flex-1 min-h-0 flex flex-col overflow-hidden' : undefined}>
           <AnimatePresence mode="wait">
             {liveDetailRoom ? (
               <RoomDetailView
                 key={liveDetailRoom.id}
                 room={liveDetailRoom}
+                initialTab={detailRoomTab}
                 attempts={getAttemptsForRoom(liveDetailRoom.id)}
                 onBack={() => setDetailRoom(null)}
                 onUpdateRoom={updateRoom}
-                onChangeStatus={status => handleChangeStatus(liveDetailRoom.id, status)}
+                onChangeStatus={(status, bypass) => handleChangeStatus(liveDetailRoom.id, status, bypass)}
                 onEdit={() => { setEditingRoom(liveDetailRoom); setShowCreate(true); }}
                 onDelete={() => handleDelete(liveDetailRoom)}
                 onProctor={() => setProctoringRoom(liveDetailRoom)}
@@ -3513,6 +5290,7 @@ export default function ExamManager() {
                 onContentClick={handleContentClick}
                 onResetStudent={canEdit ? handleResetStudent : undefined}
                 onResetAll={canEdit ? handleResetAll : undefined}
+                onRecalculateScores={canEdit ? handleRecalculateScores : undefined}
               />
             ) : (
               <motion.div
@@ -3520,8 +5298,9 @@ export default function ExamManager() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="h-full overflow-y-auto scrollbar-hide"
+                className="w-full"
               >
+                {examStructureFilters}
                 {isLoading ? (
                   <div className="flex-1 flex flex-col items-center justify-center py-40 gap-6">
                     <IndeterminateProgress />
@@ -3532,8 +5311,14 @@ export default function ExamManager() {
                     <div className="w-16 h-16 rounded-full bg-white/50 flex items-center justify-center">
                       <ClipboardList size={28} className="text-slate-300" />
                     </div>
-                    <p className="text-slate-400 font-sarabun text-[14px]">ยังไม่มีห้องสอบ</p>
-                    {canEdit && !isStudent && (
+                    <p className="text-slate-400 font-sarabun text-[14px]">
+                      {rooms.length === 0
+                        ? 'ยังไม่มีห้องสอบ'
+                        : hasStructureFilter || filterStatus !== 'all'
+                          ? 'ไม่พบห้องสอบที่ตรงกับตัวกรอง'
+                          : 'ยังไม่มีห้องสอบ'}
+                    </p>
+                    {rooms.length === 0 && canEdit && !isStudent && (
                       <motion.button whileTap={{ scale: 0.98 }}
                         onClick={() => setShowCreate(true)}
                         className="px-5 py-2 rounded-xl text-[12px] font-bold text-white"
@@ -3543,26 +5328,120 @@ export default function ExamManager() {
                     )}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-4">
-                    {filtered.map((room, i) => (
-                      <motion.div key={room.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.04 }}>
-                        <RoomCard
-                          room={room}
-                          isStudent={isStudent}
-                          myAttempt={isStudent && user?.uid ? getAttemptsForRoom(room.id).filter(a => String(a.studentId).trim() === user.uid).sort((a, b) => (b.round ?? 0) - (a.round ?? 0))[0] ?? null : null}
-                          onTakeExam={() => navigate(`/exam/${room.id}`)}
-                          onShowSummary={(r, a) => setSummaryData({ room: r, attempt: a })}
-                          onProctor={() => setProctoringRoom(room)}
-                          onChangeStatus={status => handleChangeStatus(room.id, status)}
-                          onDelete={() => handleDelete(room)}
-                          onEdit={() => { setEditingRoom(room); setShowCreate(true); }}
-                          onOpenSettings={() => setDetailRoom(room)}
-                          canEdit={canEdit}
-                          canDelete={canDelete}
-                        />
-                      </motion.div>
-                    ))}
+                  <div
+                    className="flex flex-col gap-5 touch-pan-y"
+                    onTouchStart={(e) => {
+                      swipeStartX.current = e.changedTouches[0]?.clientX ?? null;
+                    }}
+                    onTouchEnd={(e) => {
+                      if (swipeStartX.current == null) return;
+                      const deltaX = e.changedTouches[0].clientX - swipeStartX.current;
+                      swipeStartX.current = null;
+                      if (deltaX < -50 && currentPage < totalPages) {
+                        setCurrentPage((prev) => prev + 1);
+                      } else if (deltaX > 50 && currentPage > 1) {
+                        setCurrentPage((prev) => prev - 1);
+                      }
+                    }}
+                  >
+                    <div className={cn('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3', PORTAL_CARD_LIST_PADDING)}>
+                      {paginatedRooms.map((room, i) => (
+                        <motion.div
+                          key={room.id}
+                          className="py-0.5"
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: i * 0.04 }}
+                        >
+                          <RoomCard
+                            room={room}
+                            creatorPhotoURL={room.teacherPhotoURL || teacherPhotoById[room.teacherId]}
+                            isStudent={isStudent}
+                            myAttempt={isStudent && user?.uid ? getAttemptsForRoom(room.id).filter(a => String(a.studentId).trim() === user.uid).sort((a, b) => (b.round ?? 0) - (a.round ?? 0))[0] ?? null : null}
+                            onTakeExam={() => navigate(`/exam/${room.id}`)}
+                            onShowSummary={(r, a) => setSummaryData({ room: r, attempt: a })}
+                            onProctor={() => setProctoringRoom(room)}
+                            onChangeStatus={(status, bypass) => handleChangeStatus(room.id, status, bypass)}
+                            onDelete={() => handleDelete(room)}
+                            onEdit={() => { setEditingRoom(room); setShowCreate(true); }}
+                            onOpenSettings={(tab) => {
+                              setDetailRoom(room);
+                              setDetailRoomTab(tab);
+                            }}
+                            canEdit={canEdit}
+                            canDelete={canDelete}
+                          />
+                        </motion.div>
+                      ))}
+                    </div>
+
+                    {totalPages > 1 && (
+                      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200/60 pt-4 mt-2">
+                        <p className="font-sarabun text-[11px] font-bold text-slate-500">
+                          แสดง {rangeStart}–{rangeEnd} จาก {filtered.length} ห้องสอบ
+                        </p>
+
+                        <div className="flex items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            disabled={currentPage === 1}
+                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                            className="h-8 w-8 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30 flex items-center justify-center"
+                            aria-label="หน้าก่อนหน้า"
+                          >
+                            <HiChevronLeft size={16} />
+                          </Button>
+
+                          <div className="flex items-center gap-1">
+                            {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((page) => {
+                              if (totalPages > 5) {
+                                if (page !== 1 && page !== totalPages && Math.abs(page - currentPage) > 1) {
+                                  if (page === 2 || page === totalPages - 1) {
+                                    return (
+                                      <span key={`ellipsis-${page}`} className="px-0.5 font-sarabun text-[10px] text-slate-300">
+                                        …
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                }
+                              }
+
+                              const isActive = currentPage === page;
+                              return (
+                                <button
+                                  key={page}
+                                  type="button"
+                                  onClick={() => setCurrentPage(page)}
+                                  className={cn(
+                                    'h-8 min-w-[32px] rounded-lg px-2 font-sukhumvit text-[11px] font-black transition-all',
+                                    isActive
+                                      ? 'bg-slate-900 text-white shadow-sm'
+                                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800',
+                                  )}
+                                >
+                                  {page}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            disabled={currentPage === totalPages}
+                            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                            className="h-8 w-8 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30 flex items-center justify-center"
+                            aria-label="หน้าถัดไป"
+                          >
+                            <HiChevronRight size={16} />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </motion.div>
@@ -3583,9 +5462,10 @@ export default function ExamManager() {
       {/* ── Modals ── */}
       {showCreate && (
         <CreateRoomModal
-          key={editingRoom?.id ?? 'new'}
+          key={editingRoom?.id ?? `new-${createPrefill?.title ?? ''}`}
           editRoom={editingRoom}
-          onClose={() => { setShowCreate(false); setEditingRoom(null); }}
+          prefill={createPrefill}
+          onClose={() => { setShowCreate(false); setEditingRoom(null); setCreatePrefill(null); }}
           onCreate={createRoom}
           onUpdate={updateRoom}
         />
@@ -3597,6 +5477,7 @@ export default function ExamManager() {
             room={proctoringRoom}
             attempts={getAttemptsForRoom(proctoringRoom.id)}
             onClose={() => setProctoringRoom(null)}
+            onRecalculateScores={canEdit ? handleRecalculateScores : undefined}
           />
         )}
       </AnimatePresence>
@@ -3607,6 +5488,62 @@ export default function ExamManager() {
         onConfirm={handleConfirmDelete}
         roomTitle={roomToDelete?.title || ''}
       />
+
+      {/* ── Close Room Confirmation Dialog ── */}
+      <AnimatePresence>
+        {closeRoomConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setCloseRoomConfirm(null)}
+              className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 16 }}
+              className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 flex flex-col gap-4"
+            >
+              {/* Icon */}
+              <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center mx-auto">
+                <HiStop size={26} className="text-rose-500" />
+              </div>
+
+              <div className="text-center">
+                <h3 className="text-[16px] font-black text-slate-800 font-sukhumvit">
+                  ปิดห้องสอบ รอบ {closeRoomConfirm.currentRound ?? 1}
+                </h3>
+                <p className="text-[13px] text-slate-500 font-sarabun mt-2">
+                  คุณต้องการปิดห้องสอบ 「{closeRoomConfirm.title}」 หรือไม่?
+                  นักเรียนทั้งหมดที่กำลังสอบอยู่จะถูกส่งกระดาษคำตอบโดยอัตโนมัติ และจะไม่สามารถกลับเข้ามาทำข้อสอบในรอบนี้ได้อีก
+                </p>
+                <p className="text-[11px] text-rose-500 font-bold font-sarabun mt-1">
+                  ⚠️ การกระทำนี้ไม่สามารถย้อนกลับได้
+                </p>
+              </div>
+
+              <div className="flex gap-3 mt-1">
+                <button
+                  type="button"
+                  onClick={() => setCloseRoomConfirm(null)}
+                  className="flex-1 h-11 rounded-2xl border border-slate-200 text-slate-600 text-[13px] font-black font-sukhumvit hover:bg-slate-50 transition-all"
+                >
+                  ยกเลิก
+                </button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.97 }}
+                  type="button"
+                  onClick={handleConfirmCloseRoom}
+                  className="flex-1 h-11 rounded-2xl bg-rose-500 text-white text-[13px] font-black font-sukhumvit flex items-center justify-center gap-2 hover:bg-rose-600 transition-all"
+                >
+                  <HiStop size={14} /> ยืนยันปิดห้องสอบ
+                </motion.button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* ── Reset Confirmation Dialog ── */}
       <AnimatePresence>

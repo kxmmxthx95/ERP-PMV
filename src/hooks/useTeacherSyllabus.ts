@@ -18,6 +18,7 @@ import {
   inferSemesterDates,
 } from '@/hooks/useSyllabus';
 import { useSchedule } from '@/hooks/useSchedule';
+import { scheduleEntryMatchesTeacher } from '@/features/schedule/utils/syncScheduleTeachers';
 import { DEFAULT_ASSESSMENT } from '@/types/syllabus';
 import type { CourseSyllabus, WeeklyPlan, AssessmentSchema } from '@/types/syllabus';
 import type { Subject } from '@/types/curriculum';
@@ -167,11 +168,16 @@ export function useTeacherSyllabus(
   // ── Teaching Days per Subject (from schedule) ─────────────────────────────────
   // ดูว่าครูคนนี้สอนวิชานั้นวันอะไรบ้างในตารางสอน
   const getTeachingDaysForSubject = (subjectId: string): SchoolDay[] => {
-    const entries = schedule.getEntriesForTeacher(
-      currentTeacherId,
-      activeYearStr,
-      semester,
-    ).filter(e => e.subjectId === subjectId);
+    const entries = schedule.entries.filter((entry) =>
+      scheduleEntryMatchesTeacher(
+        entry,
+        currentTeacherId,
+        activeYearStr,
+        semester,
+        teacherMgr.teachers,
+        teacherMgr.scheduleTeachers,
+      ) && entry.subjectId === subjectId,
+    );
 
     // unique days
     const days = [...new Set(entries.map(e => e.day as SchoolDay))].sort();

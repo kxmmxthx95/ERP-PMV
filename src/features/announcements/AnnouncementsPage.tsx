@@ -13,7 +13,7 @@ import {
 import FormModal, { modalInputCls, modalLabelCls } from '@/components/ui/FormModal';
 import { useAuth } from '@/hooks/useAuth';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
-import { useAnnouncements, useManageAnnouncements } from '@/hooks/useAnnouncements';
+import { filterAnnouncementsForRole, useManageAnnouncements } from '@/hooks/useAnnouncements';
 import { cn } from '@/lib/utils';
 import type { Announcement, AnnouncementPriority, CreateAnnouncementInput } from '@/types/announcement';
 
@@ -213,21 +213,24 @@ export default function AnnouncementsPage() {
   const { role, user, userData } = useAuth();
   const { canEdit } = useMyPermissions();
   const canManage = canEdit('announcements');
-  const { announcements: visibleAnnouncements, loading: loadingVisible } = useAnnouncements(role ?? undefined);
   const {
     announcements: allAnnouncements,
-    loading: loadingAll,
+    loading,
     createAnnouncement,
     updateAnnouncement,
     deleteAnnouncement,
-  } = useManageAnnouncements(canManage);
+  } = useManageAnnouncements(true);
+
+  const visibleAnnouncements = useMemo(
+    () => filterAnnouncementsForRole(allAnnouncements, role ?? undefined),
+    [allAnnouncements, role],
+  );
 
   const [search, setSearch] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [selected, setSelected] = useState<Announcement | null>(null);
 
   const source = canManage ? allAnnouncements : visibleAnnouncements;
-  const loading = canManage ? loadingAll : loadingVisible;
 
   const items = useMemo(() => {
     const q = search.trim().toLowerCase();

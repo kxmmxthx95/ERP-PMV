@@ -1,14 +1,13 @@
-import { useEffect, useState, Fragment } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Copy, Layout } from 'lucide-react';
+import { HiDocumentDuplicate } from 'react-icons/hi2';
 import { Input } from '@/components/ui/input';
 import {
   Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
 } from '@/components/ui/form';
-import { Button } from '@/components/ui/button';
-import { ButtonGroup, ButtonGroupSeparator } from '@/components/ui/button-group';
+
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -120,13 +119,13 @@ export default function AddCurriculumVersionModal({
       subtitle={
         isEdit
           ? 'แก้ไขชื่อและรายละเอียดของหลักสูตรนี้'
-          : 'กำหนดชื่อหลักสูตร พร้อมเลือกคัดลอกโครงสร้างจากหลักสูตรอื่นได้'
+          : undefined
       }
-      icon={showClone ? <Copy size={18} /> : <Layout size={18} />}
       onSubmit={form.handleSubmit(handleSubmit)}
       submitLabel={isSubmitting ? 'กำลังบันทึก...' : (isEdit ? 'บันทึกการแก้ไข' : 'สร้างหลักสูตร')}
       submitDisabled={isSubmitting}
-      maxWidth="sm"
+      maxWidth="md"
+      showCancel={false}
     >
       <Form {...form}>
         <div className="space-y-4 py-2">
@@ -141,7 +140,7 @@ export default function AddCurriculumVersionModal({
                 <Input
                   placeholder="เช่น หลักสูตรแกนกลาง 2568"
                   className="h-10 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                   {...field}
                 />
               </FormControl>
@@ -159,7 +158,7 @@ export default function AddCurriculumVersionModal({
                 <Input
                   placeholder={`เช่น ${currentThaiYear}`}
                   className="h-10 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                   {...field}
                 />
               </FormControl>
@@ -173,33 +172,31 @@ export default function AddCurriculumVersionModal({
               <FormLabel className="text-[11px] font-bold text-slate-600 uppercase tracking-widest font-sukhumvit">
                 ระดับการศึกษา
               </FormLabel>
-              <FormControl>
-                <ButtonGroup className="w-full bg-black/[0.03] rounded-2xl p-0.5 border-black/5">
-                  <Button
-                    type="button"
-                    variant={!field.value ? 'default' : 'ghost'}
-                    size="sm"
-                    onClick={() => { field.onChange(''); form.setValue('level', ''); form.setValue('track', ''); }}
-                    className={`flex-1 h-8 text-[10px] font-bold rounded-xl font-sukhumvit ${!field.value ? 'bg-slate-900 text-white shadow-md' : 'text-black/35'}`}
+              <Select
+                onValueChange={(val) => {
+                  field.onChange(val === '_none' ? '' : val);
+                  form.setValue('level', '');
+                  form.setValue('track', '');
+                }}
+                value={field.value || '_none'}
+              >
+                <FormControl>
+                  <SelectTrigger
+                    className="w-full h-10 rounded-3xl text-xs font-sarabun border focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
+                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                   >
-                    ทั้งหมด
-                  </Button>
+                    <SelectValue placeholder="ทั้งหมด" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent className="rounded-2xl">
+                  <SelectItem value="_none" className="text-xs font-sarabun">ทั้งหมด</SelectItem>
                   {(['early', 'primary', 'secondary'] as const).map((d) => (
-                    <Fragment key={d}>
-                      <ButtonGroupSeparator />
-                      <Button
-                        type="button"
-                        variant={field.value === d ? 'default' : 'ghost'}
-                        size="sm"
-                        onClick={() => { field.onChange(d); form.setValue('level', ''); form.setValue('track', ''); }}
-                        className={`flex-1 h-8 text-[10px] font-bold rounded-xl font-sukhumvit ${field.value === d ? 'bg-slate-900 text-white shadow-md' : 'text-black/35'}`}
-                      >
-                        {DEPARTMENT_CONFIG[d].label}
-                      </Button>
-                    </Fragment>
+                    <SelectItem key={d} value={d} className="text-xs font-sarabun">
+                      {DEPARTMENT_CONFIG[d].label}
+                    </SelectItem>
                   ))}
-                </ButtonGroup>
-              </FormControl>
+                </SelectContent>
+              </Select>
             </FormItem>
           )} />
 
@@ -210,31 +207,24 @@ export default function AddCurriculumVersionModal({
                 <FormLabel className="text-[11px] font-bold text-slate-600 uppercase tracking-widest font-sukhumvit">
                   ระดับชั้น (ถ้าระบุ)
                 </FormLabel>
-                <FormControl>
-                  <div className="flex flex-wrap gap-1.5 p-1.5 bg-black/[0.02] rounded-2xl border border-black/5">
-                    <Button
-                      type="button"
-                      variant={!field.value ? 'default' : 'ghost'}
-                      size="sm"
-                      onClick={() => field.onChange('')}
-                      className={`px-3 h-7 text-[10px] font-bold rounded-xl font-sukhumvit ${!field.value ? 'bg-slate-700 text-white shadow-sm' : 'text-black/30'}`}
+                <Select onValueChange={(val) => field.onChange(val === '_none' ? '' : val)} value={field.value || '_none'}>
+                  <FormControl>
+                    <SelectTrigger
+                      className="w-full h-10 rounded-3xl text-xs font-sarabun border focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
+                      style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                     >
-                      ทุกชั้น
-                    </Button>
+                      <SelectValue placeholder="ทุกชั้น" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent className="rounded-2xl">
+                    <SelectItem value="_none" className="text-xs font-sarabun">ทุกชั้น</SelectItem>
                     {availableGrades.map((g) => (
-                      <Button
-                        key={g}
-                        type="button"
-                        variant={field.value === g ? 'default' : 'ghost'}
-                        size="sm"
-                        onClick={() => field.onChange(g)}
-                        className={`px-3 h-7 text-[10px] font-bold rounded-xl font-sukhumvit ${field.value === g ? 'bg-slate-900 text-white shadow-md' : 'text-black/35'}`}
-                      >
+                      <SelectItem key={g} value={g} className="text-xs font-sarabun">
                         {g}
-                      </Button>
+                      </SelectItem>
                     ))}
-                  </div>
-                </FormControl>
+                  </SelectContent>
+                </Select>
               </FormItem>
             )} />
           )}
@@ -249,8 +239,8 @@ export default function AddCurriculumVersionModal({
                 <Select onValueChange={field.onChange} value={field.value || '_none'}>
                   <FormControl>
                     <SelectTrigger
-                      className="h-10 rounded-3xl text-xs font-sarabun border focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                      style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                      className="w-full h-10 rounded-3xl text-xs font-sarabun border focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
+                      style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                     >
                       <SelectValue placeholder="ไม่ระบุสาย" />
                     </SelectTrigger>
@@ -278,7 +268,7 @@ export default function AddCurriculumVersionModal({
                 <textarea
                   placeholder="รายละเอียดเพิ่มเติม (ถ้ามี)"
                   className="w-full min-h-[72px] p-4 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none outline-none border transition-all"
-                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                   {...field}
                 />
               </FormControl>
@@ -296,7 +286,7 @@ export default function AddCurriculumVersionModal({
                   <FormControl>
                     <SelectTrigger
                       className="h-10 rounded-3xl text-xs font-sarabun border focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                      style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                      style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                     >
                       <SelectValue placeholder="ไม่คัดลอก (สร้างใหม่)" />
                     </SelectTrigger>
@@ -319,7 +309,7 @@ export default function AddCurriculumVersionModal({
               className="flex items-start gap-2.5 px-4 py-3 rounded-2xl text-[11px] font-sarabun"
               style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.15)' }}
             >
-              <Copy size={13} className="text-blue-500 mt-0.5 shrink-0" />
+              <HiDocumentDuplicate size={13} className="text-blue-500 mt-0.5 shrink-0" />
               <p className="text-blue-700/80 leading-relaxed">
                 รายวิชาทั้งหมดจากหลักสูตรที่เลือกจะถูกคัดลอกมาเป็นจุดเริ่มต้น
                 คุณสามารถแก้ไขได้ภายหลัง

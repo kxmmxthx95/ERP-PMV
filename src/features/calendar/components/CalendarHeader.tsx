@@ -4,5 +4,5 @@ interface CalendarHeaderProps {
 
 export default function CalendarHeader({}: CalendarHeaderProps) {
   // The header is currently simplified as a spacer to match the new design with floating capsule
-  return <div className="h-4" />;
+  return <div className="hidden lg:block h-4" />;
 }

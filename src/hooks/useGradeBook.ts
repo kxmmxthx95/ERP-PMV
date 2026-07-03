@@ -9,7 +9,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import {
-  collection, getDocs, setDoc, doc, query, where, writeBatch,
+  collection, getDoc, getDocs, setDoc, doc, query, where, writeBatch,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type {
@@ -18,9 +18,14 @@ import type {
 } from '@/types/grades';
 import {
   DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, DEFAULT_MAX_SCORES,
+  categoryScoreToPercent, rawPointsToPercent, averagePercentScores,
 } from '@/types/grades';
 import type { Exam, ExamScore } from '@/types/teaching';
 import type { Department } from '@/types/curriculum';
+import {
+  buildStudentIdentityLookup,
+  findScoreRecordForStudent,
+} from '@/lib/students/studentIdentity';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +39,88 @@ export function calcGrade(pct: number, thresholds: GradeThreshold[]): GradeLette
 
 function makeConfigKey(subjectId: string, classId: string, yearId: string, sem: 1 | 2) {
   return `${subjectId}_${classId}_${yearId}_${sem}`;
+}
+
+export type OnlineExamScoresByStudent = Map<string, {
+  classworkScore: number | null;
+  midtermScore: number | null;
+  finalScore: number | null;
+}>;
+
+export type OnlineExamLinkedFields = {
+  classwork: boolean;
+  midterm: boolean;
+  final: boolean;
+};
+
+export function mergeOnlineExamScores(
+  summaries: StudentScoreSummary[],
+  config: GradeWeightConfig,
+  byStudent: OnlineExamScoresByStudent,
+  linkedFields: OnlineExamLinkedFields,
+): StudentScoreSummary[] {
+  return summaries.map(s => {
+    const online = byStudent.get(s.studentId);
+    return withRecalculatedTotals({
+      ...s,
+      classworkScore: linkedFields.classwork
+        ? (online?.classworkScore ?? s.classworkScore)
+        : s.classworkScore,
+      midtermScore: linkedFields.midterm
+        ? (online?.midtermScore ?? s.midtermScore)
+        : s.midtermScore,
+      finalScore: linkedFields.final
+        ? (online?.finalScore ?? s.finalScore)
+        : s.finalScore,
+    }, config);
+  });
+}
+
+function withRecalculatedTotals(
+  summary: StudentScoreSummary,
+  config: GradeWeightConfig,
+): StudentScoreSummary {
+  const { weights, thresholds } = config;
+  const cwPct = summary.classworkScore !== null
+    ? categoryScoreToPercent(summary.classworkScore)
+    : null;
+  const midPct = summary.midtermScore !== null
+    ? categoryScoreToPercent(summary.midtermScore)
+    : null;
+  const finPct = summary.finalScore !== null
+    ? categoryScoreToPercent(summary.finalScore)
+    : null;
+
+  const wCw = weights.classwork / 100;
+  const wMid = weights.midterm / 100;
+  const wFin = weights.final / 100;
+
+  let totalScore: number | null = null;
+  let weightedSum = 0;
+  let hasAny = false;
+
+  if (cwPct !== null) {
+    weightedSum += cwPct * wCw;
+    hasAny = true;
+  }
+  if (midPct !== null) {
+    weightedSum += midPct * wMid;
+    hasAny = true;
+  }
+  if (finPct !== null) {
+    weightedSum += finPct * wFin;
+    hasAny = true;
+  }
+
+  if (hasAny) {
+    totalScore = Math.round(weightedSum * 10) / 10;
+  }
+
+  return {
+    ...summary,
+    totalScore,
+    grade: totalScore !== null ? calcGrade(totalScore, thresholds) : null,
+  };
 }
 
 // ── Hook ───────────────────────────────────────────────────────────────────────
@@ -68,9 +155,13 @@ export function useGradeBook() {
       studentCode: string;
       photoURL?: string;
       gender?: 'male' | 'female';
+      authUid?: string;
+      userId?: string;
+      email?: string;
     }>;
   }) => {
-    const key = makeConfigKey(params.subjectId, params.classId, params.academicYearId, params.semester);
+    const studentSig = params.students.map(s => s.studentId).sort().join('|');
+    const key = `${makeConfigKey(params.subjectId, params.classId, params.academicYearId, params.semester)}::${studentSig}`;
     if (cacheKey.current === key) return; // ไม่อ่านซ้ำ
 
     setIsLoading(true);
@@ -80,13 +171,10 @@ export function useGradeBook() {
       // ── 1. อ่าน GradeWeightConfig (1 doc read) ────────────────────────────────
       let cfg: GradeWeightConfig;
       const cfgRef = doc(db, 'grade_configs', key);
-      const cfgSnap = await getDocs(
-        query(collection(db, 'grade_configs'), where('__name__', '==', key))
-      ).catch(() => null);
+      const cfgSnap = await getDoc(cfgRef).catch(() => null);
 
-      const existingCfg = cfgSnap?.docs[0];
-      if (existingCfg?.exists()) {
-        cfg = { id: existingCfg.id, ...existingCfg.data() } as GradeWeightConfig;
+      if (cfgSnap?.exists()) {
+        cfg = { id: cfgSnap.id, ...cfgSnap.data() } as GradeWeightConfig;
       } else {
         cfg = {
           id: key,
@@ -122,15 +210,18 @@ export function useGradeBook() {
       const allScores: ExamScore[] = [];
       if (examIds.length > 0) {
         const chunkSize = 30;
+        const chunks: string[][] = [];
         for (let i = 0; i < examIds.length; i += chunkSize) {
-          const chunk = examIds.slice(i, i + chunkSize);
-          const scoresSnap = await getDocs(
-            query(collection(db, 'exam_scores'), where('examId', 'in', chunk))
-          ).catch(() => null);
-          if (scoresSnap) {
-            scoresSnap.docs.forEach(d => allScores.push({ id: d.id, ...d.data() } as ExamScore));
-          }
+          chunks.push(examIds.slice(i, i + chunkSize));
         }
+        const scoreSnaps = await Promise.all(
+          chunks.map((chunk) =>
+            getDocs(query(collection(db, 'exam_scores'), where('examId', 'in', chunk))).catch(() => null),
+          ),
+        );
+        scoreSnaps.forEach((scoresSnap) => {
+          scoresSnap?.docs.forEach((d) => allScores.push({ id: d.id, ...d.data() } as ExamScore));
+        });
       }
 
       // ── 4. อ่าน grade_records ที่บันทึกไว้แล้ว (1 query read) ────────────────
@@ -147,6 +238,26 @@ export function useGradeBook() {
       const records: GradeRecord[] = recordsSnap?.docs.map(d => ({ id: d.id, ...d.data() } as GradeRecord)) ?? [];
       setSavedRecords(records);
       const recordMap = new Map(records.map(r => [r.studentId, r]));
+
+      const identityLookup = buildStudentIdentityLookup(
+        params.students.map(stu => ({
+          student: {
+            id: stu.studentId,
+            studentCode: stu.studentCode,
+            authUid: stu.authUid,
+            userId: stu.userId,
+            email: stu.email,
+          },
+        })),
+      );
+
+      const rosterStudent = (stu: (typeof params.students)[number]) => ({
+        id: stu.studentId,
+        studentCode: stu.studentCode,
+        authUid: stu.authUid,
+        userId: stu.userId,
+        email: stu.email,
+      });
 
       // ── 5. สร้าง ScoreMap per student per examType ────────────────────────────
       // คะแนน classwork = รวม quiz + classwork type
@@ -170,7 +281,7 @@ export function useGradeBook() {
 
       // ── 6. Build summaries ─────────────────────────────────────────────────────
       const built: StudentScoreSummary[] = params.students.map(stu => {
-        const saved = recordMap.get(stu.studentId);
+        const saved = findScoreRecordForStudent(recordMap, rosterStudent(stu), identityLookup);
 
         // ถ้ามี saved record แล้ว — ใช้เลย (ครูตรวจแล้ว)
         if (saved) {
@@ -197,55 +308,33 @@ export function useGradeBook() {
           // เรียงตาม examDate ล่าสุด
           const sorted = [...typeExams].sort((a, b) => b.examDate.localeCompare(a.examDate));
           for (const exam of sorted) {
-            const sc = scoresByExamId.get(exam.id)?.get(stu.studentId);
-            if (sc && !sc.absent && sc.score !== undefined) return sc.score;
+            const examScores = scoresByExamId.get(exam.id);
+            if (!examScores) continue;
+            const sc = findScoreRecordForStudent(examScores, rosterStudent(stu), identityLookup);
+            if (sc && !sc.absent && sc.score !== undefined) {
+              return rawPointsToPercent(sc.score, exam.maxScore);
+            }
           }
           return null;
         };
 
-        // classwork = รวมคะแนน quiz ทั้งหมด (ไม่ normalize)
+        // classwork = เฉลี่ย % จาก quiz/makeup แต่ละชิ้น (แปลงจากคะแนนเต็มของข้อสอบอัตโนมัติ)
         const classworkExams = [...(examByType.get('quiz') ?? []), ...(examByType.get('makeup') ?? [])];
-        let classworkRaw: number | null = null;
-        if (classworkExams.length > 0) {
-          let total = 0;
-          let hasAny = false;
-          classworkExams.forEach(exam => {
-            const sc = scoresByExamId.get(exam.id)?.get(stu.studentId);
-            if (sc && !sc.absent && sc.score !== undefined) {
-              total += sc.score;
-              hasAny = true;
-            }
-          });
-          if (hasAny) classworkRaw = total;
-        }
+        const classworkPcts: number[] = [];
+        classworkExams.forEach(exam => {
+          const examScores = scoresByExamId.get(exam.id);
+          if (!examScores) return;
+          const sc = findScoreRecordForStudent(examScores, rosterStudent(stu), identityLookup);
+          if (sc && !sc.absent && sc.score !== undefined) {
+            classworkPcts.push(rawPointsToPercent(sc.score, exam.maxScore));
+          }
+        });
+        const classworkRaw = averagePercentScores(classworkPcts);
 
         const midtermRaw = getLatestScore('midterm');
         const finalRaw = getLatestScore('final');
 
-        // คำนวณ weighted total
-        let totalScore: number | null = null;
-        const { weights, maxScores } = cfg;
-
-        const wCw = weights.classwork / 100;
-        const wMid = weights.midterm / 100;
-        const wFin = weights.final / 100;
-
-        const cwPct = classworkRaw !== null ? (classworkRaw / (maxScores.classwork || 100)) * 100 : null;
-        const midPct = midtermRaw !== null ? (midtermRaw / (maxScores.midterm || 100)) * 100 : null;
-        const finPct = finalRaw !== null ? (finalRaw / (maxScores.final || 100)) * 100 : null;
-
-        // คำนวณเฉพาะถ้ามีข้อมูลครบตามที่กำหนด
-        if (cwPct !== null && midPct !== null && finPct !== null) {
-          totalScore = Math.round((cwPct * wCw + midPct * wMid + finPct * wFin) * 10) / 10;
-        } else if (midPct !== null && finPct !== null && weights.classwork === 0) {
-          totalScore = Math.round((midPct * wMid + finPct * wFin) * 10) / 10;
-        }
-
-        const grade: GradeLetter | null = totalScore !== null
-          ? calcGrade(totalScore, cfg.thresholds)
-          : null;
-
-        return {
+        return withRecalculatedTotals({
           studentId: stu.studentId,
           studentName: stu.studentName,
           studentCode: stu.studentCode,
@@ -254,17 +343,17 @@ export function useGradeBook() {
           classworkScore: classworkRaw,
           midtermScore: midtermRaw,
           finalScore: finalRaw,
-          totalScore,
-          grade,
+          totalScore: null,
+          grade: null,
           absent: false,
-        };
+        }, cfg);
       });
 
       setSummaries(built);
       cacheKey.current = key;
 
       // ── Eagerly create cfgRef ถ้ายังไม่มี (ไม่รอ) ───────────────────────────
-      if (!existingCfg?.exists()) {
+      if (!cfgSnap?.exists()) {
         setDoc(cfgRef, { ...cfg }).catch(() => {});
       }
     } catch (err) {
@@ -292,28 +381,7 @@ export function useGradeBook() {
   const recalculate = useCallback((newConfig: GradeWeightConfig) => {
     setSummaries(prev => prev.map(s => {
       if (s.classworkScore === null && s.midtermScore === null && s.finalScore === null) return s;
-
-      const { weights, maxScores, thresholds } = newConfig;
-      const cwPct = s.classworkScore !== null ? (s.classworkScore / (maxScores.classwork || 100)) * 100 : null;
-      const midPct = s.midtermScore !== null ? (s.midtermScore / (maxScores.midterm || 100)) * 100 : null;
-      const finPct = s.finalScore !== null ? (s.finalScore / (maxScores.final || 100)) * 100 : null;
-
-      const wCw = weights.classwork / 100;
-      const wMid = weights.midterm / 100;
-      const wFin = weights.final / 100;
-
-      let totalScore: number | null = null;
-      if (cwPct !== null && midPct !== null && finPct !== null) {
-        totalScore = Math.round((cwPct * wCw + midPct * wMid + finPct * wFin) * 10) / 10;
-      } else if (midPct !== null && finPct !== null && weights.classwork === 0) {
-        totalScore = Math.round((midPct * wMid + finPct * wFin) * 10) / 10;
-      }
-
-      return {
-        ...s,
-        totalScore,
-        grade: totalScore !== null ? calcGrade(totalScore, thresholds) : null,
-      };
+      return withRecalculatedTotals(s, newConfig);
     }));
   }, []);
 
@@ -326,28 +394,55 @@ export function useGradeBook() {
 
       // recalculate total ถ้าเป็น score field
       if (field !== 'note' && field !== 'absent' && config) {
-        const { weights, maxScores, thresholds } = config;
-        const cwPct = updated.classworkScore !== null ? (updated.classworkScore / (maxScores.classwork || 100)) * 100 : null;
-        const midPct = updated.midtermScore !== null ? (updated.midtermScore / (maxScores.midterm || 100)) * 100 : null;
-        const finPct = updated.finalScore !== null ? (updated.finalScore / (maxScores.final || 100)) * 100 : null;
-
-        const wCw = weights.classwork / 100;
-        const wMid = weights.midterm / 100;
-        const wFin = weights.final / 100;
-
-        let totalScore: number | null = null;
-        if (cwPct !== null && midPct !== null && finPct !== null) {
-          totalScore = Math.round((cwPct * wCw + midPct * wMid + finPct * wFin) * 10) / 10;
-        } else if (midPct !== null && finPct !== null && weights.classwork === 0) {
-          totalScore = Math.round((midPct * wMid + finPct * wFin) * 10) / 10;
-        }
-
-        updated.totalScore = totalScore;
-        updated.grade = totalScore !== null ? calcGrade(totalScore, thresholds) : null;
+        return withRecalculatedTotals(updated, config);
       }
 
       return updated;
     }));
+  }, [config]);
+
+  // ── นำคะแนนสอบออนไลน์เข้าตาราง (best score per student) ─────────────────────
+
+  const applyOnlineExamScores = useCallback((updates: Array<{
+    studentId: string;
+    field: 'classworkScore' | 'midtermScore' | 'finalScore';
+    score: number;
+    mode: 'add' | 'max';
+  }>) => {
+    if (updates.length === 0 || !config) return 0;
+
+    let applied = 0;
+    setSummaries(prev => prev.map(s => {
+      const upd = updates.find(u => u.studentId === s.studentId);
+      if (!upd) return s;
+
+      applied += 1;
+      const current = s[upd.field] as number | null;
+      const nextValue = upd.mode === 'add'
+        ? (current ?? 0) + upd.score
+        : (current !== null ? Math.max(current, upd.score) : upd.score);
+
+      return withRecalculatedTotals({ ...s, [upd.field]: nextValue }, config);
+    }));
+    return applied;
+  }, [config]);
+
+  const revertOnlineExamScores = useCallback((reverts: Array<{
+    studentId: string;
+    field: 'classworkScore' | 'midtermScore' | 'finalScore';
+    previousValue: number | null;
+  }>) => {
+    if (reverts.length === 0 || !config) return 0;
+
+    let reverted = 0;
+    setSummaries(prev => prev.map(s => {
+      const rev = reverts.find(r => r.studentId === s.studentId);
+      if (!rev) return s;
+
+      reverted += 1;
+      return withRecalculatedTotals({ ...s, [rev.field]: rev.previousValue }, config);
+    }));
+    return reverted;
   }, [config]);
 
   // ── บันทึก grade_records ทั้งหมดใน batch (ประหยัด quota) ─────────────────────
@@ -362,13 +457,15 @@ export function useGradeBook() {
     departmentId: Department;
     academicYearId: string;
     semester: 1 | 2;
+    summariesToPublish?: StudentScoreSummary[];
   }) => {
-    if (summaries.length === 0) return;
+    const toPublish = params.summariesToPublish ?? summaries;
+    if (toPublish.length === 0) return;
 
     const batch = writeBatch(db);
     const now = new Date().toISOString();
 
-    summaries.forEach(s => {
+    toPublish.forEach(s => {
       const docId = `${params.subjectId}_${params.classId}_${s.studentId}_${params.academicYearId}_${params.semester}`;
       const ref = doc(db, 'grade_records', docId);
       const record: NewGradeRecord = {
@@ -401,6 +498,10 @@ export function useGradeBook() {
     cacheKey.current = ''; // invalidate cache
   }, [summaries]);
 
+  const invalidateCache = useCallback(() => {
+    cacheKey.current = '';
+  }, []);
+
   return {
     isLoading,
     error,
@@ -408,9 +509,12 @@ export function useGradeBook() {
     summaries,
     savedRecords,
     loadGradeBook,
+    invalidateCache,
     saveConfig,
     recalculate,
     updateStudentScore,
+    applyOnlineExamScores,
+    revertOnlineExamScores,
     publishGrades,
   };
 }

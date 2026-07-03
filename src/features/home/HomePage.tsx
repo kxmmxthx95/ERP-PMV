@@ -1,34 +1,37 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useMemo, memo, useCallback } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
-  Users, BookOpen, CalendarDays, DoorOpen,
-  ClipboardList, Settings, Bell, ShieldCheck, UserCheck, MessageSquare, Megaphone, GraduationCap,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import {
-  HiOutlineUsers,
-  HiOutlineHome,
-  HiOutlineShieldCheck,
-  HiOutlineBookOpen,
-  HiOutlineCalendarDays,
-  HiOutlineClipboardDocumentList,
-  HiOutlineClipboardDocumentCheck,
-  HiOutlineClock,
-  HiOutlineDocumentText,
-  HiOutlineChatBubbleLeftRight,
-  HiOutlineBell,
-  HiOutlineMegaphone,
-  HiOutlineAcademicCap,
-  HiOutlineCog6Tooth,
-} from 'react-icons/hi2';
+  IoPeopleOutline,
+  IoPersonOutline,
+  IoSchoolOutline,
+  IoShieldCheckmarkOutline,
+  IoBookOutline,
+  IoCalendarOutline,
+  IoClipboardOutline,
+  IoNotificationsOutline,
+  IoMegaphoneOutline,
+  IoSettingsOutline,
+  IoFingerPrintOutline,
+  IoTimeOutline,
+  IoCheckmarkDoneOutline,
+  IoSparklesOutline,
+  IoGameControllerOutline,
+  IoChatbubbleOutline,
+  IoRibbonOutline,
+  IoGridOutline
+} from 'react-icons/io5';
+import type { IconType } from 'react-icons';
 import { useAuth } from '@/hooks/useAuth';
 import { useRolePermissions } from '@/hooks/useRolePermissions';
-import ProtectedWidget from './ProtectedWidget';
+import type { FeaturePermission } from '@/types/rolePermission';
+import { buildSysadminPermissionView, applySysadminWidgetOverrides } from '@/types/rolePermission';
+import { cn } from '@/lib/utils';
 import AnnouncementWidget from './widgets/AnnouncementWidget';
 import TodayScheduleWidget from './widgets/TodayScheduleWidget';
 import StudentScheduleWidget from './widgets/StudentScheduleWidget';
 import PendingTaskWidget from './widgets/PendingTaskWidget';
+import TeacherDailyTaskWidget from './widgets/TeacherDailyTaskWidget';
 import StaffCheckInWidget from './widgets/StaffCheckInWidget';
 import StudentStatWidget from './widgets/StudentStatWidget';
 import StudentProfileWidget from './widgets/StudentProfileWidget';
@@ -43,198 +46,145 @@ import FeedbackStatusWidget from './widgets/FeedbackStatusWidget';
 import StudentExamScoreWidget from './widgets/StudentExamScoreWidget';
 import ExecutiveTeachingStatusWidget from './widgets/ExecutiveTeachingStatusWidget';
 import FuturePlanWidget from './widgets/FuturePlanWidget';
-import { IndeterminateProgress } from '@/components/ui/progress';
+import BehaviorScoreWidget from './widgets/BehaviorScoreWidget';
+import HoroscopeWidget from './widgets/HoroscopeWidget';
+import WordGameWidget from './widgets/WordGameWidget';
+import { DashboardWidgetsSkeleton, MenuPageSkeleton } from './components/WidgetSkeleton';
 
-const ALL_MENUS: { title: string; subtitle: string; icon: LucideIcon; path: string; accent: string; featureKey: string; count?: number }[] = [
-  { title: 'จัดการผู้ใช้', subtitle: 'User Directory & Roles', icon: Users, path: '/portal/users', accent: '#a855f7', featureKey: 'users', count: 0 },
-  { title: 'จัดการครู', subtitle: 'Teacher Management', icon: Users, path: '/portal/teachers', accent: '#e11d48', featureKey: 'teachers', count: 0 },
-  { title: 'จัดการนักเรียน', subtitle: 'Student Records', icon: Users, path: '/portal/students', accent: '#fb7185', featureKey: 'students', count: 0 },
-  { title: 'ระบบจัดการห้องเรียน', subtitle: 'Classroom Management', icon: DoorOpen, path: '/portal/classes', accent: '#06b6d4', featureKey: 'classes', count: 0 },
-  { title: 'กำหนดสิทธิ์', subtitle: 'Role Permission Manager', icon: ShieldCheck, path: '/portal/roles', accent: '#2563eb', featureKey: 'roles' },
-  { title: 'หลักสูตร', subtitle: 'Curriculum & Programs', icon: BookOpen, path: '/portal/curriculum', accent: '#10b981', featureKey: 'curriculum' },
-  { title: 'ตารางสอน', subtitle: 'Class Schedule', icon: CalendarDays, path: '/portal/schedule', accent: '#f43f5e', featureKey: 'schedule' },
-  { title: 'ปฏิทินการศึกษา', subtitle: 'Academic Calendar', icon: CalendarDays, path: '/portal/calendar', accent: '#6366f1', featureKey: 'calendar' },
-  { title: 'จัดการการสอน', subtitle: 'เช็คชื่อ ภาระงาน สอบ', icon: ClipboardList, path: '/portal/teaching', accent: '#8b5cf6', featureKey: 'teaching' },
-  { title: 'การเข้าเรียน', subtitle: 'Attendance Records', icon: ClipboardList, path: '/portal/attendance', accent: '#059669', featureKey: 'attendance' },
-  { title: 'เช็คชื่อเข้าแถว', subtitle: 'Morning Roll-Call', icon: UserCheck, path: '/portal/morning-rollcall', accent: '#0ea5e9', featureKey: 'morningRollCall' },
-  { title: 'ลงเวลาทำงาน', subtitle: 'Staff Attendance', icon: UserCheck, path: '/portal/staff-attendance', accent: '#0891b2', featureKey: 'staffAttendance' },
-  { title: 'การลา', subtitle: 'Leave Requests', icon: ClipboardList, path: '/portal/leave', accent: '#f97316', featureKey: 'leave' },
-  { title: 'ครูเวร', subtitle: 'Duty Teacher Schedule', icon: ShieldCheck, path: '/portal/duty-schedule', accent: '#0d9488', featureKey: 'dutySchedule' },
-  { title: 'Report Control Center', subtitle: 'ส่งรายงานผ่าน LINE OA', icon: MessageSquare, path: '/portal/report-control', accent: '#7c3aed', featureKey: 'reports' },
-  { title: 'ประกาศ', subtitle: 'ข่าวสารและประกาศ', icon: Bell, path: '/portal/announcements', accent: '#6ee7b7', featureKey: 'announcements' },
-  { title: 'PMV Voice', subtitle: 'เสียงของนักเรียน', icon: Megaphone, path: '/portal/feedback', accent: '#0ea5e9', featureKey: 'feedback' },
-  { title: 'ห้องสอบออนไลน์', subtitle: 'Online Exam & Assessment', icon: ClipboardList, path: '/portal/exams', accent: '#6366f1', featureKey: 'exams' },
-  { title: 'คลังข้อสอบ', subtitle: 'Question Bank & Repository', icon: BookOpen, path: '/portal/question-bank', accent: '#8b5cf6', featureKey: 'questionBank' },
-  { title: 'สมุดคะแนน', subtitle: 'Grade Book & Grade Cutting', icon: GraduationCap, path: '/portal/grades', accent: '#7c3aed', featureKey: 'grades' },
-  { title: 'แผนการศึกษาต่อ', subtitle: 'Future Plan & University', icon: GraduationCap, path: '/portal/future-plan', accent: '#7c3aed', featureKey: 'futurePlan' },
-  { title: 'การตั้งค่า', subtitle: 'ระบบและปีการศึกษา', icon: Settings, path: '/portal/settings', accent: '#8b5cf6', featureKey: 'settings' },
+const MENU_GRID_COLUMNS = 4;
+
+/** แถวบน = โทนเย็น, ไล่ลงมาแถวล่าง = โทนร้อน (4 ไอคอนต่อแถว) */
+const MENU_ROW_PALETTE = [
+  ['#6366F1', '#4F46E5', '#3B82F6', '#2563EB'],
+  ['#0EA5E9', '#0284C7', '#06B6D4', '#0891B2'],
+  ['#14B8A6', '#0D9488', '#10B981', '#059669'],
+  ['#22C55E', '#84CC16', '#A3E635', '#65A30D'],
+  ['#EAB308', '#F59E0B', '#FBBF24', '#D97706'],
+  ['#F97316', '#FB923C', '#EA580C', '#F59E0B'],
+  ['#EF4444', '#F43F5E', '#EC4899', '#E11D48'],
+] as const;
+
+function getMenuAccentColor(index: number, columns: number = MENU_GRID_COLUMNS): string {
+  const row = Math.floor(index / columns);
+  const col = index % columns;
+  const palette = MENU_ROW_PALETTE[Math.min(row, MENU_ROW_PALETTE.length - 1)];
+  return palette[col % palette.length];
+}
+
+const ALL_MENUS: { title: string; subtitle: string; icon: IconType; path: string; featureKey: string; count?: number }[] = [
+  { title: 'จัดการผู้ใช้', subtitle: 'User Directory & Roles', icon: IoPersonOutline, path: '/portal/users', featureKey: 'users', count: 0 },
+  { title: 'จัดการครู', subtitle: 'Teacher Management', icon: IoPeopleOutline, path: '/portal/teachers', featureKey: 'teachers', count: 0 },
+  { title: 'จัดการนักเรียน', subtitle: 'Student Records', icon: IoPeopleOutline, path: '/portal/students', featureKey: 'students', count: 0 },
+  { title: 'ระบบจัดการห้องเรียน', subtitle: 'Classroom Management', icon: IoSchoolOutline, path: '/portal/classes', featureKey: 'classes', count: 0 },
+  { title: 'กำหนดสิทธิ์', subtitle: 'Role Permission Manager', icon: IoShieldCheckmarkOutline, path: '/portal/roles', featureKey: 'roles' },
+  { title: 'หลักสูตร', subtitle: 'Curriculum & Programs', icon: IoBookOutline, path: '/portal/curriculum', featureKey: 'curriculum' },
+  { title: 'ตารางสอน', subtitle: 'Class Schedule', icon: IoCalendarOutline, path: '/portal/schedule', featureKey: 'schedule' },
+  { title: 'ปฏิทินการศึกษา', subtitle: 'Academic Calendar', icon: IoCalendarOutline, path: '/portal/calendar', featureKey: 'calendar' },
+  { title: 'การเข้าเรียน', subtitle: 'Attendance Records', icon: IoClipboardOutline, path: '/portal/attendance', featureKey: 'attendance' },
+  { title: 'เช็คชื่อเข้าแถว', subtitle: 'Morning Roll-Call', icon: IoCheckmarkDoneOutline, path: '/portal/morning-rollcall', featureKey: 'morningRollCall' },
+  { title: 'ลงเวลาทำงาน', subtitle: 'Staff Attendance', icon: IoTimeOutline, path: '/portal/staff-attendance', featureKey: 'staffAttendance' },
+  { title: 'เครื่องสแกน', subtitle: 'Fingerprint Terminals', icon: IoFingerPrintOutline, path: '/portal/fingerprint-devices', featureKey: 'fingerprintDevices' },
+  { title: 'การลา', subtitle: 'Leave Requests', icon: IoClipboardOutline, path: '/portal/leave', featureKey: 'leave' },
+  { title: 'ครูเวร', subtitle: 'Duty Teacher Schedule', icon: IoShieldCheckmarkOutline, path: '/portal/duty-schedule', featureKey: 'dutySchedule' },
+  { title: 'Report Control Center', subtitle: 'ส่งรายงานผ่าน LINE OA', icon: IoChatbubbleOutline, path: '/portal/report-control', featureKey: 'reports' },
+  { title: 'ประกาศ', subtitle: 'ข่าวสารและประกาศ', icon: IoNotificationsOutline, path: '/portal/announcements', featureKey: 'announcements' },
+  { title: 'PMV Voice', subtitle: 'เสียงของนักเรียน', icon: IoMegaphoneOutline, path: '/portal/feedback', featureKey: 'feedback' },
+  { title: 'คะแนนพฤติกรรม', subtitle: 'Behavior & Conduct Score', icon: IoRibbonOutline, path: '/portal/behavior', featureKey: 'behaviorScore' },
+  { title: 'ห้องสอบออนไลน์', subtitle: 'Online Exam & Assessment', icon: IoClipboardOutline, path: '/portal/exams', featureKey: 'exams' },
+  { title: 'คลังข้อสอบ', subtitle: 'Question Bank & Repository', icon: IoBookOutline, path: '/portal/question-bank', featureKey: 'questionBank' },
+  { title: 'AI Agent', subtitle: 'Agent Command Center', icon: IoSparklesOutline, path: '/portal/ai-agents', featureKey: 'aiAgents' },
+  { title: 'สมุดคะแนน', subtitle: 'Grade Book & Grade Cutting', icon: IoSchoolOutline, path: '/portal/grades', featureKey: 'grades' },
+  { title: 'แผนการศึกษาต่อ', subtitle: 'Future Plan & University', icon: IoSchoolOutline, path: '/portal/future-plan', featureKey: 'futurePlan' },
+  { title: 'เกมทายคำ', subtitle: 'Multiplayer Word Game', icon: IoGameControllerOutline, path: '/portal/word-game', featureKey: 'wordGame' },
+  { title: 'มอบหมายงาน', subtitle: 'Task Delegation', icon: IoCheckmarkDoneOutline, path: '/portal/tasks', featureKey: 'tasks' },
+  { title: 'การตั้งค่า', subtitle: 'ระบบและปีการศึกษา', icon: IoSettingsOutline, path: '/portal/settings', featureKey: 'settings' },
+  { title: 'แผนการสอน', subtitle: 'Weekly Teaching Plan', icon: IoGridOutline, path: '/portal/micro-syllabus', featureKey: 'microSyllabus' },
 ];
 
-const ACCENT_PAIRS: Record<string, [string, string]> = {
-  '#a855f7': ['#a855f7', '#ec4899'],
-  '#e11d48': ['#e11d48', '#f97316'],
-  '#fb7185': ['#f43f5e', '#fb923c'],
-  '#06b6d4': ['#06b6d4', '#6366f1'],
-  '#2563eb': ['#2563eb', '#7c3aed'],
-  '#10b981': ['#10b981', '#06b6d4'],
-  '#f43f5e': ['#f43f5e', '#fb7185'],
-  '#6366f1': ['#6366f1', '#8b5cf6'],
-  '#8b5cf6': ['#8b5cf6', '#ec4899'],
-  '#ec4899': ['#ec4899', '#f43f5e'],
-  '#fb923c': ['#fb923c', '#f59e0b'],
-  '#059669': ['#059669', '#10b981'],
-  '#0891b2': ['#0891b2', '#06b6d4'],
-  '#6ee7b7': ['#10b981', '#34d399'],
+const ALL_MENUS_INDEX_MAP = new Map(ALL_MENUS.map((m, idx) => [m.featureKey, idx]));
+
+const MENU_CATEGORIES = [
+  {
+    id: 'system_admin',
+    name: 'ระบบบริหารจัดการ (System & Admin)',
+    featureKeys: ['users', 'teachers', 'students', 'roles', 'staffAttendance', 'fingerprintDevices', 'leave', 'settings', 'logs'],
+  },
+  {
+    id: 'academic_teaching',
+    name: 'งานวิชาการและการสอน (Academic & Teaching)',
+    featureKeys: ['curriculum', 'schedule', 'calendar', 'classes', 'microSyllabus'],
+  },
+  {
+    id: 'assessment_testing',
+    name: 'การวัดผลและข้อสอบ (Assessment & Testing)',
+    featureKeys: ['questionBank', 'exams', 'grades'],
+  },
+  {
+    id: 'student_affairs',
+    name: 'งานกิจการนักเรียนและส่วนกลาง (Student Affairs & Operation)',
+    featureKeys: ['attendance', 'morningRollCall', 'dutySchedule', 'announcements', 'tasks', 'feedback', 'behaviorScore', 'reports', 'aiAgents', 'futurePlan', 'wordGame'],
+  },
+];
+
+// Removed category cards metadata
+
+type MenuIconItem = {
+  id: string;
+  label: string;
+  subtitle?: string;
+  icon: IconType;
+  path: string;
+  accent: string;
 };
 
-// Apple Music Album Art Card — full square with label inside bottom-left
-function AppleMusicCard({
+const AppleMusicCard = memo(function AppleMusicCard({
   item,
-  index,
   onClick,
 }: {
-  item: { id: string; label: string; subtitle?: string; icon: LucideIcon; accent: string };
-  index: number;
+  item: MenuIconItem;
   onClick: () => void;
 }) {
-  const [c1, c2] = ACCENT_PAIRS[item.accent] ?? [item.accent, item.accent];
-
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, scale: 0.92 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.92 }}
-      transition={{ duration: 0.22, delay: index * 0.02 }}
-      className="flex flex-col gap-2 group cursor-pointer select-none"
+    <button
+      type="button"
       onClick={onClick}
+      className="flex flex-col gap-2 group cursor-pointer select-none text-left w-full active:scale-[0.98] transition-transform duration-100"
     >
-      {/* Square Card */}
-      <motion.div
-        whileHover={{ opacity: 0.95 }}
-        whileTap={{ scale: 0.96 }}
-        transition={{ type: 'spring', stiffness: 380, damping: 26 }}
-        className="relative w-full overflow-hidden"
+      <div
+        className="relative w-full overflow-hidden hover:opacity-95 transition-opacity duration-150"
         style={{
           aspectRatio: '1',
           borderRadius: 16,
-          background: `linear-gradient(160deg, ${c1} 0%, ${c2} 100%)`,
+          backgroundColor: item.accent,
+          backgroundImage: 'linear-gradient(45deg, rgba(255, 255, 255, 0.28) 0%, rgba(0, 0, 0, 0.25) 100%)',
         }}
       >
-        {/* Shimmer top-right highlight */}
-        <div style={{
-          position: 'absolute', inset: 0,
-          background: 'radial-gradient(ellipse at 75% 12%, rgba(255,255,255,0.32) 0%, transparent 58%)',
-          pointerEvents: 'none',
-        }} />
-        {/* Bottom gradient scrim for text legibility */}
-        <div style={{
-          position: 'absolute', inset: 0,
-          background: 'linear-gradient(to top, rgba(0,0,0,0.42) 0%, transparent 55%)',
-          pointerEvents: 'none',
-        }} />
-        {/* Title inside card — bottom-left */}
+        {/* Top-Right Icon */}
+        <div className="absolute top-3 right-3 text-white pointer-events-none z-10">
+          <item.icon className="w-5 h-5" />
+        </div>
+
         <div className="absolute bottom-0 left-0 right-0 p-2 pointer-events-none">
-          <p className="text-white font-black leading-tight line-clamp-2"
-            style={{ fontSize: 'clamp(10px, 1.5vw, 14px)', textShadow: '0 0.5px 2px rgba(0,0,0,0.2)' }}>
+          <p
+            className="text-white font-black leading-tight line-clamp-2"
+            style={{ fontSize: 'clamp(10px, 1.5vw, 14px)', textShadow: '0 0.5px 2px rgba(0,0,0,0.2)' }}
+          >
             {item.label}
           </p>
         </div>
-      </motion.div>
-
-      {/* Subtitle below card */}
+      </div>
       {item.subtitle && (
         <p className="text-[11px] text-slate-400 leading-tight line-clamp-1 px-0.5">
           {item.subtitle}
         </p>
       )}
-    </motion.div>
+    </button>
   );
-}
+});
 
-const HI2_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
-  users: HiOutlineUsers,
-  teachers: HiOutlineUsers,
-  students: HiOutlineUsers,
-  classes: HiOutlineHome,
-  roles: HiOutlineShieldCheck,
-  curriculum: HiOutlineBookOpen,
-  schedule: HiOutlineCalendarDays,
-  calendar: HiOutlineCalendarDays,
-  teaching: HiOutlineClipboardDocumentList,
-  attendance: HiOutlineClipboardDocumentList,
-  morningRollCall: HiOutlineClipboardDocumentCheck,
-  staffAttendance: HiOutlineClock,
-  leave: HiOutlineDocumentText,
-  dutySchedule: HiOutlineShieldCheck,
-  reports: HiOutlineChatBubbleLeftRight,
-  announcements: HiOutlineBell,
-  feedback: HiOutlineMegaphone,
-  exams: HiOutlineClipboardDocumentList,
-  questionBank: HiOutlineBookOpen,
-  grades: HiOutlineAcademicCap,
-  settings: HiOutlineCog6Tooth,
-};
+// Removed unused MobileAppIcon and Hi2 icon helpers
 
-// iOS Style App Icon for Mobile
-function MobileAppIcon({
-  item,
-  index,
-  onClick,
-}: {
-  item: { id: string; label: string; icon: LucideIcon; accent: string };
-  index: number;
-  onClick: () => void;
-}) {
-  const [c1, c2] = ACCENT_PAIRS[item.accent] ?? [item.accent, item.accent];
-  const Icon = item.icon;
-  const featureKey = item.id.split(':')[0];
-  const Hi2Icon = HI2_ICON_MAP[featureKey];
-
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, scale: 0.75, y: 16 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.75 }}
-      transition={{ type: 'spring', stiffness: 340, damping: 28, delay: index * 0.015 }}
-      className="flex flex-col items-center gap-[7px] cursor-pointer select-none"
-      onClick={onClick}
-    >
-      {/* iOS Squircle Icon */}
-      <motion.div
-        whileTap={{ scale: 0.86 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-        className="w-[62px] h-[62px] flex items-center justify-center relative overflow-hidden"
-        style={{
-          borderRadius: '27%',
-          background: `linear-gradient(145deg, ${c1} 0%, ${c2} 100%)`,
-          boxShadow: `0 4px 16px ${c1}55, 0 1px 3px rgba(0,0,0,0.12)`,
-        }}
-      >
-        {/* Top-left gloss */}
-        <div style={{
-          position: 'absolute',
-          top: 0, left: 0, right: 0,
-          height: '50%',
-          background: 'linear-gradient(180deg, rgba(255,255,255,0.28) 0%, transparent 100%)',
-          borderRadius: '27% 27% 0 0',
-          pointerEvents: 'none',
-        }} />
-        {Hi2Icon ? (
-          <Hi2Icon className="w-[28px] h-[28px] text-white relative z-10 drop-shadow-sm" />
-        ) : (
-          <Icon className="w-[28px] h-[28px] text-white relative z-10 drop-shadow-sm" strokeWidth={2} />
-        )}
-      </motion.div>
-
-      {/* Label */}
-      <span className="text-[10.5px] font-medium text-slate-600 text-center line-clamp-1 w-full px-0.5 leading-tight tracking-tight">
-        {item.label}
-      </span>
-    </motion.div>
-  );
-}
+// Removed CategorySelectorCard
 
 const container = {
   hidden: {},
@@ -247,38 +197,114 @@ const item = {
 
 function DashboardWidgets({
   permMap,
+  permissions,
   role,
 }: {
   permMap: Record<string, string> | undefined;
+  permissions?: FeaturePermission[];
   role?: string;
 }) {
-  const hasAnyExplicitPerms = !!permMap && Object.keys(permMap).length > 0;
-  const studentFallbackWidgetKeys = new Set([
-    'widget_feedbackStatus',
-    'widget_studentProfile',
-    'widget_studentLeave',
-    'widget_leaveQuota',
-    'widget_studentExamScore',
-  ]);
+  const isEnabled = (key: string) => !!(permMap && permMap[key] !== undefined);
 
-  const isEnabled = (key: string) => {
-    if (permMap && permMap[key] !== undefined) return true;
-    if (!hasAnyExplicitPerms) {
-      if (role === 'student' && studentFallbackWidgetKeys.has(key)) return true;
-      if ((role === 'admin' || role === 'sysadmin') && key.startsWith('widget_')) return true;
-      if ((role === 'admin' || role === 'sysadmin') && key === 'leave') return true;
-    }
-    return false;
+  const permissionOrder = useMemo(() => {
+    const orderMap = new Map<string, number>();
+    permissions?.forEach((permission, idx) => {
+      orderMap.set(permission.featureKey, idx);
+    });
+    return orderMap;
+  }, [permissions]);
+
+  const getOrder = (featureKey: string, fallback: number) => (
+    permissionOrder.get(featureKey) ?? fallback
+  );
+
+  const hasRole = (...allowed: string[]) => {
+    if (!role) return false;
+    if (role === 'sysadmin') return true;
+    return allowed.includes(role);
   };
 
-  const shouldShowStudentHardFallback = role === 'student'
-    && !isEnabled('widget_announcements')
-    && !isEnabled('widget_feedbackStatus')
-    && !isEnabled('widget_calendar')
-    && !isEnabled('widget_studentProfile')
-    && !isEnabled('widget_leave')
-    && !isEnabled('widget_studentLeave')
-    && !isEnabled('widget_leaveQuota');
+  const widgetItems = useMemo(() => {
+    const items: { key: string; order: number; node: React.ReactNode }[] = [];
+    let fallbackOrder = 1000;
+
+    const pushItem = (key: string, orderKey: string, node: React.ReactNode) => {
+      items.push({
+        key,
+        order: getOrder(orderKey, fallbackOrder++),
+        node,
+      });
+    };
+
+    if (isEnabled('widget_announcements')) {
+      pushItem('widget_announcements', 'widget_announcements', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><AnnouncementWidget /></motion.div>);
+    }
+    if (isEnabled('widget_feedbackStatus')) {
+      pushItem('widget_feedbackStatus', 'widget_feedbackStatus', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><FeedbackStatusWidget /></motion.div>);
+    }
+    if (isEnabled('widget_calendar')) {
+      pushItem('widget_calendar', 'widget_calendar', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><UpcomingEventsWidget /></motion.div>);
+    }
+    if (isEnabled('widget_studentProfile')) {
+      pushItem('widget_studentProfile', 'widget_studentProfile', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentProfileWidget /></motion.div>);
+    }
+    if (isEnabled('widget_studentSummary') && hasRole('admin', 'sysadmin')) {
+      pushItem('widget_studentSummary', 'widget_studentSummary', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentStatWidget /></motion.div>);
+    }
+    if (isEnabled('widget_staffAttendance') && hasRole('staff', 'admin', 'teacher')) {
+      pushItem('widget_staffAttendance', 'widget_staffAttendance', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StaffCheckInWidget /></motion.div>);
+    }
+    if (isEnabled('widget_morningRollCall') && hasRole('teacher')) {
+      pushItem('widget_morningRollCall', 'widget_morningRollCall', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><MorningRollCallWidget /></motion.div>);
+    }
+    if (isEnabled('widget_teacherDailyTasks') && hasRole('teacher')) {
+      pushItem('widget_teacherDailyTasks', 'widget_teacherDailyTasks', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><TeacherDailyTaskWidget /></motion.div>);
+    }
+    if (isEnabled('widget_morningRollCallSummary') && hasRole('admin', 'sysadmin')) {
+      pushItem('widget_morningRollCallSummary', 'widget_morningRollCallSummary', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><MorningRollCallSummaryWidget /></motion.div>);
+    }
+    if (isEnabled('widget_schedule') && hasRole('student')) {
+      pushItem('widget_studentSchedule', 'widget_schedule', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentScheduleWidget /></motion.div>);
+    }
+    if (isEnabled('widget_schedule') && hasRole('teacher')) {
+      pushItem('widget_todaySchedule', 'widget_schedule', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><TodayScheduleWidget /></motion.div>);
+    }
+    if (isEnabled('pending_tasks') && hasRole('teacher')) {
+      pushItem('widget_pendingTasks', 'pending_tasks', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><PendingTaskWidget /></motion.div>);
+    }
+    if (isEnabled('widget_leave') && hasRole('student', 'staff', 'teacher', 'admin', 'sysadmin')) {
+      pushItem('widget_leave', 'widget_leave', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><LeaveWidget /></motion.div>);
+    }
+    if (isEnabled('widget_studentLeave') && hasRole('student')) {
+      pushItem('widget_studentLeave', 'widget_studentLeave', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentQuickLeaveWidget /></motion.div>);
+    }
+    if (isEnabled('widget_leaveQuota') && hasRole('student', 'staff', 'teacher', 'admin', 'sysadmin')) {
+      pushItem('widget_leaveQuota', 'widget_leaveQuota', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><LeaveQuotaWidget /></motion.div>);
+    }
+    if (isEnabled('widget_dailyAttendanceSummary') && hasRole('admin', 'sysadmin')) {
+      pushItem('widget_dailyAttendanceSummary', 'widget_dailyAttendanceSummary', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><DailyAttendanceSummaryWidget /></motion.div>);
+    }
+    if (isEnabled('widget_teacherLiveStatus') && hasRole('admin', 'sysadmin')) {
+      pushItem('widget_teacherLiveStatus', 'widget_teacherLiveStatus', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><ExecutiveTeachingStatusWidget /></motion.div>);
+    }
+    if (isEnabled('widget_studentExamScore') && hasRole('student')) {
+      pushItem('widget_studentExamScore', 'widget_studentExamScore', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentExamScoreWidget /></motion.div>);
+    }
+    if (isEnabled('widget_futurePlan') && hasRole('student', 'teacher', 'admin', 'sysadmin')) {
+      pushItem('widget_futurePlan', 'widget_futurePlan', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><FuturePlanWidget /></motion.div>);
+    }
+    if (isEnabled('widget_horoscope')) {
+      pushItem('widget_horoscope', 'widget_horoscope', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><HoroscopeWidget /></motion.div>);
+    }
+    if (isEnabled('widget_wordGame')) {
+      pushItem('widget_wordGame', 'widget_wordGame', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><WordGameWidget /></motion.div>);
+    }
+    if (isEnabled('widget_behaviorScore') && hasRole('teacher', 'staff', 'admin', 'sysadmin')) {
+      pushItem('widget_behaviorScore', 'widget_behaviorScore', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><BehaviorScoreWidget /></motion.div>);
+    }
+
+    return items.sort((a, b) => a.order - b.order);
+  }, [getOrder, hasRole, isEnabled]);
 
   return (
     <div className="flex flex-col gap-4 min-w-0">
@@ -286,117 +312,11 @@ function DashboardWidgets({
         variants={container}
         initial="hidden"
         animate="show"
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 auto-rows-min items-stretch"
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 items-stretch"
       >
-        {isEnabled('widget_announcements') && (
-          <motion.div variants={item} className="min-w-0"><AnnouncementWidget /></motion.div>
-        )}
-
-        {isEnabled('widget_feedbackStatus') && (
-          <motion.div variants={item} className="min-w-0"><FeedbackStatusWidget /></motion.div>
-        )}
-
-        {isEnabled('widget_calendar') && (
-          <motion.div variants={item} className="min-w-0"><UpcomingEventsWidget /></motion.div>
-        )}
-
-        {isEnabled('widget_studentProfile') && (
-          <motion.div variants={item} className="min-w-0"><StudentProfileWidget /></motion.div>
-        )}
-
-        {isEnabled('widget_studentSummary') && (
-          <ProtectedWidget allowedRoles={['admin', 'sysadmin']}>
-            <motion.div variants={item} className="min-w-0"><StudentStatWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_staffAttendance') && (
-          <ProtectedWidget allowedRoles={['staff', 'admin', 'teacher']}>
-            <motion.div variants={item} className="min-w-0"><StaffCheckInWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_morningRollCall') && (
-          <ProtectedWidget allowedRoles={['teacher']}>
-            <motion.div variants={item} className="min-w-0"><MorningRollCallWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_morningRollCallSummary') && (
-          <ProtectedWidget allowedRoles={['admin', 'sysadmin']}>
-            <motion.div variants={item} className="min-w-0"><MorningRollCallSummaryWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('schedule') && (
-          <ProtectedWidget allowedRoles={['student']}>
-            <motion.div variants={item} className="min-w-0"><StudentScheduleWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('schedule') && (
-          <ProtectedWidget allowedRoles={['teacher']}>
-            <motion.div variants={item} className="min-w-0"><TodayScheduleWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('pending_tasks') && (
-          <ProtectedWidget allowedRoles={['teacher']}>
-            <motion.div variants={item} className="min-w-0"><PendingTaskWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_leave') && (
-          <ProtectedWidget allowedRoles={['student', 'staff', 'teacher', 'admin', 'sysadmin']}>
-            <motion.div variants={item} className="min-w-0"><LeaveWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_studentLeave') && (
-          <ProtectedWidget allowedRoles={['student']}>
-            <motion.div variants={item} className="min-w-0"><StudentQuickLeaveWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_leaveQuota') && (
-          <ProtectedWidget allowedRoles={['student', 'staff', 'teacher', 'admin', 'sysadmin']}>
-            <motion.div variants={item} className="min-w-0"><LeaveQuotaWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_dailyAttendanceSummary') && (
-          <ProtectedWidget allowedRoles={['admin', 'sysadmin']}>
-            <motion.div variants={item} className="min-w-0"><DailyAttendanceSummaryWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_teacherLiveStatus') && (
-          <ProtectedWidget allowedRoles={['admin', 'sysadmin']}>
-            <motion.div variants={item} className="min-w-0"><ExecutiveTeachingStatusWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_studentExamScore') && (
-          <ProtectedWidget allowedRoles={['student']}>
-            <motion.div variants={item} className="min-w-0"><StudentExamScoreWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {isEnabled('widget_futurePlan') && (
-          <ProtectedWidget allowedRoles={['student', 'teacher', 'admin', 'sysadmin']}>
-            <motion.div variants={item} className="min-w-0"><FuturePlanWidget /></motion.div>
-          </ProtectedWidget>
-        )}
-
-        {shouldShowStudentHardFallback && (
-          <>
-            <motion.div variants={item} className="min-w-0"><FeedbackStatusWidget /></motion.div>
-            <motion.div variants={item} className="min-w-0"><StudentProfileWidget /></motion.div>
-            <motion.div variants={item} className="min-w-0"><StudentQuickLeaveWidget /></motion.div>
-            <motion.div variants={item} className="min-w-0"><LeaveQuotaWidget /></motion.div>
-            <motion.div variants={item} className="min-w-0"><StudentExamScoreWidget /></motion.div>
-          </>
-        )}
+        {widgetItems.map((widget) => (
+          <div key={widget.key} className="contents">{widget.node}</div>
+        ))}
       </motion.div>
     </div>
   );
@@ -406,27 +326,27 @@ export default function HomePage() {
   const navigate = useNavigate();
   const { role, isLoading: authLoading } = useAuth();
   const { view: contextView } = useOutletContext<{ view: 'dashboard' | 'menu' }>();
-  const view = contextView;
-  const [isMobile, setIsMobile] = useState(() => (
-    typeof window !== 'undefined' ? window.innerWidth < 768 : false
-  ));
-  const [currentPage, setCurrentPage] = useState(0);
-  const ITEMS_PER_PAGE = isMobile ? 16 : 24;
+  const view = contextView ?? 'dashboard';
+  // Removed category selector state
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const onResize = () => setIsMobile(window.innerWidth < 768);
-    onResize();
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+  // Removed mobile height measurement hooks
 
+
+
+  const isSysAdmin = role === 'sysadmin';
   const { data: rolePermissions, isLoading: permsLoading } = useRolePermissions(role ?? undefined);
 
+  const effectivePermissions = useMemo(() => {
+    if (isSysAdmin) {
+      return applySysadminWidgetOverrides(buildSysadminPermissionView(), rolePermissions ?? undefined);
+    }
+    return rolePermissions;
+  }, [isSysAdmin, rolePermissions]);
+
   const cards = useMemo(() => {
-    if (!rolePermissions || !rolePermissions.permMap) return [];
-    return ALL_MENUS.filter(card => !!rolePermissions.permMap?.[card.featureKey]);
-  }, [rolePermissions]);
+    if (!effectivePermissions?.permMap) return [];
+    return ALL_MENUS.filter((card) => !!effectivePermissions.permMap?.[card.featureKey]);
+  }, [effectivePermissions]);
 
   const allItems = useMemo(
     () =>
@@ -436,141 +356,109 @@ export default function HomePage() {
         subtitle: c.subtitle,
         icon: c.icon,
         path: c.path,
-        accent: c.accent,
       })),
     [cards],
   );
 
-  const totalPages = Math.ceil(allItems.length / ITEMS_PER_PAGE);
-  const paginatedItems = allItems.slice(currentPage * ITEMS_PER_PAGE, (currentPage + 1) * ITEMS_PER_PAGE);
+  const groupedCategories = useMemo(() => {
+    return MENU_CATEGORIES.map((cat) => {
+      const itemsInCat = allItems
+        .filter((item) => {
+          const featureKey = item.id.split(':')[0];
+          return cat.featureKeys.includes(featureKey);
+        })
+        .map((item) => {
+          const featureKey = item.id.split(':')[0];
+          const originalIdx = ALL_MENUS_INDEX_MAP.get(featureKey) ?? 0;
+          return {
+            ...item,
+            accent: getMenuAccentColor(originalIdx, 4),
+          };
+        });
+
+      return {
+        ...cat,
+        items: itemsInCat,
+      };
+    }).filter((cat) => cat.items.length > 0);
+  }, [allItems]);
+
+  const handleMenuNavigate = useCallback(
+    (path: string) => navigate(path),
+    [navigate],
+  );
 
   if (permsLoading || authLoading) {
     return (
-      <div className="flex flex-col h-full items-center justify-center p-12">
-        <div className="w-full max-w-[200px] flex flex-col items-center gap-4">
-          <IndeterminateProgress />
-          <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest font-sukhumvit">กำลังโหลดระบบ...</p>
-        </div>
+      <div className="relative flex w-full flex-1 min-h-0 flex-col">
+        {view === 'dashboard' ? (
+          <div className="w-full px-1 pb-24">
+            <DashboardWidgetsSkeleton />
+          </div>
+        ) : (
+          <MenuPageSkeleton />
+        )}
+      </div>
+    );
+  }
+
+  if (!isSysAdmin && role && !effectivePermissions?.permMap) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center p-8 text-center gap-3">
+        <p className="text-sm font-bold text-slate-700 font-sukhumvit">ไม่สามารถเชื่อมต่อฐานข้อมูลได้</p>
+        <p className="text-xs text-slate-500 font-sarabun max-w-sm">
+          ระบบโหลดสิทธิ์การใช้งานไม่สำเร็จ กรุณารีเฟรชหน้าหรือตรวจสอบการตั้งค่า Firestore (ฐานข้อมูล pmv1)
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="relative flex flex-col h-full min-h-0 overflow-hidden">
-      <div className="relative z-10 flex-1 flex flex-col min-h-0">
-        <AnimatePresence mode="wait">
-          {view === 'dashboard' && (
-            <motion.div
-              key="dashboard"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.3 }}
-              className="w-full h-full overflow-y-auto scrollbar-hide px-1"
-            >
-              <div className="pb-24">
-                <DashboardWidgets permMap={rolePermissions?.permMap} role={role ?? undefined} />
-              </div>
-            </motion.div>
+    <div className="relative flex flex-col w-full flex-1 min-h-0">
+      <div className="relative z-10 flex flex-col flex-1 min-h-0 w-full">
+        {/* Dashboard — unmount when on menu tab to release Firestore listeners */}
+        {view === 'dashboard' && (
+          <div className="w-full px-1 pb-24">
+            <DashboardWidgets
+              permMap={effectivePermissions?.permMap}
+              permissions={effectivePermissions?.permissions}
+              role={role ?? undefined}
+            />
+          </div>
+        )}
+
+        {/* Menu — keep mounted so tab switch shows icons immediately */}
+        <div
+          className={cn(
+            'flex flex-col w-full min-h-0 flex-1 touch-pan-y',
+            view !== 'menu' && 'hidden',
           )}
-
-          {view === 'menu' && (
-            <motion.div
-              key="menu"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.28 }}
-              className="absolute inset-0 md:relative md:inset-auto flex flex-col overflow-y-auto scrollbar-hide"
-            >
-              {/* Desktop View: Grid of Cards (scrollable) */}
-              <div className="hidden md:block overflow-y-auto flex-1">
-                <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}>
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    {paginatedItems.map((menuItem, i) => (
-                      <AppleMusicCard
-                        key={menuItem.id}
-                        item={menuItem}
-                        index={i}
-                        onClick={() => navigate(menuItem.path)}
-                      />
-                    ))}
-                  </AnimatePresence>
+        >
+          {/* Main Category Groups Rendered Directly */}
+          <div className="flex-grow flex flex-col gap-8 w-full max-w-7xl mx-auto py-6 px-4 overflow-y-auto max-h-full">
+            {groupedCategories.map((cat) => (
+              <div key={cat.id} className="flex flex-col min-h-0">
+                {/* Category Header */}
+                <div className="flex items-center mb-3.5 select-none">
+                  <span className="text-[13.5px] font-black text-slate-800 tracking-wide font-sukhumvit uppercase">
+                    {cat.name}
+                  </span>
                 </div>
-              </div>
 
-              {/* Mobile View: iOS Style Icon Grid — no scroll, fixed 1 screen */}
-              <motion.div
-                className="md:hidden flex-1 flex flex-col pt-3 pb-4 overflow-y-auto"
-                drag="x"
-                dragConstraints={{ left: 0, right: 0 }}
-                dragElastic={0.08}
-                onDragEnd={(_, info) => {
-                  if (info.offset.x < -50 && currentPage < totalPages - 1) {
-                    setCurrentPage(prev => prev + 1);
-                  } else if (info.offset.x > 50 && currentPage > 0) {
-                    setCurrentPage(prev => prev - 1);
-                  }
-                }}
-              >
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.div
-                    key={currentPage}
-                    initial={{ opacity: 0, x: 32 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -32 }}
-                    transition={{ type: 'spring', stiffness: 380, damping: 34 }}
-                    className="grid grid-cols-4 gap-y-6 gap-x-2 px-3 min-[390px]:px-5"
-                  >
-                    {paginatedItems.map((menuItem, i) => (
-                      <MobileAppIcon
-                        key={menuItem.id}
-                        item={menuItem}
-                        index={i}
-                        onClick={() => navigate(menuItem.path)}
-                      />
-                    ))}
-                  </motion.div>
-                </AnimatePresence>
-
-                {/* Mobile Pagination Dots — iOS style */}
-                {totalPages > 1 && (
-                  <div className="flex justify-center items-center gap-[6px] mt-auto pt-6">
-                    {[...Array(totalPages)].map((_, i) => (
-                      <motion.button
-                        key={i}
-                        onClick={() => setCurrentPage(i)}
-                        animate={{
-                          width: currentPage === i ? 20 : 6,
-                          opacity: currentPage === i ? 1 : 0.35,
-                        }}
-                        transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                        className="h-[6px] rounded-full bg-slate-500"
-                        style={{ minWidth: 6 }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </motion.div>
-
-              {/* Desktop Pagination */}
-              {totalPages > 1 && (
-                <div className="hidden md:flex justify-center items-center gap-2 mt-12 pb-12">
-                  {[...Array(totalPages)].map((_, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setCurrentPage(i)}
-                      className={`h-1.5 rounded-full transition-all duration-300 ${currentPage === i
-                        ? 'w-8 bg-slate-800 shadow-sm'
-                        : 'w-1.5 bg-slate-300 hover:bg-slate-400'
-                        }`}
+                {/* Grid of Apple Music Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-4">
+                  {cat.items.map((menuItem) => (
+                    <AppleMusicCard
+                      key={menuItem.id}
+                      item={menuItem}
+                      onClick={() => handleMenuNavigate(menuItem.path)}
                     />
                   ))}
                 </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

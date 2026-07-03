@@ -196,6 +196,46 @@ export function useSetQuestions(setId: string | null) {
     }
   };
 
+  /** ลบข้อสอบเดิมทั้งหมดแล้วสร้างใหม่ (ใช้กับชุด PDF + เฉลย) */
+  const replaceAllQuestions = async (
+    dataList: NewQuestion[],
+    onAbsoluteCount: (count: number) => Promise<void>,
+  ) => {
+    if (!setId) throw new Error('No setId');
+    const now = Date.now();
+    const deleteBatch = writeBatch(db);
+    questions.forEach((q) => deleteBatch.delete(questionDoc(setId, q.id)));
+    if (questions.length > 0) {
+      await deleteBatch.commit();
+    }
+
+    const chunkSize = 400;
+    for (let offset = 0; offset < dataList.length; offset += chunkSize) {
+      const chunk = dataList.slice(offset, offset + chunkSize);
+      const writeBatchOp = writeBatch(db);
+      chunk.forEach((data, index) => {
+        const qRef = doc(questionsCol(setId));
+        const payload: Omit<Question, 'id'> = {
+          ...data,
+          setId,
+          orderIndex: offset + index,
+          createdBy: user?.uid ?? 'unknown',
+          createdByName: user?.displayName ?? user?.email ?? '',
+          createdAt: now,
+          updatedAt: now,
+        };
+        const sanitized = Object.fromEntries(
+          Object.entries(payload).filter(([, v]) => v !== undefined),
+        );
+        writeBatchOp.set(qRef, sanitized as never);
+      });
+      await writeBatchOp.commit();
+    }
+
+    await onAbsoluteCount(dataList.length);
+    toast.success(`บันทึกเฉลย ${dataList.length} ข้อเรียบร้อยแล้ว`);
+  };
+
   // ── Derived ──────────────────────────────────────────────────────────────────
 
   const stats = useMemo(() => {
@@ -218,5 +258,6 @@ export function useSetQuestions(setId: string | null) {
     duplicateQuestion,
     reorderQuestions,
     bulkAddQuestions,
+    replaceAllQuestions,
   };
 }

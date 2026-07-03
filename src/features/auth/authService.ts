@@ -3,18 +3,32 @@ import {
   signOut,
   onAuthStateChanged
 } from "firebase/auth";
-import { auth, db } from "@/lib/firebase";
+import { httpsCallable } from "firebase/functions";
+import { auth, db, functions } from "@/lib/firebase";
 import {
   doc,
-  getDocFromServer,
-  onSnapshot,
+  getDoc,
+  getDocs,
+  query,
+  collection,
+  where,
+  limit,
+  updateDoc,
   setDoc,
   serverTimestamp,
 } from "firebase/firestore";
 import { useAuthStore } from "@/store/authStore";
-import { FEATURE_LIST } from "@/types/rolePermission";
+import { openFirestoreGateway, resetFirestoreGateway, runAfterGateway, whenFirestoreGatewayOpen } from "@/lib/firestoreShared/bootstrap";
+import { resetSharedFirestoreStores } from "@/lib/firestoreShared/resetSharedStores";
+import {
+  authControlsStore,
+  getUserGuardStore,
+  type AuthControlsSnapshot,
+  type UserGuardSnapshot,
+} from "@/lib/firestoreShared/authGuardStore";
+import { notifyActiveAcademicYearChanged } from "@/hooks/useActiveAcademicYear";
+import { FEATURE_LIST, resolveEffectiveRole, SYSADMIN_EMAIL } from "@/types/rolePermission";
 import type { FeaturePermission, RolePermissionConfig } from "@/types/rolePermission";
-import type { DocumentData, DocumentSnapshot, QueryDocumentSnapshot } from "firebase/firestore";
 
 const SESSION_EXPIRES_AT_KEY = "auth_session_expires_at";
 const SESSION_STARTED_AT_KEY = "auth_session_started_at";
@@ -81,9 +95,9 @@ function makeDefaultPermissions(roleId: string): FeaturePermission[] {
       });
     case 'teacher':
       return FEATURE_LIST.map(f => {
-        if (['syllabus', 'teaching', 'schedule', 'students', 'grades', 'attendance', 'calendar', 'exams', 'questionBank', 'feedback_manage'].includes(f.featureKey))
+        if (['syllabus', 'teaching', 'schedule', 'students', 'grades', 'attendance', 'morningRollCall', 'calendar', 'exams', 'questionBank', 'feedback_manage'].includes(f.featureKey))
           return { ...f, enabled: true, accessLevel: 'edit' as const };
-        if (['classes', 'reports', 'announcements', 'widget_announcements', 'feedback', 'feedback_view_identity', 'widget_feedbackStatus', 'widget_studentProfile'].includes(f.featureKey))
+        if (['classes', 'reports', 'announcements', 'widget_announcements', 'feedback', 'feedback_view_identity', 'widget_feedbackStatus', 'widget_studentProfile', 'widget_schedule', 'widget_morningRollCall', 'widget_teacherDailyTasks', 'widget_staffAttendance'].includes(f.featureKey))
           return { ...f, enabled: true, accessLevel: 'view-only' as const };
         return { ...f, enabled: false, accessLevel: 'view-only' as const };
       });
@@ -91,20 +105,20 @@ function makeDefaultPermissions(roleId: string): FeaturePermission[] {
       return FEATURE_LIST.map(f => {
         if (['staffAttendance'].includes(f.featureKey))
           return { ...f, enabled: true, accessLevel: 'edit' as const };
-        if (['students', 'attendance', 'announcements', 'widget_announcements', 'feedback', 'widget_feedbackStatus', 'calendar', 'reports', 'schedule', 'widget_studentProfile'].includes(f.featureKey))
+        if (['students', 'attendance', 'announcements', 'widget_announcements', 'feedback', 'widget_feedbackStatus', 'calendar', 'reports', 'schedule', 'widget_studentProfile', 'widget_schedule'].includes(f.featureKey))
           return { ...f, enabled: true, accessLevel: 'view-only' as const };
         return { ...f, enabled: false, accessLevel: 'view-only' as const };
       });
     case 'parent':
       return FEATURE_LIST.map(f => {
-        if (['calendar', 'announcements', 'widget_announcements', 'widget_feedbackStatus', 'grades', 'attendance', 'schedule', 'widget_studentProfile'].includes(f.featureKey))
+        if (['calendar', 'announcements', 'widget_announcements', 'widget_feedbackStatus', 'grades', 'attendance', 'schedule', 'widget_studentProfile', 'widget_schedule'].includes(f.featureKey))
           return { ...f, enabled: true, accessLevel: 'view-only' as const };
         return { ...f, enabled: false, accessLevel: 'view-only' as const };
       });
     case 'student':
     default:
       return FEATURE_LIST.map(f => {
-        if (['calendar', 'announcements', 'widget_announcements', 'feedback', 'widget_feedbackStatus', 'grades', 'attendance', 'schedule', 'exams'].includes(f.featureKey))
+        if (['calendar', 'announcements', 'widget_announcements', 'feedback', 'widget_feedbackStatus', 'grades', 'attendance', 'schedule', 'exams', 'widget_schedule'].includes(f.featureKey))
           return { ...f, enabled: true, accessLevel: 'view-only' as const };
         return { ...f, enabled: false, accessLevel: 'view-only' as const };
       });
@@ -116,7 +130,7 @@ async function ensureRolePermissions(role: string): Promise<void> {
   if (role === 'sysadmin') return; // sysadmin bypass rules ทั้งหมดอยู่แล้ว
   try {
     const ref = doc(db, 'role_permissions', role);
-    const snap = await getDocFromServer(ref);
+    const snap = await getDoc(ref);
     if (!snap.exists()) {
       const permissions = makeDefaultPermissions(role);
       const config: RolePermissionConfig = {
@@ -143,13 +157,9 @@ export async function hashPassword(password: string): Promise<string> {
     .join('');
 }
 
-// ดึงปีการศึกษาที่ active จาก Firestore แล้ว sync ลง localStorage
-// เรียกหลัง login ทุกครั้งเพื่อให้ทุก user ได้ค่าเดียวกับที่ SysAdmin ตั้งไว้
-// Settings เก็บที่ settings/academic_year (doc เดียว) → map → AcademicYear format
 async function syncActiveAcademicYear(): Promise<void> {
   try {
-    const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
-    const snap = await getDoc(firestoreDoc(db, 'settings', 'academic_year'));
+    const snap = await getDoc(doc(db, 'settings', 'academic_year'));
     if (snap.exists()) {
       const data = snap.data() as { currentYear?: string; startDate?: string; endDate?: string; activeSemester?: number };
       const yearData = {
@@ -160,17 +170,66 @@ async function syncActiveAcademicYear(): Promise<void> {
         endDate: data.endDate ?? '',
         status: 'active' as const,
       };
-      localStorage.setItem('activeAcademicYear', JSON.stringify(yearData));
+      const nextJson = JSON.stringify(yearData);
+      if (localStorage.getItem('activeAcademicYear') === nextJson) return;
+      localStorage.setItem('activeAcademicYear', nextJson);
+      notifyActiveAcademicYearChanged();
     }
   } catch (err) {
     console.warn('[authService] syncActiveAcademicYear failed (non-fatal):', err);
   }
 }
 
+/** dev: ตรวจว่าเชื่อม pmv1 ได้และมีข้อมูลหรือไม่ */
+async function probeFirestoreConnection(): Promise<void> {
+  if (!import.meta.env.DEV) return;
+  try {
+    const { collection, doc, getDoc, getDocs, limit, query } = await import('firebase/firestore');
+    const [classesSnap, yearSnap] = await Promise.all([
+      getDocs(query(collection(db, 'classes'), limit(3))),
+      getDoc(doc(db, 'settings', 'academic_year')),
+    ]);
+    console.info(`[firestore:pmv1] probe OK — classes sample: ${classesSnap.size} doc(s)`);
+    if (yearSnap.exists()) {
+      const y = yearSnap.data() as { currentYear?: string; activeSemester?: number };
+      console.info(`[firestore:pmv1] academic_year: ${y.currentYear ?? '?'} / ภาค ${y.activeSemester ?? '?'}`);
+    } else {
+      console.warn('[firestore:pmv1] ไม่พบ settings/academic_year — ตัวกรองปีการศึกษาอาจผิด');
+    }
+    if (classesSnap.size === 0) {
+      console.warn('[firestore:pmv1] pmv1 ตอบได้แต่ classes ว่าง — ตรวจว่าข้อมูลอยู่ใน pmv1 ไม่ใช่ (default)');
+    }
+  } catch (err) {
+    console.error('[firestore:pmv1] probe FAILED — ตรวจ rules, login, deploy rules ไป pmv1:', err);
+  }
+}
+
 let activeUnsubscribe: (() => void) | null = null;
 let activeSessionTimer: ReturnType<typeof setTimeout> | null = null;
-let activeUserGuardUnsubscribe: (() => void) | null = null;
-let activeGlobalGuardUnsubscribe: (() => void) | null = null;
+let activeUserGuardUnsub: (() => void) | null = null;
+let activeGlobalGuardUnsub: (() => void) | null = null;
+let activeProfileFetchTimer: ReturnType<typeof setTimeout> | null = null;
+let profileFetchGeneration = 0;
+/** uid ที่เปิด Firestore gateway แล้ว — ไม่ reset ซ้ำตอน token refresh */
+let firestoreGatewayUid: string | null = null;
+/** uid ที่ bootstrap profile แล้ว — ไม่ setLoading/refetch ซ้ำตอน token refresh */
+let lastBootstrappedUid: string | null = null;
+
+const PROFILE_FETCH_TIMEOUT_MS = 12_000;
+
+function clearProfileFetchTimer(): void {
+  if (activeProfileFetchTimer) {
+    clearTimeout(activeProfileFetchTimer);
+    activeProfileFetchTimer = null;
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return Promise.race([
+    promise,
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
+  ]);
+}
 
 function clearSessionTimer() {
   if (activeSessionTimer) {
@@ -180,24 +239,16 @@ function clearSessionTimer() {
 }
 
 function clearUserGuard() {
-  if (activeUserGuardUnsubscribe) {
-    try {
-      activeUserGuardUnsubscribe();
-    } catch {
-      // noop
-    }
-    activeUserGuardUnsubscribe = null;
+  if (activeUserGuardUnsub) {
+    activeUserGuardUnsub();
+    activeUserGuardUnsub = null;
   }
 }
 
 function clearGlobalGuard() {
-  if (activeGlobalGuardUnsubscribe) {
-    try {
-      activeGlobalGuardUnsubscribe();
-    } catch {
-      // noop
-    }
-    activeGlobalGuardUnsubscribe = null;
+  if (activeGlobalGuardUnsub) {
+    activeGlobalGuardUnsub();
+    activeGlobalGuardUnsub = null;
   }
 }
 
@@ -228,78 +279,69 @@ function toMillis(value: unknown): number {
   return 0;
 }
 
+function evaluateUserGuard(userUid: string, data: UserGuardSnapshot) {
+  const currentUser = auth.currentUser;
+  if (!currentUser || currentUser.uid !== userUid || !data) return;
+
+  const isInactive = data.status === 'inactive';
+  const startedAt = Math.max(
+    getSessionStartedAt() ?? 0,
+    Date.parse(currentUser.metadata.lastSignInTime || "") || 0
+  );
+  const invalidatedAt = Math.max(
+    toMillis(data.forceLogoutAt),
+    toMillis(data.sessionInvalidatedAt),
+    toMillis(data.hardResetAt),
+  );
+
+  const invalidatedCurrentSession = startedAt > 0 && invalidatedAt > (startedAt + 5000);
+  if (!isInactive && !invalidatedCurrentSession) return;
+
+  clearSessionLocalState();
+  clearUserGuard();
+  clearGlobalGuard();
+  void signOut(auth).catch(() => {});
+}
+
+function evaluateGlobalGuard(userUid: string, data: AuthControlsSnapshot) {
+  const currentUser = auth.currentUser;
+  if (!currentUser || currentUser.uid !== userUid || !data) return;
+
+  const startedAt = Math.max(
+    getSessionStartedAt() ?? 0,
+    Date.parse(currentUser.metadata.lastSignInTime || "") || 0
+  );
+  const invalidatedAt = Math.max(
+    toMillis(data.forceLogoutAllAt),
+    toMillis(data.hardResetAllAt),
+  );
+
+  const invalidatedCurrentSession = startedAt > 0 && invalidatedAt > (startedAt + 5000);
+  if (!invalidatedCurrentSession) return;
+
+  clearSessionLocalState();
+  clearUserGuard();
+  clearGlobalGuard();
+  void signOut(auth).catch(() => {});
+}
+
 function startUserGuard(userUid: string) {
   clearUserGuard();
-  const userRef = doc(db, 'users', userUid);
-  activeUserGuardUnsubscribe = onSnapshot(userRef, async (snap) => {
-    const currentUser = auth.currentUser;
-    if (!currentUser || currentUser.uid !== userUid) return;
-    if (!snap.exists()) return;
-
-    const data = snap.data() as {
-      status?: string;
-      forceLogoutAt?: unknown;
-      sessionInvalidatedAt?: unknown;
-      hardResetAt?: unknown;
-    };
-
-    const isInactive = data.status === 'inactive';
-    const startedAt = Math.max(
-      getSessionStartedAt() ?? 0,
-      Date.parse(currentUser.metadata.lastSignInTime || "") || 0
-    );
-    const invalidatedAt = Math.max(
-      toMillis(data.forceLogoutAt),
-      toMillis(data.sessionInvalidatedAt),
-      toMillis(data.hardResetAt),
-    );
-    
-    // Use a small buffer (5s) to avoid edge cases with local clock skew
-    const invalidatedCurrentSession = startedAt > 0 && invalidatedAt > (startedAt + 5000);
-
-    if (!isInactive && !invalidatedCurrentSession) return;
-
-    clearSessionLocalState();
-    clearUserGuard();
-    await signOut(auth).catch(() => {});
-  }, () => {
-    // Do not break auth flow if guard listener fails.
-  });
+  const store = getUserGuardStore(userUid);
+  const onChange = () => {
+    evaluateUserGuard(userUid, store.getSnapshot());
+  };
+  activeUserGuardUnsub = store.subscribe(onChange);
+  onChange();
 }
 
 function startGlobalGuard(userUid: string) {
   clearGlobalGuard();
-  const configRef = doc(db, 'system_config', 'auth_controls');
-  activeGlobalGuardUnsubscribe = onSnapshot(configRef, async (snap) => {
-    const currentUser = auth.currentUser;
-    if (!currentUser || currentUser.uid !== userUid) return;
-    if (!snap.exists()) return;
-
-    const data = snap.data() as {
-      forceLogoutAllAt?: unknown;
-      hardResetAllAt?: unknown;
-    };
-
-    const startedAt = Math.max(
-      getSessionStartedAt() ?? 0,
-      Date.parse(currentUser.metadata.lastSignInTime || "") || 0
-    );
-    const invalidatedAt = Math.max(
-      toMillis(data.forceLogoutAllAt),
-      toMillis(data.hardResetAllAt),
-    );
-    
-    // Buffer 5s to ensure we don't logout a user who just signed in while the logout was processing
-    const invalidatedCurrentSession = startedAt > 0 && invalidatedAt > (startedAt + 5000);
-    if (!invalidatedCurrentSession) return;
-
-    clearSessionLocalState();
-    clearUserGuard();
-    clearGlobalGuard();
-    await signOut(auth).catch(() => {});
-  }, () => {
-    // ignore global guard listener failure
-  });
+  const onChange = () => {
+    evaluateGlobalGuard(userUid, authControlsStore.getSnapshot());
+  };
+  activeGlobalGuardUnsub = authControlsStore.subscribe(onChange);
+  onChange();
 }
 
 function scheduleSessionAutoLogout() {
@@ -338,6 +380,19 @@ export const authService = {
     return signOut(auth);
   },
 
+  resetPasswordByNationalId: async (
+    studentCode: string,
+    nationalId: string,
+    newPassword: string,
+    confirmPassword: string,
+  ): Promise<void> => {
+    const callable = httpsCallable<
+      { studentCode: string; nationalId: string; newPassword: string; confirmPassword: string },
+      { success: boolean }
+    >(functions, 'resetPasswordByNationalId');
+    await callable({ studentCode, nationalId, newPassword, confirmPassword });
+  },
+
   getFirestoreUid: (fallbackUid: string): string => {
     return fallbackUid;
   },
@@ -357,9 +412,22 @@ export const authService = {
     }
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setLoading(true);
-      
       if (user) {
+        const isNewLoginSession = firestoreGatewayUid !== user.uid;
+        const isTokenRefresh = lastBootstrappedUid === user.uid;
+
+        if (isNewLoginSession) {
+          resetSharedFirestoreStores();
+          resetFirestoreGateway();
+          firestoreGatewayUid = user.uid;
+          lastBootstrappedUid = null;
+        }
+        void openFirestoreGateway();
+        if (isNewLoginSession) {
+          void runAfterGateway(() => syncActiveAcademicYear());
+          void runAfterGateway(() => probeFirestoreConnection());
+        }
+
         // Enforce fixed login session lifetime (6 hours)
         if (isSessionExpired()) {
           clearSessionTimer();
@@ -378,11 +446,25 @@ export const authService = {
         }
         scheduleSessionAutoLogout();
 
-        // หน่วงเวลาเล็กน้อยเพื่อให้ Auth Stream นิ่งก่อนเริ่มดึงข้อมูล Firestore
-        setTimeout(async () => {
+        // Firebase token refresh re-fires onAuthStateChanged — skip re-bootstrap.
+        if (isTokenRefresh) {
+          return;
+        }
+
+        lastBootstrappedUid = user.uid;
+        setLoading(true);
+
+        clearProfileFetchTimer();
+        const generation = ++profileFetchGeneration;
+
+        // รอ auth นิ่งสักครู่ แล้วโหลด role + profile จาก Firestore ก่อนปลดล็อก UI
+        activeProfileFetchTimer = setTimeout(async () => {
+          if (generation !== profileFetchGeneration) return;
+
           type UserProfileData = {
             role?: string;
             authUid?: string;
+            studentCode?: string;
             [key: string]: unknown;
           };
 
@@ -390,73 +472,89 @@ export const authService = {
           let userData: UserProfileData | null = null;
 
           try {
-            // 1. God Mode bypass
-            if (user.email === 'sysadmin@pmv.com') {
+            if (user.email === SYSADMIN_EMAIL) {
               role = 'sysadmin';
             } else {
-              const idTokenResult = await user.getIdTokenResult();
-              const claimedRole = idTokenResult.claims.role;
-              role = typeof claimedRole === 'string' ? claimedRole : null;
+              const idTokenResult = await withTimeout(user.getIdTokenResult(), 5_000);
+              if (idTokenResult) {
+                const claimedRole = idTokenResult.claims.role;
+                role = typeof claimedRole === 'string' ? claimedRole : null;
+              }
             }
 
-            // 2. ดึงข้อมูล Profile (Ultra Resilient Strategy)
-            const { getDocFromCache, getDocFromServer } = await import('firebase/firestore');
+            await whenFirestoreGatewayOpen();
+
+            let profileRole = role;
+            let profileData: UserProfileData | null = null;
+
             const userDocRef = doc(db, 'users', user.uid);
-            
-            let userSnap: DocumentSnapshot<DocumentData> | QueryDocumentSnapshot<DocumentData> | null = null;
-            
-            // ลองจาก Cache ก่อน (เร็วและมักจะไม่พัง)
-            try {
-              userSnap = await getDocFromCache(userDocRef);
-            } catch {
-              // ถ้าไม่มีใน Cache หรือพัง ให้ลองจาก Server โดยตรง (ข้าม Stream)
-              try {
-                userSnap = await getDocFromServer(userDocRef);
-              } catch {
-                console.warn('Firestore Server fetch failed, user might be new or offline.');
-              }
-            }
+            const userSnap = await withTimeout(getDoc(userDocRef), PROFILE_FETCH_TIMEOUT_MS);
 
-            // 3. Fallback search by email
-            if (!userSnap || !userSnap.exists()) {
-              const { query, collection, where, getDocsFromServer, limit } = await import('firebase/firestore');
-              const q = query(collection(db, 'users'), where('email', '==', user.email), limit(1));
-              const querySnapshot = await getDocsFromServer(q).catch(() => null);
+            if (!userSnap?.exists() && user.email) {
+              const q = query(
+                collection(db, 'users'),
+                where('email', '==', user.email),
+                limit(1),
+              );
+              const querySnapshot = await withTimeout(getDocs(q), PROFILE_FETCH_TIMEOUT_MS);
               if (querySnapshot && !querySnapshot.empty) {
-                userSnap = querySnapshot.docs[0];
+                const emailSnap = querySnapshot.docs[0];
+                if (emailSnap.exists()) {
+                  profileData = emailSnap.data() as UserProfileData;
+                  if (typeof profileData.role === 'string') profileRole = profileData.role;
+                  if (!profileData.authUid) {
+                    updateDoc(emailSnap.ref, { authUid: user.uid }).catch(() => {});
+                  }
+                }
               }
-            }
-
-            if (userSnap && userSnap.exists()) {
-              userData = userSnap.data() as UserProfileData;
-              if (!role && typeof userData.role === 'string') role = userData.role;
-
-              if (!userData.authUid) {
-                const { updateDoc } = await import('firebase/firestore');
+            } else if (userSnap?.exists()) {
+              profileData = userSnap.data() as UserProfileData;
+              if (typeof profileData.role === 'string') profileRole = profileData.role;
+              if (!profileData.authUid) {
                 updateDoc(userSnap.ref, { authUid: user.uid }).catch(() => {});
               }
             }
 
-            // Auto-initialize role_permissions ถ้ายังไม่มี
-            if (role) await ensureRolePermissions(role);
+            if (generation !== profileFetchGeneration) return;
+            if (auth.currentUser?.uid !== user.uid) return;
 
-            // Sync active academic year จาก Firestore → localStorage
-            // ทำให้ user ทุกคน (ทุกเครื่อง) ได้ค่าปีการศึกษาที่ SysAdmin ตั้งไว้
+            profileRole = resolveEffectiveRole(
+              user,
+              profileRole,
+              role,
+            );
+            userData = profileData;
+            role = profileRole;
+
+            setUser(user, role, userData);
+            setLoading(false);
+
+            if (profileRole) await ensureRolePermissions(profileRole);
             await syncActiveAcademicYear();
+
+            window.setTimeout(() => {
+              if (generation !== profileFetchGeneration) return;
+              if (auth.currentUser?.uid !== user.uid) return;
+              startUserGuard(user.uid);
+              startGlobalGuard(user.uid);
+            }, 500);
           } catch (err) {
             console.error('Auth Profile Fetch Error (Handled):', err);
-          } finally {
-            // อัปเดตสถานะสุดท้ายเสมอ แม้จะดึงข้อมูลไม่สำเร็จ
-            if (!role) role = 'student';
+            if (generation !== profileFetchGeneration) return;
+            if (auth.currentUser?.uid !== user.uid) return;
+            role = resolveEffectiveRole(user, role);
             setUser(user, role, userData);
-            startUserGuard(user.uid);
-            startGlobalGuard(user.uid);
             setLoading(false);
           }
         }, 100);
       } else {
+        clearProfileFetchTimer();
+        profileFetchGeneration++;
         clearUserGuard();
         clearGlobalGuard();
+        firestoreGatewayUid = null;
+        lastBootstrappedUid = null;
+        resetFirestoreGateway();
         clearSessionLocalState();
         logout();
         setLoading(false);
@@ -465,6 +563,8 @@ export const authService = {
 
     activeUnsubscribe = unsubscribe;
     return () => {
+      clearProfileFetchTimer();
+      profileFetchGeneration++;
       if (activeUnsubscribe) {
         activeUnsubscribe();
         activeUnsubscribe = null;

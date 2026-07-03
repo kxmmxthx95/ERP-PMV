@@ -1,7 +1,12 @@
-import { useState, useMemo, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { useMemo, useState, useSyncExternalStore } from 'react';
+import { collection, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { sessionCache } from '@/lib/sessionCache';
+import {
+  getClassesByYearStore,
+  getEnrollmentsByYearStore,
+  type EnrollmentLike,
+} from '@/lib/firestoreShared/studentSummaryStore';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import { useSchedule } from '@/hooks/useSchedule';
@@ -9,6 +14,7 @@ import type { ClassRoom, NewClassRoom, ClassRoomCard } from '@/types/class';
 import { GRADE_LEVEL_ORDER } from '@/types/class';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
+import { resolveHomeroomTeacherIds } from '@/features/classes/utils/homeroomTeachers';
 import { PERIOD_COUNT, LUNCH_PERIOD } from '@/types/schedule';
 
 // ── Subject Group Types ───────────────────────────────────────────────────────
@@ -94,6 +100,91 @@ const TEACHING_PERIODS_PER_WEEK = (PERIOD_COUNT - 1) * 5; // 8 × 5 = 40 คา�
 void LUNCH_PERIOD; // used in calculation above
 const CACHE_CLASSROOMS = 'cache:classroom-manager:classes';
 
+function computeEnrollmentCounts(
+  enrollmentDocs: EnrollmentLike[],
+  classes: ClassRoom[],
+  yearId: string,
+  semester: 1 | 2,
+): Record<string, number> {
+  const normalizeText = (value: unknown) => String(value ?? '').trim();
+  const getClassNameFromParts = (grade: unknown, room: unknown) => {
+    const g = normalizeText(grade);
+    const r = normalizeText(room);
+    return g && r ? `${g}/${r}` : '';
+  };
+
+  const map: Record<string, number> = {};
+  const candidateClasses = classes.filter((c) => {
+    const sameYear =
+      String(c.academicYearId ?? '') === String(yearId) ||
+      String((c as { academicYear?: string }).academicYear ?? '') === String(yearId);
+    const sameSemester = Number(c.semester ?? 0) === Number(semester) || !c.semester;
+    return sameYear && sameSemester;
+  });
+  const classesInScope = candidateClasses.length > 0 ? candidateClasses : classes;
+  const classById = new Map(classesInScope.map((c) => [String(c.id), c] as const));
+
+  const classStudentIdSets = new Map<string, Set<string>>();
+  const ensureSet = (classId: string) => {
+    if (!classStudentIdSets.has(classId)) classStudentIdSets.set(classId, new Set<string>());
+    return classStudentIdSets.get(classId)!;
+  };
+
+  enrollmentDocs.forEach((data) => {
+    const sameYear =
+      String(data.academicYearId ?? '') === String(yearId) ||
+      String(data.academicYear ?? '') === String(yearId);
+    const isStudying = (data.status ?? 'studying') === 'studying';
+    if (!sameYear || !isStudying) return;
+
+    const enrollmentClassId = normalizeText(data.classId ?? data.classroomId ?? data.roomId);
+    let resolvedClassId = '';
+
+    if (enrollmentClassId && classById.has(enrollmentClassId)) {
+      resolvedClassId = enrollmentClassId;
+    }
+
+    if (!resolvedClassId) {
+      const enrollmentClassName = normalizeText(data.className);
+      const enrollmentComposedName = getClassNameFromParts(data.gradeLevel, data.roomNumber ?? data.roomNo);
+
+      const matched = classesInScope.find((cls) => {
+        const clsClassName = normalizeText(cls.className);
+        if (enrollmentClassName && clsClassName && enrollmentClassName === clsClassName) return true;
+        if (enrollmentComposedName && clsClassName && enrollmentComposedName === clsClassName) return true;
+
+        const enrollmentGrade = normalizeText(data.gradeLevel);
+        const clsGrade = normalizeText(cls.gradeLevel);
+        const enrollmentRoom = normalizeText(data.roomNumber ?? data.roomNo);
+        const clsRoom = normalizeText(cls.roomNumber);
+        return !!(enrollmentGrade && clsGrade && enrollmentRoom && clsRoom && enrollmentGrade === clsGrade && enrollmentRoom === clsRoom);
+      });
+
+      if (matched?.id) resolvedClassId = String(matched.id);
+    }
+
+    if (!resolvedClassId) return;
+    const studentId = normalizeText(data.studentId);
+    if (!studentId) return;
+    ensureSet(resolvedClassId).add(studentId);
+  });
+
+  classesInScope.forEach((cls) => {
+    const classId = String(cls.id);
+    const set = ensureSet(classId);
+    const classStudentIds = Array.isArray((cls as { studentIds?: unknown[] }).studentIds)
+      ? (cls as { studentIds?: unknown[] }).studentIds!
+      : [];
+    classStudentIds.forEach((id) => {
+      const sid = normalizeText(id);
+      if (sid) set.add(sid);
+    });
+    map[classId] = set.size;
+  });
+
+  return map;
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useClassroomManager() {
@@ -104,29 +195,27 @@ export function useClassroomManager() {
   const teacherMgr = useTeacherManager();
   const schedule   = useSchedule();
 
-  const [classes,  setClasses]  = useState<ClassRoom[]>(
-    () => sessionCache.get<ClassRoom[]>(CACHE_CLASSROOMS) ?? []
+  const classesStore = getClassesByYearStore(yearId);
+  const enrollmentsStore = getEnrollmentsByYearStore(yearId);
+
+  const rawClasses = useSyncExternalStore(
+    classesStore.subscribe,
+    classesStore.getSnapshot,
+    classesStore.getSnapshot,
   );
-
-  // ── ดึงข้อมูล Real-time จาก Firebase ──────────────────────────────────────────
-  useEffect(() => {
-    const cached = sessionCache.get<ClassRoom[]>(CACHE_CLASSROOMS);
-    if (cached) return;
-
-    let cancelled = false;
-    const unsub = onSnapshot(collection(db, 'classes'),
-      (snap) => {
-        if (cancelled) return;
-        const next = snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassRoom));
-        setClasses(next);
-        sessionCache.set(CACHE_CLASSROOMS, next);
-      },
-      (_err) => {
-        console.error('Daily schedule listener error (handled):', _err);
-      }
-    );
-    return () => { cancelled = true; unsub(); };
-  }, []);
+  const classes = useMemo(
+    () => rawClasses.map((d) => ({ id: d.id, ...(d as Record<string, unknown>) } as ClassRoom)),
+    [rawClasses],
+  );
+  const enrollmentRows = useSyncExternalStore(
+    enrollmentsStore.subscribe,
+    enrollmentsStore.getSnapshot,
+    enrollmentsStore.getSnapshot,
+  );
+  const enrollmentCounts = useMemo(
+    () => computeEnrollmentCounts(enrollmentRows, classes, yearId, semester),
+    [enrollmentRows, classes, yearId, semester],
+  );
 
   // ── Filters ───────────────────────────────────────────────────────────────────
   const [filterDept,  setFilterDeptRaw]  = useState<Department | 'all'>('all');
@@ -170,6 +259,19 @@ export function useClassroomManager() {
     if (data.academicYearId) (updateData as any).academicYear = data.academicYearId;
     if (data.maxStudents !== undefined) (updateData as any).capacity = data.maxStudents;
     if (data.departmentId) (updateData as any).department = data.departmentId;
+
+    if (data.homeroomTeacherIds !== undefined || data.homeroomTeacherId !== undefined) {
+      const cls = classes.find((c) => c.id === id);
+      const normalizedIds = resolveHomeroomTeacherIds(
+        {
+          homeroomTeacherId: data.homeroomTeacherId ?? cls?.homeroomTeacherId ?? '',
+          homeroomTeacherIds: data.homeroomTeacherIds ?? cls?.homeroomTeacherIds ?? [],
+        },
+        teacherMgr.teachers,
+      );
+      updateData.homeroomTeacherIds = normalizedIds;
+      updateData.homeroomTeacherId = normalizedIds[0] ?? '';
+    }
 
     await updateDoc(doc(db, 'classes', id), updateData as any);
     sessionCache.invalidate(CACHE_CLASSROOMS);
@@ -220,20 +322,34 @@ export function useClassroomManager() {
     if (!activeClasses || activeClasses.length === 0) return [];
     
     const cards = activeClasses.map(cls => {
-      // ค้นหาข้อมูลครู (Safe find)
-      const teacher = teacherMgr?.teachers?.find(t => t.id === cls.homeroomTeacherId);
-      // ค้นหาจำนวนคาบ (Safe lookup)
+      const teacherIds = resolveHomeroomTeacherIds(cls, teacherMgr.teachers);
+
+      const resolvedTeachers = teacherIds
+        .map((id) => teacherMgr.teachers.find((t) => t.id === id))
+        .filter((t): t is NonNullable<typeof t> => !!t);
+
+      const homeroomTeachers = resolvedTeachers.map((t) => ({
+        id: t.id,
+        name: t.name,
+        position: t.position,
+        photoURL: t.photoURL,
+      }));
+
       const scheduled = (scheduledPeriodsMap && cls.id) ? (scheduledPeriodsMap[cls.id] ?? 0) : 0;
       
+      const effectiveStudentCount = enrollmentCounts[cls.id] ?? cls.studentCount ?? 0;
+
       return {
-        classRoom: cls,
-        homeroomTeacher: teacher
-          ? { id: teacher.id, name: teacher.name, position: teacher.position }
-          : null,
+        classRoom: {
+          ...cls,
+          studentCount: effectiveStudentCount,
+        },
+        homeroomTeacher: homeroomTeachers[0] ?? null,
+        homeroomTeachers,
         scheduledPeriods: scheduled,
         totalPeriods: TEACHING_PERIODS_PER_WEEK,
         fillPct: Math.round((scheduled / TEACHING_PERIODS_PER_WEEK) * 100),
-        isFull: cls.studentCount >= (cls.maxStudents || 40),
+        isFull: effectiveStudentCount >= (cls.maxStudents || 40),
       };
     });
 
@@ -243,7 +359,7 @@ export function useClassroomManager() {
       if (ga !== gb) return ga - gb;
       return String(a.classRoom.roomNumber || '').localeCompare(String(b.classRoom.roomNumber || ''));
     });
-  }, [activeClasses, teacherMgr.teachers, scheduledPeriodsMap]);
+  }, [activeClasses, teacherMgr.teachers, scheduledPeriodsMap, enrollmentCounts]);
 
   // Filtered cards
   const filteredCards = useMemo(() => {
@@ -280,7 +396,10 @@ export function useClassroomManager() {
       if (searchQ) {
         const q = searchQ.toLowerCase().trim();
         const className = (card.classRoom.className || '').toLowerCase();
-        const teacherName = (card.homeroomTeacher?.name || '').toLowerCase();
+        const teacherName = card.homeroomTeachers
+          .map((t) => t.name)
+          .join(' ')
+          .toLowerCase();
         if (!className.includes(q) && !teacherName.includes(q)) return false;
       }
 
@@ -291,9 +410,9 @@ export function useClassroomManager() {
   // สถิติภาพรวม
   const summary = useMemo(() => {
     const total        = activeClasses.length;
-    const totalStudents = activeClasses.reduce((sum, c) => sum + c.studentCount, 0);
+    const totalStudents = activeClasses.reduce((sum, c) => sum + (enrollmentCounts[c.id] ?? c.studentCount ?? 0), 0);
     const totalCapacity = activeClasses.reduce((sum, c) => sum + c.maxStudents, 0);
-    const fullClasses   = activeClasses.filter(c => c.studentCount >= c.maxStudents).length;
+    const fullClasses   = activeClasses.filter(c => (enrollmentCounts[c.id] ?? c.studentCount ?? 0) >= c.maxStudents).length;
 
     const byDept = Object.fromEntries(
       (['early', 'primary', 'secondary'] as Department[]).map(dept => [
@@ -303,7 +422,7 @@ export function useClassroomManager() {
     ) as Record<Department, number>;
 
     return { total, totalStudents, totalCapacity, fullClasses, byDept };
-  }, [activeClasses]);
+  }, [activeClasses, enrollmentCounts]);
 
   // Grade levels ที่มีในปีนี้ (สำหรับ filter dropdown)
   const availableGrades = useMemo(() => {

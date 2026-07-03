@@ -1,0 +1,504 @@
+{
+  "generatedAt": "2026-05-27T16:23:13.889Z",
+  "source": "http://universities.hipolabs.com/search?country=Thailand",
+  "count": 67,
+  "universities": [
+    {
+      "id": "chulalongkorn-university",
+      "name": "Chulalongkorn University",
+      "nameTh": "จุฬาลงกรณ์มหาวิทยาลัย",
+      "domain": "chula.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.chula.ac.th/"
+    },
+    {
+      "id": "bangkok-university",
+      "name": "Bangkok University",
+      "nameTh": "มหาวิทยาลัยกรุงเทพ",
+      "domain": "bu.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.bu.ac.th/"
+    },
+    {
+      "id": "kasetsart-university",
+      "name": "Kasetsart University",
+      "nameTh": "มหาวิทยาลัยเกษตรศาสตร์",
+      "domain": "ku.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.ku.ac.th/"
+    },
+    {
+      "id": "khon-kaen-university",
+      "name": "Khon Kaen University",
+      "nameTh": "มหาวิทยาลัยขอนแก่น",
+      "domain": "kku.ac.th",
+      "stateProvince": "Khon Kaen",
+      "webPage": "https://www.kku.ac.th/"
+    },
+    {
+      "id": "chiang-mai-university",
+      "name": "Chiang Mai University",
+      "nameTh": "มหาวิทยาลัยเชียงใหม่",
+      "domain": "cmu.ac.th",
+      "stateProvince": "Chiang Mai",
+      "webPage": "https://www.cmu.ac.th/"
+    },
+    {
+      "id": "thaksin-university",
+      "name": "Thaksin University",
+      "nameTh": "มหาวิทยาลัยทักษิณ",
+      "domain": "tsu.ac.th",
+      "stateProvince": "Songkhla",
+      "webPage": "https://www.tsu.ac.th/"
+    },
+    {
+      "id": "king-mongkut-s-university-of-technology-thonburi",
+      "name": "King Mongkut's University of Technology Thonburi",
+      "nameTh": "มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าธนบุรี",
+      "domain": "kmutt.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.kmutt.ac.th/"
+    },
+    {
+      "id": "king-mongkut-s-university-of-technology-north-bangkok",
+      "name": "King Mongkut's University of Technology North Bangkok",
+      "nameTh": "มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ",
+      "domain": "kmutnb.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.kmutnb.ac.th/"
+    },
+    {
+      "id": "suranaree-university-of-technology",
+      "name": "Suranaree University of Technology",
+      "nameTh": "มหาวิทยาลัยเทคโนโลยีสุรนารี",
+      "domain": "sut.ac.th",
+      "stateProvince": "Nakhon Ratchasima",
+      "webPage": "http://www.sut.ac.th/"
+    },
+    {
+      "id": "thammasat-university",
+      "name": "Thammasat University",
+      "nameTh": "มหาวิทยาลัยธรรมศาสตร์",
+      "domain": "tu.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.tu.ac.th/"
+    },
+    {
+      "id": "dhurakijpundit-university",
+      "name": "Dhurakijpundit University",
+      "nameTh": "มหาวิทยาลัยธุรกิจบัณฑิตย์",
+      "domain": "dpu.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.dpu.ac.th/"
+    },
+    {
+      "id": "naresuan-university",
+      "name": "Naresuan University",
+      "nameTh": "มหาวิทยาลัยนเรศวร",
+      "domain": "nu.ac.th",
+      "stateProvince": "Phitsanulok",
+      "webPage": "https://www.nu.ac.th/"
+    },
+    {
+      "id": "burapha-university",
+      "name": "Burapha University",
+      "nameTh": "มหาวิทยาลัยบูรพา",
+      "domain": "buu.ac.th",
+      "stateProvince": "Chon Buri",
+      "webPage": "https://www.buu.ac.th/"
+    },
+    {
+      "id": "payap-university-chaiang-mai",
+      "name": "Payap University Chaiang Mai",
+      "nameTh": "มหาวิทยาลัยพายัพ",
+      "domain": "payap.ac.th",
+      "stateProvince": "Chiang Mai",
+      "webPage": "https://www.payap.ac.th/"
+    },
+    {
+      "id": "mahasarakham-university",
+      "name": "Mahasarakham University",
+      "nameTh": "มหาวิทยาลัยมหาสารคาม",
+      "domain": "msu.ac.th",
+      "stateProvince": "Mahasarakham",
+      "webPage": "http://www.msu.ac.th/"
+    },
+    {
+      "id": "mahidol-university",
+      "name": "Mahidol University",
+      "nameTh": "มหาวิทยาลัยมหิดล",
+      "domain": "mahidol.ac.th",
+      "stateProvince": "Nakhon Pathom",
+      "webPage": "https://www.mahidol.ac.th/"
+    },
+    {
+      "id": "maejo-university",
+      "name": "Maejo University",
+      "nameTh": "มหาวิทยาลัยแม่โจ้",
+      "domain": "mju.ac.th",
+      "stateProvince": "Chiang Mai",
+      "webPage": "https://www.mju.ac.th/"
+    },
+    {
+      "id": "mae-fah-luang-university",
+      "name": "Mae Fah Luang University",
+      "nameTh": "มหาวิทยาลัยแม่ฟ้าหลวง",
+      "domain": "mfu.ac.th",
+      "stateProvince": "Chiang Rai",
+      "webPage": "https://www.mfu.ac.th/"
+    },
+    {
+      "id": "ramkhamhaeng-university",
+      "name": "Ramkhamhaeng University",
+      "nameTh": "มหาวิทยาลัยรามคำแหง",
+      "domain": "ru.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.ru.ac.th/"
+    },
+    {
+      "id": "walailak-university",
+      "name": "Walailak University",
+      "nameTh": "มหาวิทยาลัยวลัยลักษณ์",
+      "domain": "wu.ac.th",
+      "stateProvince": "Nakhon Si Thammarat",
+      "webPage": "https://www.wu.ac.th/"
+    },
+    {
+      "id": "srinakharinwirot-university",
+      "name": "Srinakharinwirot University",
+      "nameTh": "มหาวิทยาลัยศรีนครินทรวิโรฒ",
+      "domain": "swu.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.swu.ac.th/"
+    },
+    {
+      "id": "silpakorn-university",
+      "name": "Silpakorn University",
+      "nameTh": "มหาวิทยาลัยศิลปากร",
+      "domain": "su.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.su.ac.th/"
+    },
+    {
+      "id": "prince-of-songkla-university",
+      "name": "Prince of Songkla University",
+      "nameTh": "มหาวิทยาลัยสงขลานครินทร์",
+      "domain": "psu.ac.th",
+      "stateProvince": "Songkhla",
+      "webPage": "https://www.psu.ac.th/"
+    },
+    {
+      "id": "sukhothai-thammathirat-open-university",
+      "name": "Sukhothai Thammathirat Open University",
+      "nameTh": "มหาวิทยาลัยสุโขทัยธรรมาธิราช",
+      "domain": "stou.ac.th",
+      "stateProvince": "Nonthaburi",
+      "webPage": "https://www.stou.ac.th/"
+    },
+    {
+      "id": "assumption-university-of-thailand",
+      "name": "Assumption University of Thailand",
+      "nameTh": "มหาวิทยาลัยอัสสัมชัญ",
+      "domain": "au.edu",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.au.edu/"
+    },
+    {
+      "id": "ubonratchathani-university",
+      "name": "Ubonratchathani University",
+      "nameTh": "มหาวิทยาลัยอุบลราชธานี",
+      "domain": "ubu.ac.th",
+      "stateProvince": "Ubonratchathani",
+      "webPage": "https://www.ubu.ac.th/"
+    },
+    {
+      "id": "king-mongkut-s-institute-of-technology-ladkrabang",
+      "name": "King Mongkut's Institute of Technology Ladkrabang",
+      "nameTh": "สถาบันเทคโนโลยีพระจอมเกล้าเจ้าคุณทหารลาดกระบัง",
+      "domain": "kmitl.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "http://www.kmitl.ac.th/"
+    },
+    {
+      "id": "national-institute-of-development-administration",
+      "name": "National Institute of Development Administration",
+      "nameTh": "สถาบันบัณฑิตพัฒนบริหารศาสตร์",
+      "domain": "nida.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "http://www.nida.ac.th/"
+    },
+    {
+      "id": "asian-institute-of-technology",
+      "name": "Asian Institute of Technology",
+      "domain": "ait.ac.th",
+      "stateProvince": "Pathum Thani",
+      "webPage": "https://www.ait.ac.th/"
+    },
+    {
+      "id": "asian-university",
+      "name": "Asian University",
+      "domain": "efau.org",
+      "stateProvince": "Chon Buri",
+      "webPage": "http://www.asianu.ac.th/"
+    },
+    {
+      "id": "asian-university-of-science-and-technology",
+      "name": "Asian University of Science and Technology",
+      "domain": "asianust.ac.th",
+      "stateProvince": "Chon Buri",
+      "webPage": "http://www.asianust.ac.th/"
+    },
+    {
+      "id": "asia-pacific-international-university",
+      "name": "Asia-Pacific International University",
+      "domain": "apiu.edu",
+      "stateProvince": "Saraburi",
+      "webPage": "https://www.apiu.edu/"
+    },
+    {
+      "id": "chaopraya-university",
+      "name": "Chaopraya University",
+      "domain": "cpu.ac.th",
+      "stateProvince": "Nakhon Sawan",
+      "webPage": "http://www.cpu.ac.th/"
+    },
+    {
+      "id": "chiang-mai-rajabhat-university",
+      "name": "Chiang Mai Rajabhat University",
+      "domain": "cmru.ac.th",
+      "stateProvince": "Chiang Mai",
+      "webPage": "https://www.cmru.ac.th/"
+    },
+    {
+      "id": "chiang-mai-vocational-college",
+      "name": "Chiang Mai Vocational College",
+      "domain": "cmvc.ac.th",
+      "stateProvince": "Chiang Mai",
+      "webPage": "http://www.cmvc.ac.th/"
+    },
+    {
+      "id": "eastern-asia-university",
+      "name": "Eastern Asia University",
+      "domain": "eau.ac.th",
+      "stateProvince": "Pathum Thani",
+      "webPage": "https://www.eau.ac.th/"
+    },
+    {
+      "id": "hatyai-university",
+      "name": "Hatyai University",
+      "domain": "hu.ac.th",
+      "stateProvince": "Songkhla",
+      "webPage": "http://www.hu.ac.th/"
+    },
+    {
+      "id": "huachiew-chalermprakiet-university",
+      "name": "Huachiew Chalermprakiet University",
+      "domain": "hcu.ac.th",
+      "stateProvince": "Samut Prakarn",
+      "webPage": "https://www.hcu.ac.th/"
+    },
+    {
+      "id": "international-buddhist-college",
+      "name": "International Buddhist College",
+      "domain": "ibc.ac.th",
+      "stateProvince": "SongKhla",
+      "webPage": "https://www.ibc.ac.th/"
+    },
+    {
+      "id": "kasem-bundit-university",
+      "name": "Kasem Bundit University",
+      "domain": "kbu.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.kbu.ac.th/"
+    },
+    {
+      "id": "krirk-university",
+      "name": "Krirk University",
+      "domain": "krirk.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.krirk.ac.th/"
+    },
+    {
+      "id": "lampang-college-of-commerce-and-technology",
+      "name": "Lampang College of Commerce and Technology",
+      "domain": "lcct.ac.th",
+      "stateProvince": "Lampang",
+      "webPage": "http://www.lcct.ac.th/"
+    },
+    {
+      "id": "lampang-rajabhat-university",
+      "name": "Lampang Rajabhat University",
+      "domain": "lpru.ac.th",
+      "stateProvince": "Lampang",
+      "webPage": "https://www.lpru.ac.th/"
+    },
+    {
+      "id": "lampang-vocational-college",
+      "name": "Lampang Vocational College",
+      "domain": "lampangvc.ac.th",
+      "stateProvince": "Lampang",
+      "webPage": "http://www.lampangvc.ac.th/"
+    },
+    {
+      "id": "lamphun-college-of-agriculture-and-technology",
+      "name": "Lamphun College of Agriculture and Technology",
+      "domain": "lcat.ac.th",
+      "stateProvince": "Lamphun",
+      "webPage": "http://www.lcat.ac.th/"
+    },
+    {
+      "id": "mahachulalongkorn-buddhist-university",
+      "name": "Mahachulalongkorn Buddhist University",
+      "domain": "mcu.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.mcu.ac.th/"
+    },
+    {
+      "id": "mahamakut-buddhist-university",
+      "name": "Mahamakut Buddhist University",
+      "domain": "mbu.ac.th",
+      "stateProvince": "Nakhon Pathom",
+      "webPage": "http://www.mbu.ac.th/"
+    },
+    {
+      "id": "mahanakorn-university-of-technology",
+      "name": "Mahanakorn University of Technology",
+      "domain": "mut.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "http://www.mut.ac.th/"
+    },
+    {
+      "id": "mahidol-university-international-college",
+      "name": "Mahidol University International College",
+      "domain": "muic.mahidol.ac.th",
+      "stateProvince": "Nakhon Pathom",
+      "webPage": "https://www.muic.mahidol.ac.th/"
+    },
+    {
+      "id": "nation-university",
+      "name": "Nation University",
+      "domain": "nation.ac.th",
+      "stateProvince": "Lampang",
+      "webPage": "http://www.nation.ac.th/"
+    },
+    {
+      "id": "nivadhana-university",
+      "name": "Nivadhana University",
+      "domain": "nivadhana.ac.th",
+      "stateProvince": "Lamphun",
+      "webPage": "http://www.nivadhana.ac.th/"
+    },
+    {
+      "id": "pathumthani-university",
+      "name": "Pathumthani University",
+      "domain": "ptu.ac.th",
+      "stateProvince": "Pathum Thani",
+      "webPage": "https://www.ptu.ac.th/"
+    },
+    {
+      "id": "phranakhon-si-ayutthaya-rajabhat-university",
+      "name": "Phranakhon Si Ayutthaya Rajabhat University",
+      "domain": "aru.ac.th",
+      "stateProvince": "Phra Nakhon Si Ayutthaya",
+      "webPage": "https://www.aru.ac.th/"
+    },
+    {
+      "id": "rajamangala-university-of-technology-lanna-chiang-rai",
+      "name": "Rajamangala University of Technology, Lanna Chiang Rai",
+      "domain": "chiangraicampus.rmutl.ac.th",
+      "stateProvince": "Chiang Rai",
+      "webPage": "http://chiangraicampus.rmutl.ac.th/"
+    },
+    {
+      "id": "rajamangala-university-of-technology-lanna-nan",
+      "name": "Rajamangala University of Technology, Lanna Nan",
+      "domain": "nan.rmutl.ac.th",
+      "stateProvince": "Nan",
+      "webPage": "https://www.nan.rmutl.ac.th/"
+    },
+    {
+      "id": "rajamangala-university-of-technology-phra-nakhon",
+      "name": "Rajamangala University of Technology, Phra Nakhon",
+      "domain": "rmutp.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.rmutp.ac.th/"
+    },
+    {
+      "id": "rangsit-university",
+      "name": "Rangsit University",
+      "domain": "rsu.ac.th",
+      "stateProvince": "Pathum Thani",
+      "webPage": "https://www2.rsu.ac.th/"
+    },
+    {
+      "id": "shinawatra-university",
+      "name": "Shinawatra University",
+      "domain": "shinawatra.ac.th",
+      "stateProvince": "Pathum Thani",
+      "webPage": "http://www.shinawatra.ac.th/"
+    },
+    {
+      "id": "siam-university",
+      "name": "Siam University",
+      "domain": "siam.edu",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.siam.edu/"
+    },
+    {
+      "id": "south-east-asia-university",
+      "name": "South-East Asia University",
+      "domain": "sau.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.sau.ac.th/"
+    },
+    {
+      "id": "sripatum-university",
+      "name": "Sripatum University",
+      "domain": "spu.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.spu.ac.th/"
+    },
+    {
+      "id": "stamford-international-university",
+      "name": "Stamford International University",
+      "domain": "stamford.edu",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.stamford.edu/"
+    },
+    {
+      "id": "st-john-s-university",
+      "name": "St. John's University",
+      "domain": "stjohn.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.stjohn.ac.th/"
+    },
+    {
+      "id": "suan-dusit-rajabhat-university",
+      "name": "Suan Dusit Rajabhat University",
+      "domain": "dusit.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "http://www.dusit.ac.th/"
+    },
+    {
+      "id": "university-of-the-thai-chamber-of-commerce",
+      "name": "University of the Thai Chamber of Commerce",
+      "domain": "utcc.ac.th",
+      "stateProvince": "Bangkok",
+      "webPage": "https://www.utcc.ac.th/"
+    },
+    {
+      "id": "vongchavalitkul-university",
+      "name": "Vongchavalitkul University",
+      "domain": "vu.ac.th",
+      "stateProvince": "Nakhon Ratchasima",
+      "webPage": "https://www.vu.ac.th/"
+    },
+    {
+      "id": "webster-university-thailand",
+      "name": "Webster University, Thailand",
+      "domain": "webster.ac.th",
+      "stateProvince": "Petchaburi",
+      "webPage": "https://www.webster.ac.th/"
+    }
+  ]
+}

@@ -14,8 +14,14 @@ import {
 } from 'lucide-react';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { useAdminStaffAttendance, type StaffAttendanceRecord } from '@/hooks/useStaffAttendance';
-import { useAllLeaveRequests } from '@/hooks/useLeaveRequests';
+import { useAdminStaffAttendance, resolveStaffAttendanceDisplay, type StaffAttendanceRecord } from '@/hooks/useStaffAttendance';
+import { useLeaveRequestsSince } from '@/hooks/useLeaveRequests';
+import { useStaffUsers } from '@/hooks/useStaffUsers';
+import { useTeachersCollection } from '@/hooks/useTeachersCollection';
+import {
+  buildTeacherPositionByUserId,
+  isSpecialTeacherUser,
+} from '@/lib/staffAttendance/specialTeacher';
 import type { LeaveRequest, LeaveStatus, LeaveType } from '@/types/leave';
 import { cn } from '@/lib/utils';
 
@@ -64,7 +70,16 @@ function statusPillClass(status: StaffReportRow['status']) {
 
 export default function ExecutiveReportPage() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
-  const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryItem[]>([]);
+  const { users: staffUsers } = useStaffUsers();
+  const { teachers } = useTeachersCollection();
+  const teacherPositionByUserId = useMemo(
+    () => buildTeacherPositionByUserId(teachers),
+    [teachers],
+  );
+  const staffDirectory = useMemo<StaffDirectoryItem[]>(
+    () => staffUsers.map((u) => ({ userId: u.userId, displayName: u.displayName })),
+    [staffUsers],
+  );
   const [studentSummary, setStudentSummary] = useState<StudentSummary>({
     sessions: 0,
     classes: 0,
@@ -77,7 +92,7 @@ export default function ExecutiveReportPage() {
   const [studentLoading, setStudentLoading] = useState(true);
 
   const { records, loading: staffLoading, refresh: refreshStaff } = useAdminStaffAttendance(selectedDate);
-  const { requests: leaveRequests } = useAllLeaveRequests();
+  const { requests: leaveRequests } = useLeaveRequestsSince(selectedDate);
 
   const staffNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -86,32 +101,6 @@ export default function ExecutiveReportPage() {
   }, [staffDirectory]);
 
   const staffUserIds = useMemo(() => new Set(staffDirectory.map(s => s.userId)), [staffDirectory]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadStaffDirectory = async () => {
-      const snap = await getDocs(collection(db, 'users'));
-      if (cancelled) return;
-      const rawUsers: Array<{ id: string; data: Record<string, unknown> }> = snap.docs.map(d => ({
-        id: d.id,
-        data: d.data() as Record<string, unknown>,
-      }));
-      const rows = rawUsers
-        .filter(u => {
-          const role = typeof u.data.role === 'string' ? u.data.role : '';
-          return !['student', 'parent', 'admin', 'sysadmin'].includes(role);
-        })
-        .map(u => ({
-          userId: String(u.id),
-          displayName: String(u.data.name ?? u.data.displayName ?? u.data.email ?? 'บุคลากร'),
-        }));
-      setStaffDirectory(rows);
-    };
-    loadStaffDirectory().catch(() => setStaffDirectory([]));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,16 +193,26 @@ export default function ExecutiveReportPage() {
   }, [leaveRows, records, selectedDate, staffDirectory]);
 
   const staffRows = useMemo(() => {
-    const attendanceRows: StaffReportRow[] = records.map((r: StaffAttendanceRecord) => ({
-      id: r.id,
-      userId: r.userId,
-      displayName: r.displayName,
-      status: r.status,
-    }));
+    const day = new Date(`${selectedDate}T12:00:00`).getDay();
+    const isWorkingDay = day !== 0 && day !== 6;
+    const attendanceRows: StaffReportRow[] = records.map((r: StaffAttendanceRecord) => {
+      const resolved = resolveStaffAttendanceDisplay(r, {
+        selectedDate,
+        isWorkingDay,
+        isSpecialTeacher: isSpecialTeacherUser(r.userId, teacherPositionByUserId),
+      });
+      return {
+        id: r.id,
+        userId: r.userId,
+        displayName: r.displayName,
+        status: resolved.status,
+        isAutoAbsent: resolved.isAutoAbsent,
+      };
+    });
     return [...attendanceRows, ...leaveRows, ...autoAbsentRows].sort((a, b) =>
       a.displayName.localeCompare(b.displayName, 'th')
     );
-  }, [records, leaveRows, autoAbsentRows]);
+  }, [records, leaveRows, autoAbsentRows, selectedDate, teacherPositionByUserId]);
 
   const staffSummary = useMemo(() => ({
     present: staffRows.filter(r => r.status === 'present').length,

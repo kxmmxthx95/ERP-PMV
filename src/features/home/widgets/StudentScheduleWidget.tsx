@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Clock3, MapPin, UserRound, Maximize2, Minimize2 } from 'lucide-react';
+import { BookOpen, ChevronRight, ChevronLeft, X, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { doc, getDoc, collection, query, where, limit, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { resolveStudentByAuthUser } from '@/lib/resolveStudentProfile';
+import { whenFirestoreGatewayOpen } from '@/lib/firestoreShared/bootstrap';
 import { useAuth } from '@/hooks/useAuth';
 import { useSchedule } from '@/hooks/useSchedule';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { db } from '@/lib/firebase';
 import { useScheduleSettings } from '@/hooks/useScheduleSettings';
-import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
-import { WIDGET_GLASS } from '../widgetStyles';
+import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from '@/components/ui/drawer';
+import { subjectCardShadow, subjectColorByName, subjectGradient } from '@/features/schedule/constants/colors';
+import { WIDGET_CARD, WIDGET_GLASS } from '../widgetStyles';
 import type { Student } from '@/types/student';
 import type { ScheduleEntry, SchoolDay } from '@/types/schedule';
 
@@ -43,16 +46,15 @@ function parseTimeRange(period: number, periodTimes: Record<number, string>): { 
 }
 
 export default function StudentScheduleWidget() {
-  const { user } = useAuth();
+  const { user, userData, isLoading: authLoading } = useAuth();
   const { entries, classes } = useSchedule();
-  const { teachers } = useTeacherManager();
   const { year: activeYear, activeSemester } = useActiveAcademicYear();
   const [studentClassId, setStudentClassId] = useState<string>('');
   const { periodTimes } = useScheduleSettings(studentClassId);
-  const [isExpanded, setIsExpanded] = useState(false);
 
   const [student, setStudent] = useState<Student | null>(null);
   const [studentLoading, setStudentLoading] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const todayNum = new Date().getDay();
   const schoolDay = todayNum >= 1 && todayNum <= 5 ? (todayNum as SchoolDay) : null;
@@ -70,31 +72,19 @@ export default function StudentScheduleWidget() {
     let isCancelled = false;
 
     async function fetchStudent() {
-      if (!user?.uid) {
-        if (!isCancelled) {
-          setStudent(null);
-          setStudentClassId('');
-          setStudentLoading(false);
-        }
+      if (!user?.uid || authLoading) {
         return;
       }
 
       setStudentLoading(true);
 
       try {
-        let resolvedStudent: Student | null = null;
+        await whenFirestoreGatewayOpen();
 
-        const directSnap = await getDoc(doc(db, 'students', user.uid));
-        if (directSnap.exists()) {
-          resolvedStudent = { id: directSnap.id, ...directSnap.data() } as Student;
-        } else {
-          const fallbackQuery = query(collection(db, 'students'), where('userId', '==', user.uid), limit(1));
-          const fallbackSnap = await getDocs(fallbackQuery);
-          if (!fallbackSnap.empty) {
-            const first = fallbackSnap.docs[0];
-            resolvedStudent = { id: first.id, ...first.data() } as Student;
-          }
-        }
+        const resolvedStudent = await resolveStudentByAuthUser(user.uid, {
+          studentCode: typeof userData?.studentCode === 'string' ? userData.studentCode : undefined,
+          email: user.email ?? undefined,
+        });
 
         if (!resolvedStudent) {
           if (!isCancelled) {
@@ -107,26 +97,32 @@ export default function StudentScheduleWidget() {
         const enrollmentQuery = query(collection(db, 'enrollments'), where('studentId', '==', resolvedStudent.id));
         const enrollmentSnap = await getDocs(enrollmentQuery);
 
-        const matchedEnrollment = enrollmentSnap.docs
-          .map((docSnap) => docSnap.data() as {
-            classId?: string;
-            academicYearId?: string;
-            semester?: 1 | 2;
-            enrolledAt?: string;
-          })
-          .filter((item) => item.classId)
-          .sort((a, b) => {
-            const yearA = Number(a.academicYearId ?? 0);
-            const yearB = Number(b.academicYearId ?? 0);
-            if (yearA !== yearB) return yearB - yearA;
+        const enrollmentRows = enrollmentSnap.docs.map((docSnap) => docSnap.data() as {
+          classId?: string;
+          academicYearId?: string;
+          academicYear?: string;
+          semester?: 1 | 2;
+          enrolledAt?: string;
+        }).filter((item) => item.classId);
 
+        const sortEnrollments = (rows: typeof enrollmentRows) =>
+          [...rows].sort((a, b) => {
+            const yearA = Number(a.academicYearId ?? a.academicYear ?? 0);
+            const yearB = Number(b.academicYearId ?? b.academicYear ?? 0);
+            if (yearA !== yearB) return yearB - yearA;
             const semA = Number(a.semester ?? 0);
             const semB = Number(b.semester ?? 0);
             if (semA !== semB) return semB - semA;
-
             return (b.enrolledAt ?? '').localeCompare(a.enrolledAt ?? '');
-          })
-          .find((item) => String(item.academicYearId) === String(activeYear) && Number(item.semester ?? 0) === Number(activeSemester));
+          });
+
+        const matchedEnrollment =
+          sortEnrollments(enrollmentRows).find(
+            (item) =>
+              String(item.academicYearId ?? item.academicYear) === String(activeYear)
+              && Number(item.semester ?? 0) === Number(activeSemester),
+          )
+          ?? sortEnrollments(enrollmentRows)[0];
 
         const studentWithClass = resolvedStudent as Student & { classroomId?: string; classId?: string };
         const fallbackClassId = studentWithClass.classroomId || studentWithClass.classId || '';
@@ -151,7 +147,7 @@ export default function StudentScheduleWidget() {
     return () => {
       isCancelled = true;
     };
-  }, [user?.uid, activeYear, activeSemester]);
+  }, [user?.uid, user?.email, userData?.studentCode, activeYear, activeSemester, authLoading]);
 
   const displayedEntries = useMemo(() => {
     if (!viewDay || !studentClassId) return [];
@@ -194,114 +190,136 @@ export default function StudentScheduleWidget() {
     return classes.find((item) => item.id === studentClassId)?.label || studentClassId;
   }, [classes, studentClassId]);
 
-  const renderPeriodRow = (entry: ScheduleEntry) => {
+  const highlightEntry = useMemo(() => {
+    if (displayedEntries.length === 0) return null;
+    if (activeOrNextId) {
+      return displayedEntries.find((entry) => entry.id === activeOrNextId) ?? displayedEntries[0];
+    }
+    return displayedEntries[0];
+  }, [activeOrNextId, displayedEntries]);
+
+  const renderPeriodRow = (entry: ScheduleEntry, compact = false) => {
     const timeRange = parseTimeRange(entry.period, periodTimes);
     const isFocus = activeOrNextId === entry.id;
-    const teacher = teachers.find((t) => t.id === entry.teacherId);
+    const color = subjectColorByName(entry.subjectName || entry.subjectId, entry.subjectGroup);
+    const cardStyle = {
+      background: subjectGradient(color, isFocus),
+      boxShadow: subjectCardShadow(color, isFocus),
+    };
+
+    const focusBadge = isFocus && viewDay === schoolDay ? (() => {
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const range = parseTimeRange(entry.period, periodTimes);
+      if (range && nowMin >= range.startMin && nowMin < range.endMin) return 'กำลังเรียน';
+      return 'ถัดไป';
+    })() : null;
+
+    if (compact) {
+      return (
+        <div
+          className="rounded-xl px-2.5 py-1.5 overflow-hidden"
+          style={cardStyle}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[10px] font-black text-white/90 shrink-0" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>
+              คาบ {entry.period}
+            </span>
+            <p className="text-[11px] font-black truncate flex-1 text-white" style={{ textShadow: '0 1px 2.5px rgba(0,0,0,0.4)' }}>
+              {entry.subjectName}
+            </p>
+            <span className="text-[10px] font-bold text-white/90 shrink-0 tabular-nums" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>
+              {timeRange ? timeRange.start : '--:--'}
+            </span>
+          </div>
+          <p className="text-[10px] font-bold text-white/85 truncate mt-0.5" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>
+            {entry.teacherName}
+          </p>
+        </div>
+      );
+    }
 
     return (
       <div
         key={entry.id}
-        className={`rounded-2xl border p-3 transition-all ${
-          isFocus
-            ? 'bg-blue-50 border-blue-200 shadow-sm shadow-blue-500/5'
-            : 'bg-white/70 border-slate-100'
-        }`}
+        className="relative overflow-hidden rounded-2xl p-3.5 transition-all"
+        style={cardStyle}
       >
-        <div className="flex items-center gap-3.5">
-          {/* Teacher Avatar (Left Aligned & Large) */}
-          <div className="relative shrink-0">
-            {teacher?.photoURL ? (
-              <img
-                src={teacher.photoURL}
-                alt=""
-                className={`w-11 h-11 rounded-full object-cover border-2 transition-all ${
-                  isFocus ? 'border-blue-200 shadow-md' : 'border-white shadow-sm'
-                }`}
-              />
-            ) : (
-              <div className="w-11 h-11 rounded-full bg-slate-100 flex items-center justify-center border-2 border-white shadow-sm">
-                <UserRound size={20} className="text-slate-300" />
-              </div>
-            )}
-            {/* Period Badge on Avatar */}
-            <div className={`absolute -bottom-1 -right-1 px-1.5 py-0.5 rounded-lg text-[9px] font-black shadow-sm ${
-              isFocus ? 'bg-blue-600 text-white' : 'bg-slate-800 text-white'
-            }`}>
+        <div className="flex items-start gap-3">
+          <div
+            className="w-14 h-14 rounded-2xl shrink-0 border flex flex-col items-center justify-center bg-white/20 border-white/30 backdrop-blur-sm"
+          >
+            <span className="text-[9px] font-black leading-none mb-0.5 uppercase text-white/85">
+              คาบ
+            </span>
+            <span className="text-sm font-black leading-none text-white">
               {entry.period}
-            </div>
+            </span>
           </div>
-
-          {/* Subject & Teacher Info */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-0.5">
-              <p className={`text-[13.5px] font-black truncate ${isFocus ? 'text-blue-900' : 'text-slate-800'}`}>
+            {entry.subjectCode && (
+              <p className="text-[9px] font-black leading-none mb-1 text-white/90" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>
+                {entry.subjectCode}
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <p className="text-[13px] font-black text-white truncate leading-tight" style={{ textShadow: '0 1px 2.5px rgba(0,0,0,0.45)' }}>
                 {entry.subjectName}
               </p>
-              {isFocus && (
-                 <span className="flex h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+              {focusBadge && (
+                <span className="text-[8px] font-black text-white bg-white/22 px-2 py-0.5 rounded-full uppercase shrink-0 backdrop-blur-sm">
+                  {focusBadge}
+                </span>
               )}
             </div>
-            
-            <div className="flex flex-col gap-0.5">
-              <p className="text-[10.5px] font-bold text-slate-500 truncate">
-                {entry.teacherName}
-              </p>
-              {entry.room && (
-                <div className="flex items-center gap-1 text-[9px] font-bold text-slate-400 uppercase tracking-tight">
-                  <MapPin size={9} />
-                  {entry.room}
-                </div>
-              )}
-            </div>
+            <p className="text-[11px] font-bold text-white/90 truncate mt-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>
+              {entry.teacherName}
+            </p>
+            {entry.room && (
+              <p className="text-[10px] font-bold text-white/75 mt-0.5">ห้อง {entry.room}</p>
+            )}
           </div>
-
-          {/* Time (Right Aligned) */}
-          <div className="shrink-0 text-right">
-            <p className="text-[9px] font-black text-slate-300 uppercase tracking-wider mb-1">เวลาเรียน</p>
-            <div className={`inline-flex items-center px-2.5 py-1 rounded-full font-black text-[11px] transition-all ${
-              isFocus 
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-200' 
-                : 'bg-slate-100 text-slate-600'
-            }`}>
-              {timeRange ? `${timeRange.start} - ${timeRange.end}` : '--:--'}
+          <div className="text-right shrink-0">
+            <div className="text-[11px] font-black text-white tabular-nums" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>
+              {timeRange ? timeRange.start : '--:--'}
             </div>
+            {timeRange && (
+              <div className="text-[9px] font-bold text-white/75 tabular-nums">{timeRange.end}</div>
+            )}
           </div>
         </div>
       </div>
     );
   };
 
+  const renderCompactPeriodRow = (entry: ScheduleEntry) => renderPeriodRow(entry, true);
+
   return (
-    <div style={WIDGET_GLASS} className="rounded-3xl p-5 flex flex-col gap-4 h-full w-full overflow-hidden">
-      <div className="flex items-center justify-between gap-2">
+    <>
+    <div
+      style={WIDGET_GLASS}
+      className={`${WIDGET_CARD} cursor-pointer group`}
+      onClick={() => setDrawerOpen(true)}
+    >
+      <div className="flex items-center justify-between gap-2 shrink-0">
         <div className="flex-1 min-w-0">
-          <p className="text-[13px] font-black text-slate-800 leading-none">ตารางเรียนของฉัน</p>
-          <div className="flex items-center gap-1.5 mt-1">
-            <p className="text-[10px] font-bold text-slate-400 truncate">วัน{DAY_LABELS[viewDay]} {classLabel ? `· ${classLabel}` : ''}</p>
+          <p className="text-sm font-black text-slate-800 truncate leading-none">ตารางเรียนของฉัน</p>
+          <div className="flex items-center gap-1.5 mt-1 min-w-0">
+            <p className="text-[10px] font-bold text-slate-400 truncate">
+              วัน{DAY_LABELS[viewDay]}{classLabel ? ` · ${classLabel}` : ''}
+            </p>
             {viewDay === schoolDay && (
-               <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-500 text-[8px] font-black uppercase tracking-wider border border-blue-100">วันนี้</span>
+              <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-500 text-[8px] font-black border border-blue-100 shrink-0">
+                วันนี้
+              </span>
             )}
           </div>
         </div>
-
-        <div className="flex items-center gap-2">
-          {displayedEntries.length > 0 && (
-            <span className="text-[10px] font-black bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-lg border border-emerald-100 shrink-0">
-              {displayedEntries.length} คาบ
-            </span>
-          )}
-          <button 
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="w-7 h-7 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-          >
-            {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          </button>
-        </div>
+        <ChevronRight size={14} className="text-slate-400 group-hover:text-slate-600 shrink-0" />
       </div>
 
-      <motion.div 
-        className="flex-1 min-h-0 relative cursor-grab active:cursor-grabbing"
+      <motion.div
+        className="flex-1 min-h-0 relative"
         drag="x"
         dragConstraints={{ left: 0, right: 0 }}
         dragElastic={0.2}
@@ -309,75 +327,118 @@ export default function StudentScheduleWidget() {
           if (info.offset.x > 80) prevDay();
           else if (info.offset.x < -80) nextDay();
         }}
+        onClick={(e) => e.stopPropagation()}
       >
         <AnimatePresence mode="wait">
           <motion.div
             key={viewDay}
-            initial={{ opacity: 0, x: 20 }}
+            initial={{ opacity: 0, x: 12 }}
             animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="h-full"
+            exit={{ opacity: 0, x: -12 }}
+            transition={{ duration: 0.15 }}
+            className="h-full flex flex-col justify-center"
           >
-            {studentLoading ? (
-              <div className="h-full min-h-[120px] flex items-center justify-center">
-                <div className="w-6 h-6 border-2 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
+            {studentLoading || authLoading ? (
+              <div className="flex items-center justify-center">
+                <div className="w-5 h-5 border-2 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
               </div>
             ) : !student ? (
-              <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-center gap-2">
-                <BookOpen size={18} className="text-slate-300" />
-                <p className="text-[11px] font-bold text-slate-400">ไม่พบข้อมูลนักเรียนที่ผูกกับบัญชีนี้</p>
+              <div className="flex items-center justify-center gap-2 text-center">
+                <BookOpen size={14} className="text-slate-300 shrink-0" />
+                <p className="text-[10px] font-bold text-slate-400">ไม่พบข้อมูลนักเรียนที่ผูกกับบัญชีนี้</p>
               </div>
-            ) : displayedEntries.length === 0 ? (
-              <div className="h-full min-h-[160px] flex flex-col items-center justify-center text-center gap-2 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
-                <Clock3 size={18} className="text-slate-300" />
-                <p className="text-[11px] font-bold text-slate-400">ไม่มีตารางเรียนในวัน{DAY_LABELS[viewDay]}</p>
+            ) : !highlightEntry ? (
+              <div className="flex items-center justify-center gap-2 text-center">
+                <BookOpen size={14} className="text-slate-300 shrink-0" />
+                <p className="text-[10px] font-bold text-slate-400">ไม่มีตารางเรียนในวัน{DAY_LABELS[viewDay]}</p>
               </div>
             ) : (
-              <div className="flex flex-col gap-2">
-                <AnimatePresence mode="popLayout" initial={false}>
-                  {isExpanded
-                    ? displayedEntries.map((entry) => (
-                        <motion.div
-                          key={entry.id}
-                          layout
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.95 }}
-                          className="mb-2 last:mb-0"
-                        >
-                          {renderPeriodRow(entry)}
-                        </motion.div>
-                      ))
-                    : displayedEntries
-                        .filter((e) => e.id === activeOrNextId || displayedEntries.indexOf(e) === 0)
-                        .slice(0, 1)
-                        .map((entry) => (
-                          <motion.div
-                            key={entry.id}
-                            layout
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                          >
-                            {renderPeriodRow(entry)}
-                          </motion.div>
-                        ))}
-                </AnimatePresence>
-                
-                {!isExpanded && displayedEntries.length > 1 && (
-                  <button 
-                    onClick={() => setIsExpanded(true)}
-                    className="py-2 text-[10px] font-black text-slate-400 hover:text-blue-500 transition-colors uppercase tracking-widest text-center w-full"
-                  >
-                    ดูอีก {displayedEntries.length - 1} คาบเรียน
-                  </button>
-                )}
-              </div>
+              renderCompactPeriodRow(highlightEntry)
             )}
           </motion.div>
         </AnimatePresence>
       </motion.div>
     </div>
+
+    <Drawer open={drawerOpen} onOpenChange={setDrawerOpen} direction="right">
+      <DrawerContent
+        className={[
+          'h-dvh flex flex-col p-0 rounded-none',
+          'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+          'data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none',
+          'sm:h-full sm:rounded-l-3xl',
+          'sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md',
+          'sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl',
+        ].join(' ')}
+      >
+        <DrawerHeader className="px-4 pb-2 shrink-0">
+          <div className="relative flex items-center justify-center min-h-10">
+            <button
+              type="button"
+              onClick={prevDay}
+              className="absolute left-0 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 active:scale-[0.98] transition"
+              aria-label="วันก่อนหน้า"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <div className="min-w-0 text-center px-12">
+              <DrawerTitle className="text-base font-black text-slate-800">ตารางเรียนของฉัน</DrawerTitle>
+              <DrawerDescription className="text-xs text-slate-500">
+                วัน{DAY_LABELS[viewDay]}{classLabel ? ` · ${classLabel}` : ''}
+                {viewDay === schoolDay ? ' · วันนี้' : ''}
+              </DrawerDescription>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(false)}
+              className="absolute right-0 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 active:scale-[0.98] transition"
+              aria-label="ปิดตารางเรียน"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="flex gap-1 mt-3 p-1 rounded-2xl bg-slate-100/80">
+            {([1, 2, 3, 4, 5] as SchoolDay[]).map(day => (
+              <button
+                key={day}
+                type="button"
+                onClick={() => setViewDay(day)}
+                className={`flex-1 py-1.5 rounded-xl text-[11px] font-black transition-all ${
+                  viewDay === day
+                    ? 'bg-white text-slate-800 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {DAY_LABELS[day].slice(0, 3)}
+              </button>
+            ))}
+          </div>
+        </DrawerHeader>
+
+        <div className="px-4 pb-4 overflow-y-auto flex-1 min-h-0">
+          {studentLoading || authLoading ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="w-6 h-6 border-2 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
+            </div>
+          ) : !student ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
+              <BookOpen size={20} className="text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-bold text-slate-500">ไม่พบข้อมูลนักเรียนที่ผูกกับบัญชีนี้</p>
+            </div>
+          ) : displayedEntries.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
+              <Clock size={20} className="text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-bold text-slate-500">ไม่มีตารางเรียนในวัน{DAY_LABELS[viewDay]}</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              {displayedEntries.map(entry => renderPeriodRow(entry))}
+            </div>
+          )}
+        </div>
+      </DrawerContent>
+    </Drawer>
+    </>
   );
 }

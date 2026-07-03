@@ -11,6 +11,11 @@ import { useClassroomManager } from '@/features/classes/hooks/useClassroomManage
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
+import {
+  buildTeacherIdentityKeys,
+  matchesTeacherIdentity,
+  resolveTeacherFromAuth,
+} from '@/lib/teachers/teacherIdentity';
 import type { Subject } from '@/types/curriculum';
 import type {
   AttendanceRecord, ClassSession, NewAttendanceRecord, StudentAttendance,
@@ -22,7 +27,7 @@ import type {
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-export function useTeachingManager(currentTeacherId: string) {
+export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?: boolean) {
   const { year: academicYear, activeSemester } = useActiveAcademicYear();
   const activeYearStr = academicYear ?? '2568';
   const semester = (activeSemester ?? 1) as 1 | 2;
@@ -32,7 +37,7 @@ export function useTeachingManager(currentTeacherId: string) {
   const classMgr = useClassroomManager();
   const curriculum = useCurriculum();
   const { coursesByVersion } = useCurriculumVersioned();
-  const { requests: leaveRequests } = useStudentLeaveRequests();
+  const { requests: leaveRequests } = useStudentLeaveRequests(`${Number(activeYearStr) - 543}-01-01`);
 
   // ── Local State ──────────────────────────────────────────────────────────────
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
@@ -43,9 +48,13 @@ export function useTeachingManager(currentTeacherId: string) {
 
   // ── Current Teacher ──────────────────────────────────────────────────────────
   const currentTeacher = useMemo(
-    () => teacherMgr.teachers.find(t => t.id === currentTeacherId) ?? null,
+    () => resolveTeacherFromAuth(currentTeacherId, teacherMgr.teachers),
     [teacherMgr.teachers, currentTeacherId],
   );
+
+  const teacherIdentityKeys = useMemo(() => {
+    return buildTeacherIdentityKeys(currentTeacherId, currentTeacher);
+  }, [currentTeacherId, currentTeacher]);
 
   // ── Subjects assigned to this teacher via enrolledCourses (stamp) ────────────
   // กรองจาก classes.enrolledCourses ที่ teacherId ตรงกับ currentTeacherId
@@ -58,8 +67,9 @@ export function useTeachingManager(currentTeacherId: string) {
     for (const cls of classMgr.allClasses) {
       for (const ec of (cls.enrolledCourses ?? [])) {
         if (
-          ec.teacherId === currentTeacherId &&
-          (ec.semester === semester || ec.semester == null)
+          canViewAllSubjects ||
+          (matchesTeacherIdentity(ec.teacherId, teacherIdentityKeys) &&
+          (ec.semester === semester || ec.semester == null))
         ) {
           assignedSubjectIds.add(ec.subjectId);
         }
@@ -102,7 +112,16 @@ export function useTeachingManager(currentTeacherId: string) {
     });
 
     return result;
-  }, [curriculum.subjects, classMgr.allClasses, currentTeacherId, semester, coursesByVersion]);
+  }, [curriculum.subjects, classMgr.allClasses, teacherIdentityKeys, semester, coursesByVersion, canViewAllSubjects]);
+
+  // ห้องเรียนทั้งปี — ไม่กรองตาม class.semester (ภาคเรียนอยู่ที่ enrolledCourses)
+  const yearClasses = useMemo(
+    () => classMgr.allClasses.filter(c =>
+      String(c.academicYearId) === String(activeYearStr)
+      || String((c as { academicYear?: string }).academicYear) === String(activeYearStr),
+    ),
+    [classMgr.allClasses, activeYearStr],
+  );
 
   const getStudentsForClass = (classId: string) => {
     // 1. Identify students via official enrollments
@@ -148,12 +167,20 @@ export function useTeachingManager(currentTeacherId: string) {
   useEffect(() => {
     if (!currentTeacherId) return;
 
+    const classSessionsColl = collection(db, 'class_sessions');
+    const attendanceQuery = canViewAllSubjects
+      ? query(classSessionsColl,
+          where('academicYearId', '==', activeYearStr),
+          where('semester', '==', semester)
+        )
+      : query(classSessionsColl,
+          where('academicYearId', '==', activeYearStr),
+          where('semester', '==', semester),
+          where('teacherId', '==', currentTeacherId)
+        );
+
     const unsubAttendance = onSnapshot(
-      query(collection(db, 'class_sessions'),
-        where('academicYearId', '==', activeYearStr),
-        where('semester', '==', semester),
-        where('teacherId', '==', currentTeacherId),
-      ),
+      attendanceQuery,
       {
         next: snap => {
           const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassSession));
@@ -195,12 +222,20 @@ export function useTeachingManager(currentTeacherId: string) {
       }
     );
 
+    const assignmentsColl = collection(db, 'assignments');
+    const assignmentsQuery = canViewAllSubjects
+      ? query(assignmentsColl,
+          where('academicYearId', '==', activeYearStr),
+          where('semester', '==', semester)
+        )
+      : query(assignmentsColl,
+          where('teacherId', '==', currentTeacherId),
+          where('academicYearId', '==', activeYearStr),
+          where('semester', '==', semester)
+        );
+
     const unsubAssignments = onSnapshot(
-      query(collection(db, 'assignments'),
-        where('teacherId', '==', currentTeacherId),
-        where('academicYearId', '==', activeYearStr),
-        where('semester', '==', semester),
-      ),
+      assignmentsQuery,
       {
         next: snap => setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() } as Assignment))),
         error: () => { /* Silent fail */ }
@@ -217,12 +252,20 @@ export function useTeachingManager(currentTeacherId: string) {
       }
     );
 
+    const examsColl = collection(db, 'exams');
+    const examsQuery = canViewAllSubjects
+      ? query(examsColl,
+          where('academicYearId', '==', activeYearStr),
+          where('semester', '==', semester)
+        )
+      : query(examsColl,
+          where('teacherId', '==', currentTeacherId),
+          where('academicYearId', '==', activeYearStr),
+          where('semester', '==', semester)
+        );
+
     const unsubExams = onSnapshot(
-      query(collection(db, 'exams'),
-        where('teacherId', '==', currentTeacherId),
-        where('academicYearId', '==', activeYearStr),
-        where('semester', '==', semester),
-      ),
+      examsQuery,
       {
         next: snap => setExams(snap.docs.map(d => ({ id: d.id, ...d.data() } as Exam))),
         error: () => { /* Silent fail */ }
@@ -246,7 +289,7 @@ export function useTeachingManager(currentTeacherId: string) {
       unsubExams();
       unsubExamScores();
     };
-  }, [currentTeacherId, activeYearStr, semester, studentMgr.students]);
+  }, [currentTeacherId, activeYearStr, semester, studentMgr.students, canViewAllSubjects]);
 
   // ── ATTENDANCE CRUD ──────────────────────────────────────────────────────────
 
@@ -457,6 +500,8 @@ export function useTeachingManager(currentTeacherId: string) {
     currentTeacher,
     mySubjects,
     stats,
+    teacherIdentityKeys,
+    isRosterDataLoaded: studentMgr.isDataLoaded,
     // helpers
     getStudentsForClass,
     getAttendanceForSession,
@@ -480,6 +525,7 @@ export function useTeachingManager(currentTeacherId: string) {
     activeYearStr,
     semester,
     classes: classMgr.classes,
+    yearClasses,
     teachers: teacherMgr.teachers,
   };
 }

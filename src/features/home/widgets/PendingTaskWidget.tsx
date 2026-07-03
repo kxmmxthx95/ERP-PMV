@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2 } from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
 import { WIDGET_GLASS } from '../widgetStyles';
 
 const MOCK_TASKS = [
@@ -11,14 +11,9 @@ export default function PendingTaskWidget() {
   const pending = MOCK_TASKS.filter(t => !t.done).length;
 
   return (
-    <div style={WIDGET_GLASS} className="rounded-3xl p-5 flex flex-col gap-3 w-full">
+    <div style={WIDGET_GLASS} className="rounded-2xl p-3 flex flex-col gap-2 w-full">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-violet-400/20 flex items-center justify-center">
-            <AlertCircle size={16} className="text-violet-500" />
-          </div>
-          <span className="font-bold text-sm text-slate-700">งานค้างดำเนินการ</span>
-        </div>
+        <span className="font-bold text-sm text-slate-700">งานค้างดำเนินการ</span>
         {pending > 0 && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-600 font-bold">
             {pending} รายการ

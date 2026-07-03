@@ -37,9 +37,17 @@ export type NewClassRoom = Omit<ClassRoom, 'id' | 'createdAt'>;
 // ── Derived view ─────────────────────────────────────────────────────────────
 // ใช้ใน UI (join กับ teacher + schedule)
 
+export interface HomeroomTeacherSummary {
+  id: string;
+  name: string;
+  position?: string;
+  photoURL?: string;
+}
+
 export interface ClassRoomCard {
   classRoom:        ClassRoom;
-  homeroomTeacher:  { id: string; name: string; position?: string } | null;
+  homeroomTeacher:  HomeroomTeacherSummary | null;
+  homeroomTeachers: HomeroomTeacherSummary[];
   scheduledPeriods: number;   // คาบที่จัดแล้วในตาราง
   totalPeriods:     number;   // คาบทั้งหมดต่อสัปดาห์ (PERIOD_COUNT * 5 - lunch * 5)
   fillPct:          number;   // ตารางถูกจัดไปกี่ %

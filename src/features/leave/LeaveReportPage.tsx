@@ -2,19 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import LeaveHeaderTabs from './components/LeaveHeaderTabs';
 import { CheckCircle2, ClipboardList, Clock, Download, XCircle } from 'lucide-react';
-import { collection, getDocs } from 'firebase/firestore';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import {
   countDays,
   formatDate,
-  useAllLeaveRequests,
+  useLeaveRequestsSince,
   useMyLeaveRequests,
   useStudentLeaveRequests,
 } from '@/hooks/useLeaveRequests';
+import { usePortalRecipientUsers, useStaffUsers } from '@/hooks/useStaffUsers';
 import type { LeaveRequest, LeaveStatus, LeaveType, RequesterType } from '@/types/leave';
 import { cn } from '@/lib/utils';
-import { db } from '@/lib/firebase';
 
 type StatusFilter = 'all' | LeaveStatus;
 type TypeFilter = 'all' | LeaveType;
@@ -64,48 +63,99 @@ function toCsv(requests: LeaveRequest[]) {
 
 export default function LeaveReportPage() {
   const { user, role } = useAuth();
-  const { activeYear } = useActiveAcademicYear();
-
   const isAdmin = role === 'admin' || role === 'sysadmin';
   const isTeacher = role === 'teacher';
   const requesterType: RequesterType = role === 'student' ? 'student' : 'staff';
 
-  const myHook = useMyLeaveRequests(user?.uid ?? '', requesterType);
-  const studentHook = useStudentLeaveRequests();
-  const adminHook = useAllLeaveRequests();
+  if (isAdmin) {
+    return <LeaveReportAdminView />;
+  }
+  if (isTeacher) {
+    return <LeaveReportTeacherView />;
+  }
+  return <LeaveReportMyView userId={user?.uid ?? ''} requesterType={requesterType} />;
+}
 
-  const sourceRequests = isAdmin ? adminHook.requests : isTeacher ? studentHook.requests : myHook.requests;
-  const loading = isAdmin ? adminHook.loading : isTeacher ? studentHook.loading : myHook.loading;
+function LeaveReportAdminView() {
+  const { activeYear } = useActiveAcademicYear();
+  const [filterStartDate, setFilterStartDate] = useState(activeYear?.startDate || defaultStartIso());
+  const { requests, loading } = useLeaveRequestsSince(filterStartDate);
+  return (
+    <LeaveReportView
+      sourceRequests={requests}
+      loading={loading}
+      filterStartDate={filterStartDate}
+      onFilterStartDateChange={setFilterStartDate}
+    />
+  );
+}
 
-  const [startDate, setStartDate] = useState(activeYear?.startDate || defaultStartIso());
+function LeaveReportTeacherView() {
+  const { activeYear } = useActiveAcademicYear();
+  const [filterStartDate, setFilterStartDate] = useState(activeYear?.startDate || defaultStartIso());
+  const { requests, loading } = useStudentLeaveRequests(filterStartDate);
+  return (
+    <LeaveReportView
+      sourceRequests={requests}
+      loading={loading}
+      filterStartDate={filterStartDate}
+      onFilterStartDateChange={setFilterStartDate}
+    />
+  );
+}
+
+function LeaveReportMyView({ userId, requesterType }: { userId: string; requesterType: RequesterType }) {
+  const { requests, loading } = useMyLeaveRequests(userId, requesterType);
+  return <LeaveReportView sourceRequests={requests} loading={loading} />;
+}
+
+function LeaveReportView({
+  sourceRequests,
+  loading,
+  filterStartDate,
+  onFilterStartDateChange,
+}: {
+  sourceRequests: LeaveRequest[];
+  loading: boolean;
+  filterStartDate?: string;
+  onFilterStartDateChange?: (date: string) => void;
+}) {
+  const { role } = useAuth();
+  const { activeYear } = useActiveAcademicYear();
+
+  const isAdmin = role === 'admin' || role === 'sysadmin';
+  const isTeacher = role === 'teacher';
+
+  const [internalStartDate, setInternalStartDate] = useState(activeYear?.startDate || defaultStartIso());
+  const startDate = filterStartDate ?? internalStartDate;
+  const setStartDate = onFilterStartDateChange ?? setInternalStartDate;
   const [endDate, setEndDate] = useState(activeYear?.endDate || todayIso());
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [requesterFilter, setRequesterFilter] = useState<RequesterFilter>('all');
   const [keyword, setKeyword] = useState('');
-  const [requesterNameById, setRequesterNameById] = useState<Record<string, string>>({});
+  const { users: portalUsers } = usePortalRecipientUsers();
+  const { users: staffUsers } = useStaffUsers();
+
+  const requesterNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const user of [...portalUsers, ...staffUsers]) {
+      map[user.userId] = user.displayName;
+    }
+    for (const request of sourceRequests) {
+      if (request.requesterName && !map[request.requesterId]) {
+        map[request.requesterId] = request.requesterName;
+      }
+    }
+    return map;
+  }, [portalUsers, staffUsers, sourceRequests]);
+
+  const [headerCenterPortalEl, setHeaderCenterPortalEl] = useState<HTMLElement | null>(null);
+  const [headerActionsPortalEl, setHeaderActionsPortalEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-    const loadUsers = async () => {
-      try {
-        const snap = await getDocs(collection(db, 'users'));
-        if (!mounted) return;
-        const map: Record<string, string> = {};
-        snap.forEach((docSnap) => {
-          const data = docSnap.data() as Record<string, unknown>;
-          const fullName = String(data.name ?? data.displayName ?? '').trim();
-          const fallback = String(data.email ?? '').trim();
-          const label = fullName || fallback;
-          if (label) map[docSnap.id] = label;
-        });
-        setRequesterNameById(map);
-      } catch {
-        if (mounted) setRequesterNameById({});
-      }
-    };
-    void loadUsers();
-    return () => { mounted = false; };
+    setHeaderCenterPortalEl(document.getElementById('header-portal-center'));
+    setHeaderActionsPortalEl(document.getElementById('header-portal-right-actions'));
   }, []);
 
   const getRequesterDisplayName = useCallback((request: LeaveRequest): string => {
@@ -151,33 +201,21 @@ export default function LeaveReportPage() {
     URL.revokeObjectURL(url);
   }, [filtered, getRequesterDisplayName, startDate, endDate]);
 
-  const headerCenterPortal = useMemo(() => {
-    const el = document.getElementById('header-portal-center');
-    if (!el) return null;
-    return createPortal(<LeaveHeaderTabs />, el);
-  }, []);
-
-  const headerActionsPortal = useMemo(() => {
-    const el = document.getElementById('header-portal-right-actions');
-    if (!el) return null;
-    return createPortal(
-      <div className="flex items-center gap-2">
-        <button
-          onClick={downloadCsv}
-          className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700 transition-all active:scale-95 shadow-sm"
-          title="ส่งออก CSV"
-        >
-          <Download size={16} />
-        </button>
-      </div>,
-      el
-    );
-  }, [downloadCsv]);
-
   return (
     <div className="flex h-full min-h-0 w-full max-w-[1200px] mx-auto flex-col gap-4 pb-10">
-      {headerCenterPortal}
-      {headerActionsPortal}
+      {headerCenterPortalEl && createPortal(<LeaveHeaderTabs />, headerCenterPortalEl)}
+      {headerActionsPortalEl && createPortal(
+        <div className="flex items-center gap-2">
+          <button
+            onClick={downloadCsv}
+            className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700 transition-all active:scale-95 shadow-sm"
+            title="ส่งออก CSV"
+          >
+            <Download size={16} />
+          </button>
+        </div>,
+        headerActionsPortalEl
+      )}
 
       <div className="mb-6">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">

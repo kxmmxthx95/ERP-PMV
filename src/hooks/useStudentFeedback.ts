@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import {
   collection,
   doc,
-  onSnapshot,
-  orderBy,
-  query,
   runTransaction,
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { studentFeedbackStore } from '@/lib/firestoreShared/studentFeedbackStore';
 import type {
   CreateFeedbackInput,
   FeedbackStatus,
@@ -18,36 +16,6 @@ import type {
 const FEEDBACK_COL = 'student_feedback';
 const ANON_LIMIT_COL = 'feedback_anonymous_limits';
 
-function mapFeedback(id: string, raw: Record<string, unknown>): StudentFeedback {
-  const statusRaw = raw.status;
-  const status: FeedbackStatus =
-    statusRaw === 'in_progress' || statusRaw === 'resolved' ? statusRaw : 'new';
-
-  const modeRaw = raw.mode;
-  const mode = modeRaw === 'anonymous' ? 'anonymous' : 'identified';
-
-  const categoryRaw = raw.category;
-  const category =
-    categoryRaw === 'academic' || categoryRaw === 'facilities' || categoryRaw === 'cafeteria'
-      ? categoryRaw
-      : 'general';
-
-  return {
-    id,
-    mode,
-    category,
-    message: typeof raw.message === 'string' ? raw.message : '',
-    status,
-    gradeLevel: typeof raw.gradeLevel === 'string' ? raw.gradeLevel : 'ไม่ระบุ',
-    department: typeof raw.department === 'string' ? raw.department : 'ไม่ระบุ',
-    createdAt: raw.createdAt,
-    updatedAt: raw.updatedAt,
-    studentId: typeof raw.studentId === 'string' ? raw.studentId : null,
-    studentName: typeof raw.studentName === 'string' ? raw.studentName : null,
-    adminNote: typeof raw.adminNote === 'string' ? raw.adminNote : null,
-  };
-}
-
 function byDateDesc(a: StudentFeedback, b: StudentFeedback) {
   const aSec = (a.createdAt as { seconds?: number } | undefined)?.seconds ?? 0;
   const bSec = (b.createdAt as { seconds?: number } | undefined)?.seconds ?? 0;
@@ -55,26 +23,12 @@ function byDateDesc(a: StudentFeedback, b: StudentFeedback) {
 }
 
 export function useFeedbackStream() {
-  const [items, setItems] = useState<StudentFeedback[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const q = query(collection(db, FEEDBACK_COL), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const mapped = snap.docs.map((d) => mapFeedback(d.id, d.data() as Record<string, unknown>));
-        setItems(mapped);
-        setLoading(false);
-      },
-      () => {
-        setItems([]);
-        setLoading(false);
-      },
-    );
-
-    return () => unsub();
-  }, []);
+  const items = useSyncExternalStore(
+    studentFeedbackStore.subscribe,
+    studentFeedbackStore.getSnapshot,
+    studentFeedbackStore.getSnapshot,
+  );
+  const loading = !studentFeedbackStore.getReady();
 
   return { items, loading };
 }

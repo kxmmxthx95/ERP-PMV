@@ -1084,7 +1084,7 @@ export default function AttendanceSheet({
   return (
     <>
       {filtersTarget && createPortal(
-        <div className="hidden md:flex items-center gap-2.5">
+        <div className="pointer-events-auto hidden lg:flex items-center gap-2.5">
           {/* Select แผนก */}
           <Select value={selectedDept} onValueChange={(val) => handleDeptSelect(val as DepartmentFilter)}>
             <SelectTrigger className="h-9 min-w-[110px] rounded-full border border-black/[0.05] bg-white/40 px-3 text-[10px] font-black backdrop-blur-md shadow-sm transition-all hover:bg-white/60">
@@ -1156,7 +1156,7 @@ export default function AttendanceSheet({
       )}
 
       {typeof window !== 'undefined' && selectedRoom && createPortal(
-        <div className="flex h-9 items-center rounded-full border border-black/[0.05] bg-white/40 p-1 backdrop-blur-md shadow-sm">
+        <div className="pointer-events-auto flex h-9 items-center rounded-full border border-black/[0.05] bg-white/40 p-1 backdrop-blur-md shadow-sm">
           {SUBVIEW_OPTIONS.map(option => {
             const isActive = subView === option.id;
             return (

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Download, FileSpreadsheet, Link, AlertCircle, CheckCircle2, Loader2, ExternalLink } from 'lucide-react';
+import { HiXMark, HiArrowDownTray, HiTableCells, HiLink, HiExclamationCircle, HiCheckCircle, HiArrowPath, HiArrowTopRightOnSquare } from 'react-icons/hi2';
 
 interface ParsedStudent {
     id: string;
@@ -31,7 +31,7 @@ const TEMPLATE_COLUMNS = [
 
 const FIELD_DOCS = [
     { field: 'studentCode', desc: 'เลขประจำตัวนักเรียน', example: '67001', required: true },
-    { field: 'prefix', desc: 'คำนำหน้าชื่อ', example: 'ด.ช. / ด.ญ. / นาย / น.ส.', required: true },
+    { field: 'prefix', desc: 'คำนำหน้าชื่อ', example: 'เด็กชาย / เด็กหญิง / นางสาว', required: true },
     { field: 'firstName', desc: 'ชื่อจริง', example: 'สมชาย', required: true },
     { field: 'lastName', desc: 'นามสกุล', example: 'สายเสมอ', required: true },
     { field: 'phone', desc: 'เบอร์โทรศัพท์', example: '0812345678', required: false },
@@ -41,8 +41,8 @@ const FIELD_DOCS = [
 function buildCsvContent(): string {
     const header = TEMPLATE_COLUMNS.join(',');
     const sampleRows = [
-        ['67001', 'ด.ช.', 'สมชาย', 'สายเสมอ', '0812345678', 'somchai@email.com'],
-        ['67002', 'ด.ญ.', 'สมหญิง', 'มิ่งขวัญ', '0898765432', 'somying@email.com'],
+        ['67001', 'เด็กชาย', 'สมชาย', 'สายเสมอ', '0812345678', 'somchai@email.com'],
+        ['67002', 'เด็กหญิง', 'สมหญิง', 'มิ่งขวัญ', '0898765432', 'somying@email.com'],
     ];
     const rows = sampleRows.map(r => r.join(','));
     return [header, ...rows].join('\n');
@@ -176,22 +176,22 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
                     >
                         <div className="flex items-center gap-3 px-8 py-6 border-b border-slate-100">
                             <div className="w-10 h-10 rounded-2xl bg-blue-500/10 flex items-center justify-center">
-                                <FileSpreadsheet size={20} className="text-blue-600" />
+                                <HiTableCells size={20} className="text-blue-600" />
                             </div>
                             <div className="flex-1">
                                 <h2 className="text-lg font-black text-slate-800">นำเข้าจาก Google Sheet / CSV</h2>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">เชื่อมต่อข้อมูลนักเรียนจากภายนอก</p>
                             </div>
                             <button onClick={handleClose} className="w-10 h-10 rounded-full hover:bg-slate-100 flex items-center justify-center transition-colors">
-                                <X size={20} className="text-slate-400" />
+                                <HiXMark size={20} className="text-slate-400" />
                             </button>
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-8 space-y-6">
                             <div className="flex items-center bg-slate-50 rounded-2xl p-1.5 gap-1">
                                 {[
-                                    { id: 'template' as const, label: 'อัปโหลด CSV', icon: Download },
-                                    { id: 'sheet' as const, label: 'Google Sheet URL', icon: Link },
+                                    { id: 'template' as const, label: 'อัปโหลด CSV', icon: HiArrowDownTray },
+                                    { id: 'sheet' as const, label: 'Google Sheet URL', icon: HiLink },
                                 ].map(({ id, label, icon: Icon }) => (
                                     <button
                                         key={id}
@@ -211,7 +211,7 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
                                         onClick={() => document.getElementById('csv-file-input')?.click()}
                                     >
                                         <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center">
-                                            <FileSpreadsheet size={32} className="text-slate-300" />
+                                            <HiTableCells size={32} className="text-slate-300" />
                                         </div>
                                         <div className="text-center">
                                             <p className="font-black text-slate-700">{csvFile ? csvFile.name : 'คลิกเพื่อเลือกไฟล์ CSV'}</p>
@@ -224,7 +224,7 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
                                         onClick={downloadTemplate}
                                         className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl border border-slate-200 hover:bg-slate-50 text-xs font-black text-slate-600 transition-all"
                                     >
-                                        <Download size={14} />
+                                        <HiArrowDownTray size={14} />
                                         ดาวน์โหลด Template CSV
                                     </button>
                                 </div>
@@ -234,7 +234,7 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
                                 <div className="space-y-6">
                                     <div className="rounded-[2rem] p-6 bg-blue-50/50 border border-blue-100/50 space-y-3">
                                         <div className="flex items-center gap-2 text-blue-600">
-                                            <AlertCircle size={16} />
+                                            <HiExclamationCircle size={16} />
                                             <span className="text-xs font-black uppercase tracking-widest">วิธีเตรียม Google Sheet</span>
                                         </div>
                                         <ol className="list-decimal list-inside space-y-2 text-[11px] font-bold text-slate-500 leading-relaxed">
@@ -249,7 +249,7 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
                                             rel="noopener noreferrer"
                                             className="inline-flex items-center gap-1.5 text-blue-500 hover:underline text-[11px] font-black pt-2"
                                         >
-                                            <ExternalLink size={12} />
+                                            <HiArrowTopRightOnSquare size={12} />
                                             สร้าง Google Sheet ใหม่
                                         </a>
                                     </div>
@@ -267,7 +267,7 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
                                             disabled={!sheetUrl.trim() || loading}
                                             className="px-6 py-4 rounded-2xl bg-blue-600 text-white text-xs font-black disabled:opacity-40 hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/20 flex items-center gap-2"
                                         >
-                                            {loading ? <Loader2 size={16} className="animate-spin" /> : <Link size={16} />}
+                                            {loading ? <HiArrowPath size={16} className="animate-spin" /> : <HiLink size={16} />}
                                             {loading ? 'ดึงข้อมูล...' : 'ดึงข้อมูล'}
                                         </button>
                                     </div>
@@ -276,7 +276,7 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
 
                             {error && (
                                 <div className="flex items-start gap-3 p-4 rounded-2xl bg-rose-50 border border-rose-100">
-                                    <AlertCircle size={18} className="text-rose-500 shrink-0" />
+                                    <HiExclamationCircle size={18} className="text-rose-500 shrink-0" />
                                     <p className="text-xs font-bold text-rose-600 leading-relaxed">{error}</p>
                                 </div>
                             )}
@@ -286,7 +286,7 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
                                     <div className="flex items-center justify-between px-2">
                                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">ตัวอย่างข้อมูล ({preview.length} รายการ)</p>
                                         <div className="flex items-center gap-1.5 text-emerald-500">
-                                            <CheckCircle2 size={12} />
+                                            <HiCheckCircle size={12} />
                                             <span className="text-[10px] font-black uppercase">พร้อมนำเข้า</span>
                                         </div>
                                     </div>
@@ -355,7 +355,7 @@ export default function StudentGoogleSheetModal({ open, onClose, onImport }: Pro
                                 disabled={!preview || preview.length === 0}
                                 className="px-10 py-3 rounded-full bg-slate-900 text-white text-xs font-black disabled:opacity-30 hover:bg-black transition-all shadow-xl shadow-slate-900/20 flex items-center gap-2"
                             >
-                                <CheckCircle2 size={16} />
+                                <HiCheckCircle size={16} />
                                 ยืนยันการนำเข้า {preview?.length || 0} รายการ
                             </button>
                         </div>

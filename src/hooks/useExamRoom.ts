@@ -1,11 +1,47 @@
 3.// src/hooks/useExamRoom.ts
-import { useState, useCallback, useEffect } from 'react';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, Timestamp, writeBatch } from 'firebase/firestore';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  Timestamp,
+  writeBatch,
+  type QueryDocumentSnapshot,
+} from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { normalizeExamScore } from '@/lib/students/studentIdentity';
 import type { ExamRoom, ExamAttempt, ExamRoomStatus, ExamQuestionPublic } from '@/types/exam';
-import type { Question, MultipleChoicePayload } from '@/types/questionBank';
+import type { QuestionPayload, QuestionType } from '@/types/questionBank';
+import { resolveQuestionPoints } from '@/lib/exam/questionPoints';
+import {
+  gradeAttemptAnswers,
+  loadQuestionMapForSets,
+  loadRoomForGrading,
+  resolveEffectiveQuestionIds,
+  resolveRoundGradingConfig,
+  type GradingQuestionDoc,
+} from '@/lib/exam/autoGradeAttempt';
+import {
+  buildAttemptScoreUpdate,
+  getManualEssayQuestions,
+} from '@/lib/exam/manualEssayGrading';
+import type { Question } from '@/types/questionBank';
+import {
+  deriveSetOrder,
+  describeMissingQuestionsError,
+  getRoundQuestionConfig,
+  roomHasSavedQuestions,
+} from '@/lib/exam/roundQuestions';
 import { useActiveAcademicYear } from './useActiveAcademicYear';
 import { useAuth } from './useAuth';
+import { requestExamAttemptGrading } from '@/features/exam/utils/examGradingApi';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const normalizeTimestamp = (val: any): number => {
@@ -15,6 +51,58 @@ const normalizeTimestamp = (val: any): number => {
   if (val instanceof Date) return val.getTime();
   return 0;
 };
+
+/** Firestore rejects `undefined` field values — omit them before writes. */
+function stripUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
+}
+
+function parseQuestionDoc(
+  d: QueryDocumentSnapshot,
+  questionPointsOverride?: Record<string, number>,
+): ExamQuestionPublic {
+  const data = d.data() as {
+    type?: QuestionType;
+    orderIndex?: number;
+    order?: number;
+    text?: string;
+    questionText?: string;
+    points?: number;
+    options?: Array<{ id?: string; text?: string }>;
+    payload?: QuestionPayload & { options?: Array<{ id?: string; text?: string }> };
+  };
+  const type: QuestionType = data.type === 'essay' ? 'essay' : 'multiple_choice';
+  const payloadOptions = Array.isArray(data.payload?.options) ? data.payload.options : [];
+  const rawOptions = Array.isArray(data.options) && data.options.length > 0
+    ? data.options
+    : payloadOptions;
+  const options = rawOptions.map((opt, index) => ({
+    id: opt.id || String(index + 1),
+    text: opt.text || '',
+  }));
+  const payload = (data.payload ?? (type === 'multiple_choice'
+    ? { options }
+    : { rubric: '', maxScore: 1 })) as QuestionPayload;
+  const points = resolveQuestionPoints(
+    d.id,
+    questionPointsOverride,
+    { type, payload },
+    typeof data.points === 'number' ? data.points : undefined,
+  );
+
+  return {
+    id: d.id,
+    order: data.orderIndex ?? data.order ?? 0,
+    text: data.questionText || data.text || '',
+    points,
+    options,
+    questionType: type,
+  };
+}
+
+export const EXAM_ROOM_QUESTIONS_NOT_SAVED = 'EXAM_ROOM_QUESTIONS_NOT_SAVED';
 
 // ── Mock questions (public — no answers) ────────────────────────────────────
 export const MOCK_QUESTIONS_PUBLIC = [
@@ -77,6 +165,7 @@ export function useExamRoom() {
   const [rooms, setRooms] = useState<ExamRoom[]>([]);
   const [attempts, setAttempts] = useState<ExamAttempt[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const recalcAttemptedRef = useRef(new Set<string>());
 
   // Load exam rooms by role
   useEffect(() => {
@@ -354,6 +443,7 @@ export function useExamRoom() {
               ...raw,
               id: change.doc.id,
               roomId: room.id,
+              score: normalizeExamScore(raw.score),
               startedAt: normalizeTimestamp(raw.startedAt),
               submittedAt: raw.submittedAt ? normalizeTimestamp(raw.submittedAt) : null,
               lastSavedAt: normalizeTimestamp(raw.lastSavedAt),
@@ -375,7 +465,7 @@ export function useExamRoom() {
   const createRoom = useCallback(async (data: Omit<ExamRoom, 'id' | 'createdAt' | 'status' | 'currentRound' | 'completedRounds'>) => {
     try {
       const roomDoc = await addDoc(collection(db, 'exam_rooms'), {
-        ...data,
+        ...stripUndefined(data as Record<string, unknown>),
         status: 'upcoming',
         currentRound: 0,
         completedRounds: 0,
@@ -388,78 +478,112 @@ export function useExamRoom() {
     }
   }, []);
 
-  const calculateRoomScores = useCallback(async (roomId: string, round: number) => {
+  const calculateRoomScores = useCallback(async (roomId: string, round: number, options?: { includeGraded?: boolean }) => {
     try {
-      const roomSnap = await getDoc(doc(db, 'exam_rooms', roomId));
-      if (!roomSnap.exists()) return;
-      const roomData = { id: roomSnap.id, ...roomSnap.data() } as ExamRoom;
+      const roomData = await loadRoomForGrading(db, roomId);
+      if (!roomData) return;
 
-      const roundKey = String(round);
-      const roundConfig = roomData.roundQuestions?.[roundKey]
-        || roomData.roundQuestions?.['∞']
-        || roomData.roundQuestions?.['1']
-        || (roomData.roundQuestions ? Object.values(roomData.roundQuestions)[0] : undefined);
+      const {
+        selectedQuestionIds,
+        questionPoints,
+        candidateSetIds,
+      } = resolveRoundGradingConfig(roomData, round);
 
-      const fallbackSetId = roundConfig?.questionSetId || roomData.questionSetId;
-      const selectedIds = roundConfig?.questionIds || roomData.selectedQuestionIds || [];
-      const setByQuestionId = roundConfig?.questionSetByQuestionId || {};
+      if (candidateSetIds.length === 0) return;
 
-      if (selectedIds.length === 0) return;
+      const questionMap = await loadQuestionMapForSets(db, candidateSetIds);
+      if (questionMap.size === 0) return;
 
-      const candidateSetIds = new Set<string>();
-      selectedIds.forEach((qid) => {
-        const mappedSetId = setByQuestionId[qid];
-        if (mappedSetId) candidateSetIds.add(mappedSetId);
+      const questionsForRound: Question[] = resolveEffectiveQuestionIds(
+        selectedQuestionIds,
+        questionMap,
+      ).map((questionId) => {
+        const q = questionMap.get(questionId) as GradingQuestionDoc;
+        return {
+          id: q.id,
+          setId: '',
+          orderIndex: q.orderIndex ?? 0,
+          curriculumYear: '',
+          difficulty: 'medium' as const,
+          type: q.type,
+          questionText: '',
+          images: [],
+          payload: q.payload,
+          createdBy: '',
+          createdAt: 0,
+          updatedAt: 0,
+        };
       });
-      if (fallbackSetId) candidateSetIds.add(fallbackSetId);
-
-      const setIds = Array.from(candidateSetIds);
-      const questionMap = new Map<string, Question>();
-      
-      await Promise.all(
-        setIds.map(async (setId) => {
-          const snap = await getDocs(collection(db, 'question_sets', setId, 'questions'));
-          snap.docs.forEach((d) => {
-            questionMap.set(d.id, { id: d.id, ...d.data() } as Question);
-          });
-        })
-      );
+      const manualEssayQuestions = getManualEssayQuestions(questionsForRound);
 
       const attemptsQ = query(
         collection(db, 'exam_rooms', roomId, 'attempts'),
         where('round', '==', round),
-        where('status', '==', 'submitted')
       );
       const attemptsSnap = await getDocs(attemptsQ);
 
       const batch = writeBatch(db);
+      let pending = 0;
+
       attemptsSnap.docs.forEach((attemptDoc) => {
         const attemptData = attemptDoc.data() as ExamAttempt;
-        let totalScore = 0;
+        const status = attemptData.status;
+        const canGrade =
+          status === 'submitted'
+          || (options?.includeGraded === true && status === 'graded');
+        if (!canGrade) return;
 
-        selectedIds.forEach((qid) => {
-          const q = questionMap.get(qid);
-          if (!q) return;
+        const answers = attemptData.answers && typeof attemptData.answers === 'object'
+          ? attemptData.answers
+          : {};
+        const result = gradeAttemptAnswers(
+          selectedQuestionIds,
+          questionMap,
+          answers,
+          questionPoints,
+        );
 
-          const studentAnswer = attemptData.answers[qid];
-          if (!studentAnswer) return;
+        if (result.kind === 'skipped_no_questions' || result.kind === 'skipped_no_set_ids') {
+          return;
+        }
 
-          if (q.type === 'multiple_choice') {
-            const payload = q.payload as MultipleChoicePayload;
-            const correctOption = payload.options.find(o => o.isCorrect);
-            if (correctOption && correctOption.id === studentAnswer) {
-              totalScore += (q as any).points || 1;
-            }
-          }
-        });
+        const isPartial = result.kind === 'partial_graded';
+        const existingManual = attemptData.manualScores ?? {};
+        const hasSavedManual = Object.keys(existingManual).length > 0;
 
-        batch.update(attemptDoc.ref, {
-          score: totalScore,
-          status: 'graded',
-        });
+        if (hasSavedManual && manualEssayQuestions.length > 0) {
+          const attemptWithObjective: ExamAttempt = {
+            ...attemptData,
+            objectiveScore: result.score,
+            score: result.score,
+            pendingManualGrading: isPartial,
+          };
+          const merged = buildAttemptScoreUpdate(
+            attemptWithObjective,
+            existingManual,
+            manualEssayQuestions,
+          );
+          batch.update(attemptDoc.ref, {
+            ...merged,
+            objectiveMaxPoints: result.autoGradableMaxPoints,
+            manualEssayCount: result.manualEssayCount,
+          });
+        } else {
+          batch.update(attemptDoc.ref, {
+            score: result.score,
+            status: isPartial ? 'submitted' : 'graded',
+            objectiveScore: result.score,
+            objectiveMaxPoints: result.autoGradableMaxPoints,
+            pendingManualGrading: isPartial,
+            manualEssayCount: result.manualEssayCount,
+          });
+        }
+        pending += 1;
       });
 
-      await batch.commit();
+      if (pending > 0) {
+        await batch.commit();
+      }
     } catch (err) {
       console.error('Error calculating room scores:', err);
     }
@@ -474,6 +598,9 @@ export function useExamRoom() {
 
       if (status === 'active') {
         const nextRound = (room.currentRound ?? 0) + 1;
+        if (!roomHasSavedQuestions(room, nextRound)) {
+          throw new Error(EXAM_ROOM_QUESTIONS_NOT_SAVED);
+        }
         const now = Date.now();
         const durationMs = (room.durationMinutes || 60) * 60 * 1000;
         await updateDoc(doc(db, 'exam_rooms', roomId), {
@@ -535,7 +662,7 @@ export function useExamRoom() {
   const updateRoom = useCallback(async (roomId: string, data: Partial<ExamRoom>) => {
     try {
       const { id, createdAt, ...updateData } = data as any;
-      await updateDoc(doc(db, 'exam_rooms', roomId), updateData);
+      await updateDoc(doc(db, 'exam_rooms', roomId), stripUndefined(updateData));
     } catch (err) {
       console.error('Error updating exam room:', err);
       throw err;
@@ -610,40 +737,176 @@ export function useExamRoom() {
     return () => clearInterval(interval);
   }, [rooms, role, isLoading, updateRoomStatus]);
 
-  // Auto-calculate scores for late submissions (submitted after room closed)
+  // Auto-calculate scores for ungraded / mis-graded attempts (teacher + admin)
   useEffect(() => {
-    if (role !== 'teacher' || isLoading || attempts.length === 0) return;
+    const canAutoGrade = role === 'teacher' || role === 'admin' || role === 'sysadmin';
+    if (!canAutoGrade || isLoading || attempts.length === 0) return;
 
-    // Filter attempts that are 'submitted' but have no score
-    const uncalculated = attempts.filter(a => a.status === 'submitted' && a.score === null);
+    const uncalculated = attempts.filter((a) => {
+      if (a.status === 'submitted' && normalizeExamScore(a.score) === null) return true;
+      // One-time re-grade for attempts wrongly scored 0 (legacy Cloud Function bug)
+      if (a.status === 'graded' && normalizeExamScore(a.score) === 0) {
+        const answerCount = a.answers ? Object.keys(a.answers).length : 0;
+        if (answerCount === 0) return false;
+        const manualTotal = Object.values(a.manualScores ?? {}).reduce(
+          (sum, value) => sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0),
+          0,
+        );
+        if (manualTotal > 0) return false;
+        const taskKey = `${a.roomId}:${a.round}:regrade-zero`;
+        if (recalcAttemptedRef.current.has(taskKey)) return false;
+        recalcAttemptedRef.current.add(taskKey);
+        return true;
+      }
+      return false;
+    });
     if (uncalculated.length === 0) return;
 
-    // Group by roomId and round to minimize calls
     const tasks = new Map<string, Set<number>>();
-    uncalculated.forEach(a => {
+    uncalculated.forEach((a) => {
       if (!tasks.has(a.roomId)) tasks.set(a.roomId, new Set());
       tasks.get(a.roomId)!.add(a.round);
     });
 
     tasks.forEach((rounds, rId) => {
-      rounds.forEach(round => {
-        console.log(`[useExamRoom] Auto-calculating late submission for room ${rId} round ${round}`);
-        void calculateRoomScores(rId, round);
+      rounds.forEach((round) => {
+        console.log(`[useExamRoom] Auto-calculating scores for room ${rId} round ${round}`);
+        void calculateRoomScores(rId, round, { includeGraded: true });
       });
     });
   }, [attempts, role, isLoading, calculateRoomScores]);
 
-  return { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts };
+  return { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores };
 }
 
 // ── Hook: useExamAttempt (student side) ───────────────────────────────────────
+export type ExamRoomPreview = Pick<ExamRoom, 'title' | 'gradeLevel' | 'subjectName' | 'className'>;
+
+export type ExamPdfPart = {
+  setId: string;
+  partIndex: number;
+  partLabel: string;
+  title: string;
+  examPdfUrl: string;
+  examPdfHiddenPages: number[];
+};
+
+export type ExamAnswerSheetGroup = {
+  setId: string;
+  partLabel: string;
+  title: string;
+  questions: ExamQuestionPublic[];
+};
+
+function parseSetTitle(data: Record<string, unknown> | undefined, index: number): string {
+  if (typeof data?.title === 'string' && data.title.trim()) return data.title.trim();
+  return `ชุดข้อสอบ ${index + 1}`;
+}
+
+function metaMapFromSetSnaps(
+  setMetaSnaps: Array<{ id: string; data: () => Record<string, unknown> | undefined }>,
+): Map<string, Record<string, unknown>> {
+  const metaById = new Map<string, Record<string, unknown>>();
+  setMetaSnaps.forEach((snap) => {
+    const data = snap.data();
+    if (data) metaById.set(snap.id, data);
+  });
+  return metaById;
+}
+
+function parseExamPdfHiddenPages(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((p): p is number => Number.isInteger(p) && p >= 1);
+}
+
+function buildExamPdfPartsFromSetSnaps(
+  orderedSetIds: string[],
+  metaById: Map<string, Record<string, unknown>>,
+): ExamPdfPart[] {
+  const parts: ExamPdfPart[] = [];
+  orderedSetIds.forEach((setId, index) => {
+    const data = metaById.get(setId);
+    const url = data?.examPdfUrl;
+    if (typeof url !== 'string' || !url.trim()) return;
+    parts.push({
+      setId,
+      partIndex: index,
+      partLabel: `Part ${index + 1}`,
+      title: parseSetTitle(data, index),
+      examPdfUrl: url,
+      examPdfHiddenPages: parseExamPdfHiddenPages(data?.examPdfHiddenPages),
+    });
+  });
+  return parts;
+}
+
+function buildAnswerSheetGroups(
+  orderedQuestions: ExamQuestionPublic[],
+  orderedSetIds: string[],
+  setByQuestionId: Record<string, string>,
+  fallbackSetId: string,
+  metaById: Map<string, Record<string, unknown>>,
+): ExamAnswerSheetGroup[] {
+  if (orderedSetIds.length <= 1) {
+    return orderedQuestions.length > 0
+      ? [{
+          setId: orderedSetIds[0] ?? fallbackSetId ?? '',
+          partLabel: 'Part 1',
+          title: parseSetTitle(metaById.get(orderedSetIds[0] ?? ''), 0),
+          questions: orderedQuestions,
+        }]
+      : [];
+  }
+
+  return orderedSetIds
+    .map((setId, index) => ({
+      setId,
+      partLabel: `Part ${index + 1}`,
+      title: parseSetTitle(metaById.get(setId), index),
+      questions: orderedQuestions.filter(
+        (q) => (setByQuestionId[q.id] ?? fallbackSetId) === setId,
+      ),
+    }))
+    .filter((group) => group.questions.length > 0);
+}
+
 export function useExamAttempt(roomId: string) {
   const [attempt, setAttempt] = useState<ExamAttempt | null>(null);
   const [room, setRoom] = useState<ExamRoom | null>(null);
+  const [roomPreview, setRoomPreview] = useState<ExamRoomPreview | null>(null);
   const [questions, setQuestions] = useState<ExamQuestionPublic[]>([]);
+  const [examPdfParts, setExamPdfParts] = useState<ExamPdfPart[]>([]);
+  const [answerSheetGroups, setAnswerSheetGroups] = useState<ExamAnswerSheetGroup[]>([]);
+  const [examPdfUrl, setExamPdfUrl] = useState<string | null>(null);
+  const [examPdfHiddenPages, setExamPdfHiddenPages] = useState<number[]>([]);
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
+
+  useEffect(() => {
+    if (!roomId) {
+      setRoomPreview(null);
+      return;
+    }
+    let cancelled = false;
+    void getDoc(doc(db, 'exam_rooms', roomId))
+      .then((snap) => {
+        if (cancelled || !snap.exists()) return;
+        const data = snap.data() as Partial<ExamRoom>;
+        setRoomPreview({
+          title: data.title?.trim() || 'ห้องสอบออนไลน์',
+          gradeLevel: data.gradeLevel,
+          subjectName: data.subjectName,
+          className: data.className,
+        });
+      })
+      .catch(() => {
+        // Preview is optional; join still validates password.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId]);
 
   // Real-time listener for the student's attempt
   useEffect(() => {
@@ -654,8 +917,17 @@ export function useExamAttempt(roomId: string) {
         const raw = snap.data();
         setAttempt(prev => {
           if (!prev) return null;
-          // Only update if status or score changed to avoid noise during active typing
-          if (raw.status === prev.status && raw.score === prev.score && (raw.answers ? Object.keys(raw.answers).length : 0) <= (prev.answers ? Object.keys(prev.answers).length : 0)) {
+          const gradingFieldsChanged =
+            raw.objectiveMaxPoints !== prev.objectiveMaxPoints
+            || raw.pendingManualGrading !== prev.pendingManualGrading
+            || raw.manualEssayCount !== prev.manualEssayCount;
+          // Only skip noisy updates during active typing; always apply grading results.
+          if (
+            raw.status === prev.status
+            && raw.score === prev.score
+            && !gradingFieldsChanged
+            && (raw.answers ? Object.keys(raw.answers).length : 0) <= (prev.answers ? Object.keys(prev.answers).length : 0)
+          ) {
             return prev;
           }
           return {
@@ -673,25 +945,42 @@ export function useExamAttempt(roomId: string) {
     return () => unsub();
   }, [roomId, attempt?.id]);
 
+  // Recover stuck grading (submitted but score still null) — e.g. before Gen2 trigger fix
+  useEffect(() => {
+    if (!roomId || !attempt?.id) return;
+    if (attempt.status !== 'submitted') return;
+    if (typeof attempt.score === 'number') return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      void requestExamAttemptGrading(roomId, attempt.id).catch((err) => {
+        console.warn('Exam grading recovery failed:', err);
+      });
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [roomId, attempt?.id, attempt?.status, attempt?.score]);
+
 
   const fetchQuestions = useCallback(async (roomData: ExamRoom): Promise<ExamQuestionPublic[]> => {
     setIsLoadingQuestions(true);
     try {
-      const rawRound = Number(roomData.currentRound ?? 1);
-      const currentRound = Number.isFinite(rawRound) && rawRound > 0 ? rawRound : 1;
-      const roundKey = String(currentRound);
-      const roundConfig =
-        roomData.roundQuestions?.[roundKey]
-        || roomData.roundQuestions?.['∞']
-        || roomData.roundQuestions?.['1']
-        || (roomData.roundQuestions ? Object.values(roomData.roundQuestions)[0] : undefined);
+      const { roundConfig } = getRoundQuestionConfig(roomData);
 
       const fallbackSetId = roundConfig?.questionSetId || roomData.questionSetId;
       const selectedIds = roundConfig?.questionIds || roomData.selectedQuestionIds || [];
       const setByQuestionId = roundConfig?.questionSetByQuestionId || {};
 
-      if (selectedIds.length === 0) {
+      if (selectedIds.length === 0 && !fallbackSetId) {
         setQuestions([]);
+        setExamPdfParts([]);
+        setAnswerSheetGroups([]);
+        setExamPdfUrl(null);
+        setExamPdfHiddenPages([]);
         return [];
       }
 
@@ -704,10 +993,42 @@ export function useExamAttempt(roomId: string) {
 
       if (candidateSetIds.size === 0) {
         setQuestions([]);
+        setExamPdfParts([]);
+        setAnswerSheetGroups([]);
+        setExamPdfUrl(null);
+        setExamPdfHiddenPages([]);
         return [];
       }
 
+      const orderedSetIds = deriveSetOrder(
+        selectedIds,
+        setByQuestionId,
+        fallbackSetId ?? '',
+      );
       const setIds = Array.from(candidateSetIds);
+      const metaIdsToLoad = orderedSetIds.length > 0 ? orderedSetIds : setIds;
+      let metaById = new Map<string, Record<string, unknown>>();
+
+      try {
+        const setMetaSnaps = await Promise.all(
+          metaIdsToLoad.map(async (setId) => {
+            const snap = await getDoc(doc(db, 'question_sets', setId));
+            return { id: snap.id, data: () => snap.data() as Record<string, unknown> | undefined };
+          }),
+        );
+        metaById = metaMapFromSetSnaps(setMetaSnaps);
+        const parts = buildExamPdfPartsFromSetSnaps(metaIdsToLoad, metaById);
+        setExamPdfParts(parts);
+        setExamPdfUrl(parts[0]?.examPdfUrl ?? null);
+        setExamPdfHiddenPages(parts[0]?.examPdfHiddenPages ?? []);
+      } catch {
+        setExamPdfParts([]);
+        setExamPdfUrl(null);
+        setExamPdfHiddenPages([]);
+      }
+
+      const questionPoints = roundConfig?.questionPoints ?? {};
+
       const setSnapshots = await Promise.all(
         setIds.map((setId) => getDocs(collection(db, 'question_sets', setId, 'questions'))),
       );
@@ -715,43 +1036,39 @@ export function useExamAttempt(roomId: string) {
       const questionMap = new Map<string, ExamQuestionPublic>();
       setSnapshots.forEach((snap) => {
         snap.docs.forEach((d) => {
-          const data = d.data() as {
-            orderIndex?: number;
-            order?: number;
-            text?: string;
-            questionText?: string;
-            points?: number;
-            options?: Array<{ id?: string; text?: string }>;
-            payload?: { options?: Array<{ id?: string; text?: string }> };
-          };
-          const payloadOptions = Array.isArray(data.payload?.options) ? data.payload.options : [];
-          const rawOptions = Array.isArray(data.options) && data.options.length > 0
-            ? data.options
-            : payloadOptions;
-          const options = rawOptions.map((opt, index) => ({
-            id: opt.id || `opt-${index + 1}`,
-            text: opt.text || '',
-          }));
-
-          questionMap.set(d.id, {
-            id: d.id,
-            order: data.orderIndex ?? data.order ?? 0,
-            text: data.questionText || data.text || '',
-            points: data.points || 0,
-            options,
-          });
+          questionMap.set(d.id, parseQuestionDoc(d, questionPoints));
         });
       });
 
-      const orderedQuestions = selectedIds
-        .map((qid, index) => {
-          const q = questionMap.get(qid);
-          if (!q) return null;
-          return { ...q, order: q.order || index + 1 };
-        })
-        .filter((q): q is ExamQuestionPublic => q !== null);
+      let orderedQuestions: ExamQuestionPublic[] = [];
+
+      if (selectedIds.length > 0) {
+        orderedQuestions = selectedIds
+          .map((qid, index) => {
+            const q = questionMap.get(qid);
+            if (!q) return null;
+            return { ...q, order: q.order || index + 1 };
+          })
+          .filter((q): q is ExamQuestionPublic => q !== null);
+      }
+
+      // Fallback: load all questions from set when IDs missing or stale (e.g. after PDF answer-key re-save)
+      if (orderedQuestions.length === 0 && questionMap.size > 0) {
+        orderedQuestions = Array.from(questionMap.values())
+          .sort((a, b) => a.order - b.order)
+          .map((q, index) => ({ ...q, order: index + 1 }));
+      }
 
       setQuestions(orderedQuestions);
+      setAnswerSheetGroups(
+        buildAnswerSheetGroups(
+          orderedQuestions,
+          orderedSetIds.length > 0 ? orderedSetIds : setIds,
+          setByQuestionId,
+          fallbackSetId ?? '',
+          metaById,
+        ),
+      );
       setIsLoadingQuestions(false);
       return orderedQuestions;
     } catch (err) {
@@ -764,6 +1081,7 @@ export function useExamAttempt(roomId: string) {
         setError('ไม่สามารถโหลดข้อสอบได้');
       }
       setQuestions([]);
+      setAnswerSheetGroups([]);
       return [];
     }
   }, []);
@@ -807,26 +1125,27 @@ export function useExamAttempt(roomId: string) {
 
       const loadedQuestions = await fetchQuestions(found);
       if (loadedQuestions.length === 0) {
-        setError(prev => prev ?? 'ไม่พบข้อสอบในห้องนี้ กรุณาแจ้งครูผู้สอน');
+        setError(prev => prev ?? describeMissingQuestionsError(found));
         setIsJoining(false);
         return false;
       }
 
       const currentRound = found.currentRound ?? 1;
 
-      // Check if student already has an in-progress attempt for this round
-      const existingAttempts = query(
-        collection(db, 'exam_rooms', roomId, 'attempts'),
-        where('studentId', '==', studentId),
-        where('round', '==', currentRound),
-      );
-      const existingSnap = await getDocs(existingAttempts);
+      // Fetch ALL attempts in this room's subcollection (no where clause = no index needed)
+      // then filter in-memory by studentId + round — the subcollection is small per room
+      const allAttemptsSnap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
+      const matchingAttemptDoc = allAttemptsSnap.docs.find((d) => {
+        const data = d.data();
+        return String(data?.studentId).trim() === String(studentId).trim()
+          && data?.round === currentRound;
+      });
 
-      if (!existingSnap.empty) {
-        const existingRaw = existingSnap.docs[0].data();
+      if (matchingAttemptDoc) {
+        const existingRaw = matchingAttemptDoc.data();
         let existing = {
           ...existingRaw,
-          id: existingSnap.docs[0].id,
+          id: matchingAttemptDoc.id,
           startedAt: normalizeTimestamp(existingRaw?.startedAt),
           submittedAt: existingRaw?.submittedAt ? normalizeTimestamp(existingRaw?.submittedAt) : null,
           lastSavedAt: normalizeTimestamp(existingRaw?.lastSavedAt),
@@ -897,9 +1216,15 @@ export function useExamAttempt(roomId: string) {
   const saveAnswer = useCallback(async (questionId: string, optionId: string) => {
     if (!attempt) return;
     if (attempt.status !== 'in_progress') return;
+    const nextAnswers = { ...attempt.answers };
+    if (!optionId.trim()) {
+      delete nextAnswers[questionId];
+    } else {
+      nextAnswers[questionId] = optionId;
+    }
     const updated = {
       ...attempt,
-      answers: { ...attempt.answers, [questionId]: optionId },
+      answers: nextAnswers,
       lastSavedAt: Date.now(),
     };
 
@@ -930,7 +1255,7 @@ export function useExamAttempt(roomId: string) {
   }, [attempt]);
 
   const submitAttempt = useCallback(async () => {
-    if (!attempt) return;
+    if (!attempt || !room) return;
     try {
       const updated = { ...attempt, status: 'submitted' as const, submittedAt: Date.now() };
 
@@ -943,12 +1268,35 @@ export function useExamAttempt(roomId: string) {
 
       setAttempt(updated);
       localStorage.removeItem(`exam_attempt_${roomId}_${attempt.studentId}`);
+
+      try {
+        await requestExamAttemptGrading(roomId, attempt.id);
+      } catch (gradeErr) {
+        console.warn('Exam grading callable failed, waiting for trigger:', gradeErr);
+      }
     } catch (err) {
       console.error('Error submitting attempt:', err);
     }
-  }, [attempt, roomId]);
+  }, [attempt, room, roomId]);
 
   const isSubmitted = attempt?.status === 'submitted' || attempt?.status === 'graded';
 
-  return { attempt, room, questions, isJoining, isLoadingQuestions, error, joinRoom, saveAnswer, recordSuspicious, submitAttempt, isSubmitted };
+  return {
+    attempt,
+    room,
+    roomPreview,
+    questions,
+    examPdfParts,
+    answerSheetGroups,
+    examPdfUrl,
+    examPdfHiddenPages,
+    isJoining,
+    isLoadingQuestions,
+    error,
+    joinRoom,
+    saveAnswer,
+    recordSuspicious,
+    submitAttempt,
+    isSubmitted,
+  };
 }

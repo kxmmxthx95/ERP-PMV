@@ -25,6 +25,35 @@ service cloud.firestore {
       return isSuperAdmin() || hasRole('admin') || hasRole('teacher');
     }
 
+    function isStudentRole() {
+      return isAuth() && hasRole('student');
+    }
+
+    // นักเรียนแก้โปรไฟล์ตัวเอง — รองรับ doc id ไม่ตรง auth uid (resolve ด้วย email / studentCode)
+    function ownsStudentRecord(studentId) {
+      let user = getUserData();
+      return isAuth() && (
+        studentId == request.auth.uid
+        || resource.data.authUid == request.auth.uid
+        || resource.data.userId == request.auth.uid
+        || (
+          user != null
+          && user.keys().hasAny(['studentCode'])
+          && resource.data.studentCode == user.studentCode
+        )
+        || (
+          request.auth.token.email != null
+          && resource.data.keys().hasAny(['email'])
+          && resource.data.email == request.auth.token.email
+        )
+      );
+    }
+
+    function studentSelfFieldsOnly() {
+      let adminKeys = ['status', 'studentCode', 'createdAt'];
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(adminKeys);
+    }
+
     // ── Global Rule ──────────────────────────────────────────────────────────
     match /{document=**} {
       allow read: if isAuth();
@@ -116,7 +145,21 @@ service cloud.firestore {
 
     // ── Students ─────────────────────────────────────────────────────────────
     match /students/{studentId} {
-      allow write: if isAuth() && studentId == request.auth.uid;
+      allow create, delete: if canManage();
+      allow update: if canManage() || (
+        isStudentRole()
+        && ownsStudentRecord(studentId)
+        && studentSelfFieldsOnly()
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.userId == request.auth.uid
+      );
+    }
+
+    // ── Student Future Plans ──────────────────────────────────────────────────
+    // doc ID = studentId; นักเรียนเขียนเฉพาะ doc ของตัวเองได้
+    match /student_future_plans/{studentId} {
+      allow create, update: if isAuth() && studentId == request.auth.uid;
+      allow delete: if isSuperAdmin() || hasRole('admin');
     }
 
     // ── Exam Attempts (sub-collection ใต้ exam_rooms) ───────────────────────

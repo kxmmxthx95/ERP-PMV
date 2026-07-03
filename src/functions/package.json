@@ -8,6 +8,8 @@
     "migrate:staff-attendance-by-date:dry-run": "npm run build && node lib/migrateStaffAttendanceByDate.js --dry-run",
     "cleanup:staff-attendance-duplicates": "npm run build && node lib/cleanupStaffAttendanceDuplicates.js",
     "cleanup:staff-attendance-duplicates:dry-run": "npm run build && node lib/cleanupStaffAttendanceDuplicates.js --dry-run",
+    "migrate:schedule-teacher-ids": "npm run build && node lib/migrateScheduleTeacherIds.js",
+    "migrate:schedule-teacher-ids:dry-run": "npm run build && node lib/migrateScheduleTeacherIds.js --dry-run",
     "migrate:database": "npm run build && node lib/scripts/migrateDatabase.js",
     "serve": "npm run build && firebase emulators:start --only functions",
     "shell": "npm run build && firebase functions:shell",

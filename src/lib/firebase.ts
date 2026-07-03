@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore } from "firebase/firestore";
+import { getDatabase } from "firebase/database";
 import { getStorage } from "firebase/storage";
 import { getFunctions } from "firebase/functions";
 
@@ -15,17 +16,30 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
-const firestoreDatabaseId = (import.meta.env.VITE_FIRESTORE_DATABASE_ID || "").trim();
 
-// Export Services สำหรับใช้งานใน Features ต่างๆ
+/** ฐานข้อมูล Firestore หลักของโปรเจกต — ต้องตรงกับ Firebase Console และ FIRESTORE_DATABASE_ID ใน functions */
+export const FIRESTORE_DATABASE_ID = 'pmv1';
+
+const configuredDatabaseId = (import.meta.env.VITE_FIRESTORE_DATABASE_ID || FIRESTORE_DATABASE_ID).trim();
+const useNamedDatabase = configuredDatabaseId.length > 0 && configuredDatabaseId !== '(default)';
+
+// long polling สำหรับ named database (pmv1) — ไม่ใช้ memoryLocalCache เพื่อให้ getDocs อ่าน network ได้เสมอ
+const firestoreSettings = {
+  experimentalForceLongPolling: true,
+  experimentalAutoDetectLongPolling: false,
+};
+
 export const auth = getAuth(app);
-export const db =
-  firestoreDatabaseId && firestoreDatabaseId !== "(default)"
-    ? getFirestore(app, firestoreDatabaseId)
-    : getFirestore(app);
+export const db = useNamedDatabase
+  ? initializeFirestore(app, firestoreSettings, configuredDatabaseId)
+  : initializeFirestore(app, firestoreSettings);
+
+if (import.meta.env.DEV) {
+  console.info('[firebase] Firestore:', useNamedDatabase ? configuredDatabaseId : '(default)');
+}
 export const storage = getStorage(app);
+export const rtdb = getDatabase(app);
 export const functions = getFunctions(app, "asia-southeast1");
 
 export default app;

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useOutletContext } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -92,9 +93,8 @@ interface LocalAttendanceDoc {
 const TABS = [
   { id: 'general', label: 'ข้อมูลโรงเรียน', icon: School },
   { id: 'semesters', label: 'ตั้งค่าแผนก', icon: Calendar },
-  { id: 'migration', label: 'ย้ายข้อมูล', icon: Database },
 ] as const;
-type TabId = typeof TABS[number]['id'];
+type TabId = 'general' | 'semesters' | 'migration';
 
 const DEPT_TABS = [
   { id: 'kindergarten', label: 'อนุบาล', labelEn: 'Kindergarten', color: '#f59e0b' },
@@ -382,6 +382,10 @@ export default function SettingsPage() {
   const { showSearch } = useOutletContext<{ showSearch: boolean }>();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>('general');
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setPortalTarget(document.getElementById('header-portal-center'));
+  }, []);
 
   const [editAcademic, setEditAcademic] = useState(false);
   const [editIdentity, setEditIdentity] = useState(false);
@@ -780,6 +784,28 @@ export default function SettingsPage() {
 
   return (
     <div className="relative w-full bg-transparent h-full font-sarabun">
+      {portalTarget && createPortal(
+        <div className="flex items-center bg-white/60 backdrop-blur-xl border border-white p-1 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.04)] pointer-events-auto">
+          {TABS.map(tab => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-6 py-1.5 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${
+                  isActive
+                    ? 'bg-slate-900 text-white shadow-md'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>,
+        portalTarget
+      )}
+
       <div className={`max-w-[1200px] mx-auto flex flex-col h-full transition-all duration-300 gap-4 ${showSearch ? 'pt-1' : 'pt-4'} pb-16`}>
 
         {/* ── Tab Content ── */}
@@ -803,7 +829,7 @@ export default function SettingsPage() {
                     </div>
                   }
                 >
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 items-end">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 items-end">
                     <div>
                       <FieldLabel label="ปีการศึกษา (พ.ศ.)" required />
                       <Input
@@ -1222,22 +1248,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* ── Floating Capsule Nav ── */}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
-        <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-full bg-white/85 backdrop-blur-2xl border border-white/90 shadow-2xl">
-          {TABS.map(tab => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2 md:py-1.5 rounded-full text-[11px] font-bold transition-all duration-200 font-sukhumvit ${isActive ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-black/5'}`}>
-                <Icon size={14} className="md:hidden" />
-                <span className="hidden md:block">{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }

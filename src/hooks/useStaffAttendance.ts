@@ -1,12 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
-  collection, doc, getDoc, getDocs, query,
+  collection, collectionGroup, doc, getDoc, getDocs, query,
   where, Timestamp, serverTimestamp, writeBatch,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { AttendanceConfig } from './useAttendanceConfig';
 import { DEFAULT_CONFIG } from './useAttendanceConfig';
 import type { CalendarEvent } from '@/types/calendar';
+import {
+  getStaffTodayEntryStore,
+  getStaffWeekHistory,
+  invalidateStaffWeekHistory,
+} from '@/lib/firestoreShared/staffAttendanceStore';
+import { loadStaffAttendanceDayDocs } from '@/lib/firestoreShared/staffAttendanceDayEntriesStore';
+import { waitStaffUsersStore } from '@/lib/firestoreShared/staffUsersStore';
+import { getCalendarEventsStore } from '@/lib/firestoreShared/calendarEventsStore';
+import { resolveTodayHoliday } from '@/lib/calendar/schoolDay';
 
 // ── Haversine distance (meters) ──────────────────────────────────────────────
 export function haversineDistance(
@@ -51,12 +60,128 @@ function makeStaffAttendanceDocId(userId: string, date: string): string {
   return `${userId}_${date}`;
 }
 
+function getLocalDateString(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** 12:00 น. ขึ้นไป (รวมเที่ยงตรง) */
+export function isAtOrAfterNoon(date: Date): boolean {
+  return date.getHours() >= 12;
+}
+
+export function timestampToLocalDate(ts: unknown): Date | null {
+  if (ts == null) return null;
+  if (ts instanceof Date) return Number.isNaN(ts.getTime()) ? null : ts;
+  if (ts instanceof Timestamp) return ts.toDate();
+  if (typeof ts === 'object') {
+    const obj = ts as { toDate?: () => Date; seconds?: number; nanoseconds?: number };
+    if (typeof obj.toDate === 'function') return obj.toDate();
+    if (typeof obj.seconds === 'number') {
+      return new Date(obj.seconds * 1000 + (obj.nanoseconds ?? 0) / 1_000_000);
+    }
+  }
+  if (typeof ts === 'number' || typeof ts === 'string') {
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+export function isTimestampAtOrAfterNoon(ts: unknown): boolean {
+  const d = timestampToLocalDate(ts);
+  if (!d) return false;
+  return isAtOrAfterNoon(d);
+}
+
+export interface ResolveStaffAttendanceOptions {
+  selectedDate: string;
+  isWorkingDay: boolean;
+  now?: Date;
+  /** ครูพิเศษ — ไม่บังคับเวลาเช็คอิน */
+  isSpecialTeacher?: boolean;
+}
+
+export interface ResolvedStaffAttendanceDisplay {
+  status: AttendanceStatus;
+  isAutoAbsent: boolean;
+  isPending: boolean;
+  note: string;
+}
+
+/** คำนวณสถานะแสดงผล: ไม่เช็คอินหรือเช็คอินหลัง 12:00 = ขาดงาน */
+export function resolveStaffAttendanceDisplay(
+  record: Pick<StaffAttendanceRecord, 'checkInTime' | 'status' | 'note' | 'overrideBy' | 'date'>,
+  opts: ResolveStaffAttendanceOptions,
+): ResolvedStaffAttendanceDisplay {
+  const now = opts.now ?? new Date();
+  const todayStr = getLocalDateString();
+  const isPastDate = opts.selectedDate < todayStr;
+  const isFutureDate = opts.selectedDate > todayStr;
+  const isTodayAfterNoon = opts.selectedDate === todayStr && isAtOrAfterNoon(now);
+  const cutoffPassed = opts.isWorkingDay && (isPastDate || isTodayAfterNoon);
+  const note = record.note ?? '';
+
+  if (isFutureDate) {
+    return { status: record.status, isAutoAbsent: false, isPending: true, note };
+  }
+
+  if (opts.isSpecialTeacher) {
+    if (record.overrideBy) {
+      return { status: record.status, isAutoAbsent: false, isPending: false, note };
+    }
+    if (record.checkInTime) {
+      return { status: 'present', isAutoAbsent: false, isPending: false, note };
+    }
+  }
+
+  // เช็คอินหลัง 12:00 = ขาดงานเสมอ (แม้แอดมิน override สถานะอื่นไว้)
+  if (record.checkInTime && isTimestampAtOrAfterNoon(record.checkInTime)) {
+    return {
+      status: 'absent',
+      isAutoAbsent: true,
+      isPending: false,
+      note: note || 'เช็กอินหลัง 12:00 น.',
+    };
+  }
+
+  if (record.overrideBy) {
+    return { status: record.status, isAutoAbsent: false, isPending: false, note };
+  }
+
+  if (record.checkInTime) {
+    return { status: record.status, isAutoAbsent: false, isPending: false, note };
+  }
+
+  if (!cutoffPassed) {
+    return { status: record.status, isAutoAbsent: false, isPending: true, note };
+  }
+
+  return {
+    status: 'absent',
+    isAutoAbsent: true,
+    isPending: false,
+    note: note || 'ไม่มีการเช็กอินหลัง 12:00 และไม่มีการลา',
+  };
+}
+
 function getStaffAttendanceDayDocRef(date: string) {
   return doc(db, 'staff_attendance_by_date', date);
 }
 
 function getStaffAttendanceEntryRef(date: string, userId: string) {
   return doc(db, 'staff_attendance_by_date', date, 'entries', userId);
+}
+
+function getCutoffDateTime(date: string, hour = 18, minute = 0): Date {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(y, (m ?? 1) - 1, d ?? 1, hour, minute, 0, 0);
+}
+
+function shouldAutoCheckout(record: Pick<StaffAttendanceRecord, 'checkInTime' | 'checkOutTime' | 'date'>, now = new Date()): boolean {
+  if (!record.checkInTime || record.checkOutTime) return false;
+  const cutoff = getCutoffDateTime(record.date, 18, 0);
+  return now.getTime() >= cutoff.getTime();
 }
 
 function toMillis(ts: Timestamp | null | undefined): number {
@@ -149,6 +274,49 @@ function toWritableRecord(
   if (typeof record.overrideBy === 'string') payload.overrideBy = record.overrideBy;
 
   return payload;
+}
+
+/** ดึงประวัติเข้างานทั้งหมดของบุคลากร (new schema + legacy) */
+export async function fetchStaffAttendanceRecordsForUser(userId: string): Promise<StaffAttendanceRecord[]> {
+  const byDate = new Map<string, StaffAttendanceRecord>();
+
+  const addRecord = (record: StaffAttendanceRecord) => {
+    if (!record.date) return;
+    byDate.set(record.date, record);
+  };
+
+  try {
+    const groupQ = query(collectionGroup(db, 'entries'), where('userId', '==', userId));
+    const groupSnap = await getDocs(groupQ);
+    groupSnap.docs.forEach((d) => {
+      if (d.ref.parent.parent?.parent?.id !== 'staff_attendance_by_date') return;
+      const parentDate = d.ref.parent.parent?.id ?? '';
+      const data = d.data() as Omit<StaffAttendanceRecord, 'id'>;
+      addRecord({
+        ...data,
+        id: d.id,
+        userId: data.userId || d.id,
+        date: data.date || parentDate,
+      });
+    });
+  } catch (err) {
+    console.warn('[fetchStaffAttendanceRecordsForUser] collectionGroup failed, falling back to legacy only', err);
+  }
+
+  try {
+    const legacyQ = query(collection(db, 'staff_attendance'), where('userId', '==', userId));
+    const legacySnap = await getDocs(legacyQ);
+    legacySnap.docs.forEach((d) => {
+      const data = d.data() as Omit<StaffAttendanceRecord, 'id'>;
+      if (!byDate.has(data.date)) {
+        addRecord({ id: d.id, ...data });
+      }
+    });
+  } catch {
+    // ignore legacy read errors
+  }
+
+  return Array.from(byDate.values());
 }
 
 async function getLegacyRecordsForUserDate(
@@ -246,147 +414,200 @@ async function migrateLegacyDateRecordsToNewSchema(
   await batch.commit();
 }
 
+const noopSubscribe = () => () => {};
+const nullTodaySnapshot = (): StaffAttendanceRecord | null => null;
+const readySnapshot = () => true;
+const emptyCalendarEvents = (): CalendarEvent[] => [];
+
+
+async function applyAutoCheckoutInternal(
+  date: string,
+  targetUserId: string,
+  base: Pick<StaffAttendanceRecord, 'checkInTime' | 'checkOutTime' | 'status' | 'note'>,
+): Promise<Timestamp | null> {
+  if (!shouldAutoCheckout({ checkInTime: base.checkInTime, checkOutTime: base.checkOutTime, date })) {
+    return null;
+  }
+
+  const cutoffTs = Timestamp.fromDate(getCutoffDateTime(date, 18, 0));
+  const dayRef = getStaffAttendanceDayDocRef(date);
+  const entryRef = getStaffAttendanceEntryRef(date, targetUserId);
+  const batch = writeBatch(db);
+  batch.set(dayRef, {
+    date,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+  batch.set(entryRef, {
+    checkOutTime: cutoffTs,
+    autoCheckout: true,
+    autoCheckoutAt: serverTimestamp(),
+    note: base.note || 'ระบบเช็คเอาท์อัตโนมัติเวลา 18:00',
+  }, { merge: true });
+  await batch.commit();
+  return cutoffTs;
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 export function useStaffAttendance(
   userId: string,
   displayName: string,
   config: AttendanceConfig = DEFAULT_CONFIG,
   extraHolidays: CalendarEvent[] = [],
+  academicYearId?: string,
+  isSpecialTeacher = false,
 ) {
-  const [todayRecord, setTodayRecord] = useState<StaffAttendanceRecord | null>(null);
+  const [legacyRecord, setLegacyRecord] = useState<StaffAttendanceRecord | null | undefined>(undefined);
   const [history, setHistory] = useState<StaffAttendanceRecord[]>([]);
-  const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isHoliday, setIsHoliday] = useState(false);
-  const [holidayTitle, setHolidayTitle] = useState<string | null>(null);
+  const [autoCheckoutApplied, setAutoCheckoutApplied] = useState(false);
+  const legacyCheckedRef = useRef(false);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getLocalDateString();
+  const todayStore = userId ? getStaffTodayEntryStore(userId, todayStr) : null;
+  const storeRecord = useSyncExternalStore(
+    todayStore?.subscribe ?? noopSubscribe,
+    todayStore?.getSnapshot ?? nullTodaySnapshot,
+    todayStore?.getSnapshot ?? nullTodaySnapshot,
+  );
+  const storeReady = useSyncExternalStore(
+    todayStore?.subscribe ?? noopSubscribe,
+    todayStore?.getReady ?? readySnapshot,
+    todayStore?.getReady ?? readySnapshot,
+  );
 
-  const checkHoliday = useCallback(async () => {
-    const now = new Date();
-    const day = now.getDay();
-    if (day === 0 || day === 6) {
-      setIsHoliday(true);
-      setHolidayTitle(day === 0 ? 'วันอาทิตย์' : 'วันเสาร์');
-      return;
-    }
+  const calendarStore = academicYearId ? getCalendarEventsStore(academicYearId) : null;
+  const calendarEvents = useSyncExternalStore(
+    calendarStore?.subscribe ?? noopSubscribe,
+    calendarStore?.getSnapshot ?? emptyCalendarEvents,
+    calendarStore?.getSnapshot ?? emptyCalendarEvents,
+  );
+  const { isHoliday, holidayTitle } = useMemo(
+    () => resolveTodayHoliday(todayStr, extraHolidays, calendarEvents),
+    [todayStr, extraHolidays, calendarEvents],
+  );
 
-    try {
-      // Check extra holidays (from Google Calendar API, etc.)
-      const extraMatch = extraHolidays.find(h =>
-        h.type === 'holiday' && todayStr >= h.startDate && todayStr <= h.endDate
-      );
-      if (extraMatch) {
-        setIsHoliday(true);
-        setHolidayTitle(extraMatch.title);
-        return;
-      }
-
-      // Check Firestore calendar_events
-      const holidayQuery = query(
-        collection(db, 'calendar_events'),
-        where('type', '==', 'holiday'),
-      );
-      const holidaySnap = await getDocs(holidayQuery);
-      const holidayDoc = holidaySnap.docs.find((d) => {
-        const data = d.data() as { startDate?: string; endDate?: string };
-        return typeof data.startDate === 'string'
-          && typeof data.endDate === 'string'
-          && todayStr >= data.startDate
-          && todayStr <= data.endDate;
-      });
-
-      if (holidayDoc) {
-        const data = holidayDoc.data() as { title?: string };
-        setIsHoliday(true);
-        setHolidayTitle(data.title || 'วันหยุด');
-      } else {
-        setIsHoliday(false);
-        setHolidayTitle(null);
-      }
-    } catch {
-      setIsHoliday(false);
-      setHolidayTitle(null);
-    }
-  }, [todayStr, extraHolidays]);
-
-  const fetchToday = useCallback(async () => {
-    if (!userId) return;
-    setLoading(true);
-    try {
-      const entryRef = getStaffAttendanceEntryRef(todayStr, userId);
-      const entrySnap = await getDoc(entryRef);
-      if (entrySnap.exists()) {
-        setTodayRecord({
-          id: entrySnap.id,
-          ...(entrySnap.data() as Omit<StaffAttendanceRecord, 'id'>),
-        });
-        return;
-      }
-
-      const legacyRecords = await getLegacyRecordsForUserDate(userId, todayStr);
-      if (legacyRecords.length === 0) {
-        setTodayRecord(null);
-        return;
-      }
-
-      const bestLegacy = mergeAttendanceRecords(legacyRecords, userId);
-      await migrateLegacyUserDateToNewSchema(bestLegacy, legacyRecords.map((r) => r.id));
-      setTodayRecord({
-        ...bestLegacy,
-        id: userId,
-      });
-    } catch (e: unknown) {
-      setError(getErrorMessage(e));
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    legacyCheckedRef.current = false;
+    setLegacyRecord(undefined);
+    setAutoCheckoutApplied(false);
   }, [userId, todayStr]);
 
-  const fetchHistory = useCallback(async () => {
-    if (!userId) return;
-    try {
-      const dates: string[] = [];
-      for (let i = 0; i < 7; i += 1) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        dates.push(d.toISOString().slice(0, 10));
-      }
+  useEffect(() => {
+    if (!userId || storeRecord !== null || !storeReady || legacyCheckedRef.current) return;
+    legacyCheckedRef.current = true;
 
-      const historyRecords: StaffAttendanceRecord[] = [];
-      for (const date of dates) {
-        const entryRef = getStaffAttendanceEntryRef(date, userId);
-        const entrySnap = await getDoc(entryRef);
-        if (entrySnap.exists()) {
-          historyRecords.push({
-            id: entrySnap.id,
-            ...(entrySnap.data() as Omit<StaffAttendanceRecord, 'id'>),
-          });
-          continue;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const legacyRecords = await getLegacyRecordsForUserDate(userId, todayStr);
+        if (cancelled) return;
+        if (legacyRecords.length === 0) {
+          setLegacyRecord(null);
+          return;
         }
 
-        const legacyRecords = await getLegacyRecordsForUserDate(userId, date);
-        if (legacyRecords.length > 0) {
-          const bestLegacy = mergeAttendanceRecords(legacyRecords, userId);
-          await migrateLegacyUserDateToNewSchema(bestLegacy, legacyRecords.map((r) => r.id));
-          historyRecords.push({
+        const bestLegacy = mergeAttendanceRecords(legacyRecords, userId);
+        const autoCheckoutTs = shouldAutoCheckout({
+          checkInTime: bestLegacy.checkInTime,
+          checkOutTime: bestLegacy.checkOutTime,
+          date: bestLegacy.date,
+        })
+          ? Timestamp.fromDate(getCutoffDateTime(bestLegacy.date, 18, 0))
+          : null;
+        const mergedLegacy = autoCheckoutTs
+          ? {
             ...bestLegacy,
-            id: userId,
-          });
-        }
-      }
+            checkOutTime: autoCheckoutTs,
+            note: bestLegacy.note || 'ระบบเช็คเอาท์อัตโนมัติเวลา 18:00',
+          }
+          : bestLegacy;
 
-      historyRecords.sort((a, b) => b.date.localeCompare(a.date));
-      setHistory(historyRecords);
-    } catch { /* ignore */ }
+        await migrateLegacyUserDateToNewSchema(mergedLegacy, legacyRecords.map((r) => r.id));
+        if (!cancelled) {
+          setLegacyRecord({ ...mergedLegacy, id: userId });
+        }
+      } catch {
+        if (!cancelled) setLegacyRecord(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, todayStr, storeRecord, storeReady]);
+
+  const reloadHistory = useCallback(async (force = false) => {
+    if (!userId) {
+      setHistory([]);
+      return;
+    }
+    if (force) invalidateStaffWeekHistory(userId);
+    try {
+      const records = await getStaffWeekHistory(userId, force);
+      setHistory(records);
+    } catch {
+      setHistory([]);
+    }
   }, [userId]);
 
   useEffect(() => {
-    fetchToday();
-    fetchHistory();
-    checkHoliday();
-  }, [fetchToday, fetchHistory, checkHoliday]);
+    void reloadHistory(false);
+  }, [reloadHistory]);
+
+  const baseTodayRecord = storeRecord ?? (legacyRecord === undefined ? null : legacyRecord);
+
+  useEffect(() => {
+    if (!userId || !baseTodayRecord || autoCheckoutApplied) return;
+    if (!shouldAutoCheckout({
+      checkInTime: baseTodayRecord.checkInTime,
+      checkOutTime: baseTodayRecord.checkOutTime,
+      date: baseTodayRecord.date,
+    })) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        await applyAutoCheckoutInternal(todayStr, userId, {
+          checkInTime: baseTodayRecord.checkInTime,
+          checkOutTime: baseTodayRecord.checkOutTime,
+          status: baseTodayRecord.status,
+          note: baseTodayRecord.note,
+        });
+        if (!cancelled) setAutoCheckoutApplied(true);
+      } catch {
+        // listener will retry on next snapshot
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, todayStr, baseTodayRecord, autoCheckoutApplied]);
+
+  const todayRecord = useMemo(() => {
+    if (!baseTodayRecord) return null;
+    if (
+      autoCheckoutApplied
+      && !baseTodayRecord.checkOutTime
+      && shouldAutoCheckout({
+        checkInTime: baseTodayRecord.checkInTime,
+        checkOutTime: baseTodayRecord.checkOutTime,
+        date: baseTodayRecord.date,
+      })
+    ) {
+      return {
+        ...baseTodayRecord,
+        checkOutTime: Timestamp.fromDate(getCutoffDateTime(baseTodayRecord.date, 18, 0)),
+        note: baseTodayRecord.note || 'ระบบเช็คเอาท์อัตโนมัติเวลา 18:00',
+      };
+    }
+    return baseTodayRecord;
+  }, [baseTodayRecord, autoCheckoutApplied]);
+
+  const loading = !storeReady || (storeRecord === null && legacyRecord === undefined);
 
   const getCurrentPosition = (highAccuracy = true): Promise<GeolocationPosition> =>
     new Promise((resolve, reject) => {
@@ -414,7 +635,9 @@ export function useStaffAttendance(
     setActionLoading(true);
     setError(null);
     try {
-      if (todayRecord?.checkInTime) return;
+      const alreadyCheckedIn = !!todayRecord?.checkInTime
+        || (!!todayRecord?.overrideBy && (todayRecord.status === 'present' || todayRecord.status === 'late'));
+      if (alreadyCheckedIn) return;
 
       // Verify holiday status is current before checking in
       if (isHoliday) {
@@ -430,20 +653,22 @@ export function useStaffAttendance(
         return;
       }
       const now = new Date();
-      const afterShift =
-        now.getHours() > config.shiftStartHour ||
-        (now.getHours() === config.shiftStartHour && now.getMinutes() > config.shiftStartMinute);
-      const status: AttendanceStatus = afterShift ? 'late' : 'present';
+      const status: AttendanceStatus = isSpecialTeacher
+        ? 'present'
+        : (() => {
+          const afterNoonCutoff = isAtOrAfterNoon(now);
+          const afterShift =
+            now.getHours() > config.shiftStartHour ||
+            (now.getHours() === config.shiftStartHour && now.getMinutes() > config.shiftStartMinute);
+          return afterNoonCutoff ? 'absent' : (afterShift ? 'late' : 'present');
+        })();
 
       const dayRef = getStaffAttendanceDayDocRef(todayStr);
       const entryRef = getStaffAttendanceEntryRef(todayStr, userId);
       const existing = await getDoc(entryRef);
       if (existing.exists()) {
         const existingData = existing.data() as Omit<StaffAttendanceRecord, 'id'>;
-        if (existingData.checkInTime) {
-          setTodayRecord({ id: userId, ...existingData });
-          return;
-        }
+        if (existingData.checkInTime) return;
       }
 
       const batch = writeBatch(db);
@@ -462,18 +687,7 @@ export function useStaffAttendance(
         lng,
       }, { merge: true });
       await batch.commit();
-
-      setTodayRecord({
-        id: userId,
-        userId,
-        displayName,
-        date: todayStr,
-        checkInTime: Timestamp.now(),
-        checkOutTime: null,
-        status,
-        lat,
-        lng,
-      });
+      await reloadHistory(true);
     } catch (e: unknown) {
       const code = getErrorCode(e);
       if (code === 1) setError('กรุณาอนุญาตการเข้าถึงพิกัด (Location Permission)');
@@ -483,7 +697,7 @@ export function useStaffAttendance(
     } finally {
       setActionLoading(false);
     }
-  }, [userId, displayName, todayStr, config, isHoliday, holidayTitle, todayRecord, extraHolidays]);
+  }, [userId, displayName, todayStr, config, isHoliday, holidayTitle, todayRecord, reloadHistory, isSpecialTeacher]);
 
   const checkOut = useCallback(async () => {
     if (!todayRecord || !userId) return;
@@ -502,14 +716,13 @@ export function useStaffAttendance(
         ? (entrySnap.data() as Partial<Omit<StaffAttendanceRecord, 'id'>>)
         : null;
 
-      if (!entryData?.checkInTime && !entryData?.overrideBy) {
+      const canCheckOut = !!entryData?.checkInTime
+        || (!!entryData?.overrideBy && (entryData.status === 'present' || entryData.status === 'late'));
+      if (!canCheckOut) {
         setError('ไม่พบเวลาเข้าในระบบ กรุณาเช็กอินก่อนเช็กเอาต์');
         return;
       }
-      if (entryData.checkOutTime) {
-        setTodayRecord(prev => prev ? { ...prev, checkOutTime: entryData.checkOutTime as Timestamp } : prev);
-        return;
-      }
+      if (entryData?.checkOutTime) return;
 
       const batch = writeBatch(db);
       batch.set(dayRef, {
@@ -520,15 +733,26 @@ export function useStaffAttendance(
         checkOutTime: serverTimestamp(),
       }, { merge: true });
       await batch.commit();
-      setTodayRecord(prev => prev ? { ...prev, checkOutTime: Timestamp.now() } : prev);
+      await reloadHistory(true);
     } catch (e: unknown) {
       setError(getErrorMessage(e));
     } finally {
       setActionLoading(false);
     }
-  }, [todayRecord, userId, todayStr, isHoliday, holidayTitle, extraHolidays]);
+  }, [todayRecord, userId, todayStr, isHoliday, holidayTitle, reloadHistory]);
 
-  return { todayRecord, history, loading, actionLoading, error, checkIn, checkOut, refresh: fetchToday, isHoliday, holidayTitle };
+  return {
+    todayRecord,
+    history,
+    loading,
+    actionLoading,
+    error,
+    checkIn,
+    checkOut,
+    refresh: () => { void reloadHistory(true); },
+    isHoliday,
+    holidayTitle,
+  };
 }
 
 // ── Admin hook: fetch all staff records for a date range ─────────────────────
@@ -540,10 +764,10 @@ export function useAdminStaffAttendance(date: string) {
     setLoading(true);
     try {
       // 1. Fetch attendance records (new shape: day -> entries)
-      const dayEntriesSnap = await getDocs(collection(db, 'staff_attendance_by_date', date, 'entries'));
-      let dedupedAttendanceData = dayEntriesSnap.docs.map(d => ({
+      const dayDocs = await loadStaffAttendanceDayDocs(date);
+      let dedupedAttendanceData = dayDocs.map((d) => ({
         id: d.id,
-        ...(d.data() as Omit<StaffAttendanceRecord, 'id'>),
+        ...(d as unknown as Omit<StaffAttendanceRecord, 'id'>),
       }));
 
       // 1.1 Also scan legacy flat collection and auto-migrate leftovers
@@ -587,32 +811,16 @@ export function useAdminStaffAttendance(date: string) {
         dedupedAttendanceData = Array.from(mergedByUser.values());
       }
 
-      // 2. Fetch all user profiles for these records to get real names and photos
-      const userIds = [...new Set(dedupedAttendanceData.map(r => r.userId))];
-      const profiles: Record<string, { name: string, photoURL?: string, department?: string }> = {};
-      
-      if (userIds.length > 0) {
-        // Fetch users in chunks if many, but for daily view usually one fetch is fine
-        // Using getDocs for simplicity here
-        const userSnap = await getDocs(collection(db, 'users'));
-        userSnap.forEach(d => {
-          const u = d.data() as {
-            name?: string;
-            displayName?: string;
-            email?: string;
-            photoURL?: string;
-            department?: string;
-            departmentId?: string;
-          };
-          profiles[d.id] = { 
-            name: u.name || u.displayName || u.email || 'บุคลากร',
-            photoURL: u.photoURL,
-            department: u.department || u.departmentId
-          };
-        });
-      }
-
-      // 3. Merge profile data into attendance records
+      // 2. Merge staff profiles (shared store — teacher/staff only)
+      const profiles: Record<string, { name: string; photoURL?: string; department?: string }> = {};
+      const staffUsers = await waitStaffUsersStore();
+      staffUsers.forEach((u) => {
+        profiles[u.userId] = {
+          name: u.displayName,
+          photoURL: u.photoURL,
+          department: u.department,
+        };
+      });
       const recs = dedupedAttendanceData.map(r => ({
         ...r,
         displayName: profiles[r.userId]?.name || r.displayName,
@@ -622,8 +830,8 @@ export function useAdminStaffAttendance(date: string) {
 
       // sort by checkInTime in JS
       recs.sort((a, b) => {
-        const ta = a.checkInTime ? a.checkInTime.toMillis() : 0;
-        const tb = b.checkInTime ? b.checkInTime.toMillis() : 0;
+        const ta = timestampToLocalDate(a.checkInTime)?.getTime() ?? 0;
+        const tb = timestampToLocalDate(b.checkInTime)?.getTime() ?? 0;
         return ta - tb;
       });
       setRecords(recs);
@@ -704,7 +912,7 @@ export function useAdminStaffAttendance(date: string) {
   }, [date, fetch]);
 
   const override = useCallback(async (
-    recordId: string | null,
+    _recordId: string | null,
     targetUserId: string,
     targetName: string,
     status: AttendanceStatus,
@@ -713,6 +921,11 @@ export function useAdminStaffAttendance(date: string) {
   ) => {
     const dayRef = getStaffAttendanceDayDocRef(date);
     const entryRef = getStaffAttendanceEntryRef(date, targetUserId);
+    const existingSnap = await getDoc(entryRef);
+    const existing = existingSnap.exists()
+      ? (existingSnap.data() as Partial<Omit<StaffAttendanceRecord, 'id'>>)
+      : null;
+
     const batch = writeBatch(db);
 
     batch.set(dayRef, {
@@ -720,16 +933,26 @@ export function useAdminStaffAttendance(date: string) {
       updatedAt: serverTimestamp(),
     }, { merge: true });
 
-    batch.set(entryRef, {
+    const entryPatch: Record<string, unknown> = {
       userId: targetUserId,
       displayName: targetName,
       date,
       status,
       note,
       overrideBy: adminUid,
-      // Keep existing check-in/check-out if exists; otherwise initialize.
-      ...(recordId ? {} : { checkInTime: null, checkOutTime: null }),
-    }, { merge: true });
+    };
+
+    if (!existing) {
+      entryPatch.checkOutTime = null;
+    }
+
+    if (!existing?.checkInTime && (status === 'present' || status === 'late')) {
+      entryPatch.checkInTime = serverTimestamp();
+    } else if (!existing && status === 'absent') {
+      entryPatch.checkInTime = null;
+    }
+
+    batch.set(entryRef, entryPatch, { merge: true });
 
     await batch.commit();
     await fetch();

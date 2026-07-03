@@ -1,9 +1,8 @@
 import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, UserPlus, Search, UserMinus } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { HiMagnifyingGlass, HiUserPlus, HiUserMinus } from 'react-icons/hi2';
 import { useStudentManager } from '@/hooks/useStudentManager';
+import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import ClassAddStudentModal from './ClassAddStudentModal';
 import type { ClassRoom } from '@/types/class';
 import { toast } from 'sonner';
@@ -17,19 +16,23 @@ const containerAnim = {
   hidden: { opacity: 0 },
   show: { opacity: 1, transition: { staggerChildren: 0.04 } },
 };
-const rowAnim = { hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } };
-
-const glassCard: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.72)',
-  backdropFilter: 'blur(24px) saturate(150%)',
-  border: '1px solid rgba(255,255,255,0.90)',
-  boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
-};
+const rowAnim = { hidden: { opacity: 0, y: 6 }, show: { opacity: 1, y: 0 } };
 
 export default function ClassStudentTab({ classRoom, cfg }: Props) {
   const { students, enrollments, updateEnrollment } = useStudentManager(classRoom.academicYearId);
+  const { teachers } = useTeacherManager();
   const [addOpen, setAddOpen] = useState(false);
   const [search, setSearch] = useState('');
+
+  const currentTeacherIds = useMemo(() => {
+    return classRoom.homeroomTeacherIds?.length
+      ? classRoom.homeroomTeacherIds
+      : classRoom.homeroomTeacherId ? [classRoom.homeroomTeacherId] : [];
+  }, [classRoom.homeroomTeacherIds, classRoom.homeroomTeacherId]);
+
+  const activeTeachers = useMemo(() => {
+    return teachers.filter(t => currentTeacherIds.includes(t.id));
+  }, [teachers, currentTeacherIds]);
 
   const classEnrollments = useMemo(() =>
     enrollments.filter(
@@ -66,121 +69,186 @@ export default function ClassStudentTab({ classRoom, cfg }: Props) {
   };
 
   return (
-    <div className="flex flex-col gap-3 h-full">
-      {/* Actions row */}
+    <div className="flex flex-col gap-4 h-full font-sukhumvit">
+
+      {/* ── Action bar ── */}
       <div className="flex items-center gap-2 flex-shrink-0">
-        <div className="relative flex-1 max-w-xs">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30" />
-          <Input
+
+        {/* Search capsule */}
+        <div className="flex items-center h-9 gap-2 px-3 rounded-full bg-white/80 border border-black/[0.07] shadow-sm flex-1 max-w-xs">
+          <HiMagnifyingGlass className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="ค้นหาชื่อ หรือรหัสนักเรียน..."
-            className="pl-8 h-9 text-[11px] rounded-xl bg-white/60 border-white/80 focus-visible:ring-1 focus-visible:ring-slate-300 backdrop-blur"
+            className="flex-1 bg-transparent border-none outline-none text-[11px] font-bold text-slate-700 placeholder:text-slate-300"
           />
         </div>
-        <Button
+
+        <div className="flex-1" />
+
+        {/* Add student button */}
+        <button
           onClick={() => setAddOpen(true)}
-          className="h-9 gap-1.5 px-3 text-xs font-semibold text-white rounded-xl bg-[#1e1e1e] hover:bg-[#2a2a2a] border-0 flex-shrink-0"
-          style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
+          className="flex items-center gap-1.5 h-9 px-4 rounded-full bg-slate-900 text-white text-[11px] font-black shadow-sm hover:bg-slate-700 active:scale-95 transition-all whitespace-nowrap"
         >
-          <UserPlus size={13} />
+          <HiUserPlus className="w-3.5 h-3.5" />
           จัดรายชื่อนักเรียน
-        </Button>
+        </button>
       </div>
 
-      {/* List */}
-      {classStudents.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          className="flex flex-col items-center justify-center h-52 gap-2 text-black/25 bg-white/40 rounded-2xl border border-black/5"
-        >
-          <Users size={32} strokeWidth={1.5} className="opacity-30" />
-          <p className="text-sm font-medium">ยังไม่มีนักเรียนในห้องนี้</p>
-          <p className="text-xs text-black/20">กด "จัดรายชื่อนักเรียน" เพื่อเพิ่ม</p>
-        </motion.div>
-      ) : (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="rounded-3xl overflow-hidden flex-1 min-h-0 flex flex-col"
-          style={glassCard}
-        >
-          {/* Table header */}
-          <div
-            className="grid items-center px-4 py-2.5 border-b border-black/[0.04] flex-shrink-0"
-            style={{ gridTemplateColumns: '3rem 1fr 8rem 7rem 4rem', background: 'rgba(0,0,0,0.02)' }}
-          >
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider">#</span>
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider">ชื่อ-นามสกุล</span>
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider">รหัสนักเรียน</span>
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider">สถานะ</span>
-            <span className="text-[10px] font-bold text-black/35 uppercase tracking-wider text-center">จัดการ</span>
+      {/* ── Homeroom Teacher Bar ── */}
+      {activeTeachers.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-white/60 border border-black/[0.04] shadow-sm backdrop-blur-sm">
+          <div className="flex -space-x-2 overflow-hidden shrink-0">
+            {activeTeachers.map(t => (
+              <div key={t.id} className="relative group/avatar">
+                {t.photoURL ? (
+                  <img
+                    src={t.photoURL}
+                    alt={t.name}
+                    className="w-8 h-8 rounded-full object-cover border-2 border-white shadow-sm"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-slate-200 border-2 border-white shadow-sm flex items-center justify-center text-[10px] font-black text-slate-600">
+                    {t.name.charAt(0)}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider leading-none">ครูประจำชั้น</p>
+            <p className="text-[12px] font-bold text-slate-700 truncate mt-0.5">
+              {activeTeachers.map(t => t.name).join(' & ')}
+            </p>
+          </div>
+        </div>
+      )}
 
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide">
-            <AnimatePresence>
+      {/* ── Student list ── */}
+      <AnimatePresence mode="wait">
+        {classStudents.length === 0 ? (
+          <motion.div
+            key="empty"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="flex flex-col items-center justify-center h-52 gap-3 bg-white/60 rounded-3xl border border-black/[0.05] shadow-sm"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center">
+              <HiUserPlus className="w-6 h-6 text-slate-300" />
+            </div>
+            <div className="text-center">
+              <p className="text-[13px] font-bold text-slate-400">ยังไม่มีนักเรียนในห้องนี้</p>
+              <p className="text-[11px] text-slate-300 mt-0.5">กด "จัดรายชื่อนักเรียน" เพื่อเพิ่ม</p>
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="table"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.2 }}
+            className="flex-1 min-h-0 flex flex-col rounded-2xl overflow-hidden bg-white/80 border border-black/[0.05] shadow-sm backdrop-blur-sm"
+          >
+            {/* Table header */}
+            <div
+              className="grid items-center px-4 py-2.5 border-b border-black/[0.05] flex-shrink-0 bg-slate-50/80"
+              style={{ gridTemplateColumns: '3rem 1fr 9rem 7rem 4rem' }}
+            >
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">#</span>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">ชื่อ-นามสกุล</span>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">รหัส</span>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">เพศ</span>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">★</span>
+            </div>
+
+            {/* Rows */}
+            <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide">
               <motion.div
                 variants={containerAnim}
                 initial="hidden"
                 animate="show"
-                className="divide-y divide-black/[0.03]"
+                className="flex flex-col gap-3 px-3 pb-4 pt-2"
               >
                 {classStudents.map((s, idx) => (
                   <motion.div
                     key={s.id}
                     variants={rowAnim}
-                    className="grid items-center px-4 py-2.5 hover:bg-black/[0.015] transition-colors"
-                    style={{ gridTemplateColumns: '3rem 1fr 8rem 7rem 4rem' }}
+                    className="grid items-center gap-0 border border-black/[0.05] rounded-2xl bg-white shadow-[0_4px_12px_rgba(15,23,42,0.08)] px-4 py-3 transition-colors group"
+                    style={{ gridTemplateColumns: '3rem 1fr 9rem 7rem 4rem' }}
                   >
-                    <span className="text-[11px] text-black/30 font-medium">{idx + 1}</span>
+                    {/* # */}
+                    <span className="text-[11px] font-bold text-slate-300">{idx + 1}</span>
+
+                    {/* Name + avatar */}
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <div
-                        className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
-                        style={{ background: cfg.bg, color: cfg.color }}
-                      >
-                        {s.firstName.charAt(0)}
-                      </div>
-                      <p className="text-xs font-semibold text-black/75 truncate">
-                        {s.prefix}{s.firstName} {s.lastName}
-                      </p>
+                      {s.photoURL ? (
+                        <img
+                          src={s.photoURL}
+                          alt={`${s.prefix}${s.firstName} ${s.lastName}`}
+                          className="w-7 h-7 rounded-full object-cover shrink-0 shadow-sm border border-black/[0.05]"
+                        />
+                      ) : (
+                        <div
+                          className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black shrink-0 shadow-sm"
+                          style={{ background: cfg.bg, color: cfg.color }}
+                        >
+                          {s.firstName.charAt(0)}
+                        </div>
+                      )}
+                        <p className="text-[12px] font-bold text-slate-700 truncate">
+                          {s.firstName} {s.lastName}
+                        </p>
                     </div>
-                    <span className="text-[11px] text-black/45 font-medium">{s.studentCode}</span>
-                    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md w-fit ${
-                      s.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400'
+
+                    {/* Student code */}
+                    <span className="text-[11px] font-bold text-slate-400">{s.studentCode}</span>
+
+                    {/* Gender / prefix badge */}
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full w-fit ${
+                      s.prefix === 'เด็กชาย' || s.prefix === 'นาย'
+                        ? 'bg-blue-50 text-blue-500'
+                        : 'bg-rose-50 text-rose-500'
                     }`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${s.status === 'active' ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                      {s.status === 'active' ? 'กำลังศึกษา' : 'ไม่ใช้งาน'}
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        s.prefix === 'เด็กชาย' || s.prefix === 'นาย'
+                          ? 'bg-blue-400'
+                          : 'bg-rose-400'
+                      }`} />
+                      {s.prefix === 'เด็กชาย' || s.prefix === 'นาย' ? 'ชาย' : 'หญิง'}
                     </span>
+
+                    {/* Remove button */}
                     <div className="flex justify-center">
-                      <Button
-                        variant="ghost"
-                        size="icon"
+                      <button
                         onClick={() => handleRemove(s.id, `${s.prefix}${s.firstName} ${s.lastName}`)}
-                        className="h-7 w-7 text-black/30 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
                         title="ย้ายออกจากห้อง"
+                        className="w-7 h-7 flex items-center justify-center rounded-full text-slate-300 opacity-0 group-hover:opacity-100 hover:text-rose-500 hover:bg-rose-50 transition-all"
                       >
-                        <UserMinus size={13} />
-                      </Button>
+                        <HiUserMinus className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </motion.div>
                 ))}
               </motion.div>
-            </AnimatePresence>
-          </div>
+            </div>
 
-          {/* Footer */}
-          <div className="px-4 py-2.5 border-t border-black/[0.04] flex items-center justify-between flex-shrink-0" style={{ background: 'rgba(0,0,0,0.015)' }}>
-            <span className="text-[10px] text-black/30 font-medium">
-              แสดง {classStudents.length} รายชื่อ
-              {search && ` (กรองจาก ${classEnrollments.length} คนทั้งหมด)`}
-            </span>
-            <span className="text-[10px] text-black/30">
-              ความจุ: {classRoom.studentCount}/{classRoom.maxStudents} คน
-            </span>
-          </div>
-        </motion.div>
-      )}
+            {/* Footer */}
+            <div className="px-4 py-2.5 border-t border-black/[0.05] flex items-center justify-between flex-shrink-0 bg-slate-50/60">
+              <span className="text-[10px] font-bold text-slate-400">
+                แสดง {classStudents.length} รายชื่อ
+                {search && ` (กรองจาก ${classEnrollments.length} คนทั้งหมด)`}
+              </span>
+              <span className="text-[10px] font-bold text-slate-400">
+                ความจุ: {classRoom.studentCount}/{classRoom.maxStudents} คน
+              </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <ClassAddStudentModal
         open={addOpen}

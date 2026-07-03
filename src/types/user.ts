@@ -18,7 +18,11 @@ export interface UserData {
   isActive?: boolean;
   createdAt?: any;
   photoURL?: string;
+  lineUid?: string;
   lineToken?: string;
+  lineLinkedAt?: unknown;
   deviceId?: string;
+  /** AS608 template slot (1–127) — ใช้จับคู่กับลายนิ้วมือบนบอร์ด ESP32 */
+  fingerprintTemplateId?: number;
   studentCode?: string;
 }

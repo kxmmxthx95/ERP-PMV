@@ -652,17 +652,12 @@ export default function ClassAttendanceWidget() {
 
   return (
     <>
-      <div style={WIDGET_GLASS} className="rounded-3xl p-5 flex flex-col gap-3 w-full">
+      <div style={WIDGET_GLASS} className="rounded-2xl p-3 flex flex-col gap-2 w-full">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-emerald-400/20 flex items-center justify-center">
-              <ClipboardCheck size={16} className="text-emerald-600" />
-            </div>
-            <div>
-              <span className="font-bold text-sm text-slate-700">เช็กชื่อนักเรียน</span>
-              <p className="text-[10px] text-slate-400">วัน{todayLabel}</p>
-            </div>
+          <div>
+            <span className="font-bold text-sm text-slate-700">เช็กชื่อนักเรียน</span>
+            <p className="text-[10px] text-slate-400">วัน{todayLabel}</p>
           </div>
 
           <div className="flex items-center gap-1 text-[11px] font-bold text-slate-400">

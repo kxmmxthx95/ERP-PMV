@@ -9,7 +9,7 @@
 - **Animations**: Framer Motion
 - **Routing**: React Router DOM
 - **Backend/Database**: Firebase (Firestore)
-- **Icons**: Lucide React
+- **Icons**: React Icons (`react-icons/hi2`)
 
 ## 📂 โครงสร้างโฟลเดอร์หลัก (Project Structure)
 โปรเจกต์นี้ใช้การจัดโครงสร้างแบบ Feature-based เพื่อให้โค้ดเป็นระเบียบและดูแลรักษาง่าย

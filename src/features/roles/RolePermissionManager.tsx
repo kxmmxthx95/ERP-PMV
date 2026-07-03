@@ -1,14 +1,23 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, LayoutGrid, Menu } from 'lucide-react';
+import { HiBars3 } from 'react-icons/hi2';
 import { useAllRolePermissions, useUpdateRolePermission, useInitializeRolePermissions } from '@/hooks/useRolePermissions';
 import type { AccessLevel, FeaturePermission } from '@/types/rolePermission';
 import { FEATURE_LIST } from '@/types/rolePermission';
+import {
+  getFeatureCategoryLabel,
+  getFeatureDisplayName,
+  getFeatureIcon,
+} from '@/lib/featurePermissionMeta';
+import { cn } from '@/lib/utils';
 
 // ── Feature Lists ──────────────────────────────────────────────────────────────
 // Widget = สิ่งที่แสดงบน dashboard (ON/OFF)
-const WIDGET_FEATURE_KEYS = ['widget_announcements', 'widget_feedbackStatus', 'widget_leave', 'widget_staffAttendance', 'widget_calendar', 'widget_studentProfile', 'widget_attendance', 'widget_dailyAttendanceSummary', 'widget_teacherLiveStatus', 'widget_studentSummary', 'widget_leaveQuota', 'widget_studentLeave', 'widget_studentExamScore'];
+const WIDGET_FEATURE_KEYS = FEATURE_LIST
+  .filter((f) => f.featureKey.startsWith('widget_'))
+  .map((f) => f.featureKey);
 const WIDGET_FEATURES: FeaturePermission[] = FEATURE_LIST.filter(f => WIDGET_FEATURE_KEYS.includes(f.featureKey));
 // Menu = เมนู sidebar ทั้งหมดในระบบ (RotaryKnob access level)
 const MENU_FEATURES: FeaturePermission[] = FEATURE_LIST.filter(f => !WIDGET_FEATURE_KEYS.includes(f.featureKey));
@@ -33,6 +42,83 @@ const KNOB_POSITIONS = [
 const CARD = 'rgba(255,255,255,0.85)';
 const BORDER = '#e2e8f0';
 const PER_PAGE = 8;
+const LABEL_LONG_PRESS_MS = 450;
+
+function FeatureRowLabel({ feature }: { feature: FeaturePermission }) {
+  const [showFullLabel, setShowFullLabel] = useState(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const Icon = getFeatureIcon(feature.featureKey);
+  const displayName = getFeatureDisplayName(feature);
+  const categoryLabel = getFeatureCategoryLabel(feature);
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const bindLongPress = {
+    onPointerDown: (e: ReactPointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      clearLongPressTimer();
+      longPressTimerRef.current = setTimeout(() => {
+        setShowFullLabel(true);
+        if (navigator.vibrate) navigator.vibrate(30);
+      }, LABEL_LONG_PRESS_MS);
+    },
+    onPointerUp: () => {
+      clearLongPressTimer();
+      setShowFullLabel(false);
+    },
+    onPointerLeave: () => {
+      clearLongPressTimer();
+      setShowFullLabel(false);
+    },
+    onPointerCancel: () => {
+      clearLongPressTimer();
+      setShowFullLabel(false);
+    },
+    onContextMenu: (e: ReactMouseEvent) => {
+      e.preventDefault();
+      setShowFullLabel(true);
+    },
+  };
+
+  return (
+    <div className="relative flex min-w-0 flex-1 items-center gap-2 px-2 py-2 sm:px-2.5">
+      <div
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200/80 bg-gradient-to-br from-slate-50 to-slate-100 text-slate-600 shadow-sm"
+        aria-hidden
+      >
+        <Icon className="h-4 w-4" />
+      </div>
+
+      <div
+        {...bindLongPress}
+        className="min-w-0 flex-1 touch-manipulation select-none"
+        title={displayName}
+      >
+        <div className="line-clamp-2 text-[11px] font-bold leading-tight text-slate-800 sm:text-[12px]">
+          {displayName}
+        </div>
+        <div className="mt-0.5 truncate text-[9px] uppercase tracking-wider text-slate-400">
+          {categoryLabel}
+        </div>
+      </div>
+
+      {showFullLabel && (
+        <div
+          className="absolute left-2 right-2 bottom-full z-30 mb-1.5 rounded-xl border border-slate-200 bg-slate-900 px-3 py-2 shadow-lg"
+          role="tooltip"
+        >
+          <p className="text-[12px] font-bold leading-snug text-white">{displayName}</p>
+          <p className="mt-0.5 text-[9px] uppercase tracking-wider text-slate-300">{categoryLabel}</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Rotary Knob ────────────────────────────────────────────────────────────────
 interface KnobProps {
@@ -209,16 +295,13 @@ function WidgetRow({ feature, allConfigs, isUpdating, onToggle }: WidgetRowProps
     allConfigs?.[rk]?.permissions?.find((p: FeaturePermission) => p.featureKey === feature.featureKey);
 
   return (
-    <div className="flex items-center rounded-xl overflow-hidden" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
-      <div className="flex-1 px-3 py-2.5 min-w-0">
-        <div className="text-[12px] font-bold text-slate-800 truncate">{feature.label}</div>
-        <div className="text-[9px] text-slate-400 uppercase tracking-wider">{feature.category}</div>
-      </div>
+    <div className="relative flex items-center rounded-xl" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
+      <FeatureRowLabel feature={feature} />
       {ROLES.map(role => {
-        const enabled = getPerm(role.key)?.enabled ?? false;
+        const enabled = getPerm(role.key)?.enabled ?? feature.enabled;
         return (
           <div key={role.key} className="flex items-center justify-center py-1.5"
-            style={{ borderLeft: `1px solid ${BORDER}`, width: 52 }}>
+            style={{ borderLeft: `1px solid ${BORDER}`, width: 46, minWidth: 46 }}>
             <PushButton
               enabled={enabled}
               color={role.color}
@@ -254,14 +337,11 @@ function MenuRow({ feature, allConfigs, isUpdating, onKnob }: MenuRowProps) {
   };
 
   return (
-    <div className="flex items-center rounded-xl overflow-hidden" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
-      <div className="flex-1 px-3 py-2.5 min-w-0">
-        <div className="text-[12px] font-bold text-slate-800 truncate">{feature.label}</div>
-        <div className="text-[9px] text-slate-400 uppercase tracking-wider">{feature.category}</div>
-      </div>
+    <div className="relative flex items-center rounded-xl" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
+      <FeatureRowLabel feature={feature} />
       {ROLES.map(role => (
         <div key={role.key} className="flex items-center justify-center py-1.5"
-          style={{ borderLeft: `1px solid ${BORDER}`, width: 52 }}>
+          style={{ borderLeft: `1px solid ${BORDER}`, width: 46, minWidth: 46 }}>
           <RotaryKnob
             position={getPos(role.key)}
             color={role.color}
@@ -290,7 +370,9 @@ interface PanelProps {
 function Panel({ title, icon, features, searchTerm, onSearch, currentPage, onPage, children }: PanelProps) {
   const filtered = features.filter(f =>
     f.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    f.category.toLowerCase().includes(searchTerm.toLowerCase())
+    f.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    getFeatureDisplayName(f).toLowerCase().includes(searchTerm.toLowerCase()) ||
+    f.featureKey.toLowerCase().includes(searchTerm.toLowerCase())
   );
   const total = Math.ceil(filtered.length / PER_PAGE);
   const paged = filtered.slice(currentPage * PER_PAGE, (currentPage + 1) * PER_PAGE);
@@ -319,7 +401,7 @@ function Panel({ title, icon, features, searchTerm, onSearch, currentPage, onPag
         </div>
         {ROLES.map(role => (
           <div key={role.key} className="flex flex-col items-center justify-center py-2"
-            style={{ borderLeft: `1px solid ${BORDER}`, minWidth: 52 }}>
+            style={{ borderLeft: `1px solid ${BORDER}`, minWidth: 46, width: 46 }}>
             <div className="w-5 h-0.5 rounded-full mb-1"
               style={{ background: role.color, boxShadow: `0 0 4px ${role.glow}` }} />
             <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: role.color }}>
@@ -342,7 +424,7 @@ function Panel({ title, icon, features, searchTerm, onSearch, currentPage, onPag
         initial={{ opacity: 0, x: 10 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.2 }}
-        className="flex flex-col gap-1.5 cursor-grab active:cursor-grabbing"
+        className="relative flex flex-col gap-1.5 overflow-visible cursor-grab active:cursor-grabbing"
       >
         <AnimatePresence mode="popLayout">
           {children(paged)}
@@ -371,6 +453,17 @@ function Panel({ title, icon, features, searchTerm, onSearch, currentPage, onPag
   );
 }
 
+type MobilePanel = 'widget' | 'menu';
+
+const MOBILE_PANEL_OPTIONS: Array<{
+  id: MobilePanel;
+  label: string;
+  icon: typeof LayoutGrid;
+}> = [
+  { id: 'widget', label: 'วิดเจ็ต', icon: LayoutGrid },
+  { id: 'menu', label: 'เมนู', icon: Menu },
+];
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function RolePermissionManager() {
   const { data: allConfigs, isLoading } = useAllRolePermissions();
@@ -381,6 +474,13 @@ export default function RolePermissionManager() {
   const [rightSearch, setRightSearch] = useState('');
   const [leftPage, setLeftPage] = useState(0);
   const [rightPage, setRightPage] = useState(0);
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>('widget');
+  const [mobilePanelMenuOpen, setMobilePanelMenuOpen] = useState(false);
+  const [mobileActionsEl, setMobileActionsEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
+  }, []);
 
   const handleToggle = (roleKey: string, featureKey: string) => {
     const roleConfig = allConfigs?.[roleKey];
@@ -390,7 +490,7 @@ export default function RolePermissionManager() {
     if (!feature) return;
 
     // Use existing perm if found, otherwise use default from FEATURE_LIST
-    const currentEnabled = existingPerm ? existingPerm.enabled : false;
+    const currentEnabled = existingPerm?.enabled ?? feature.enabled;
     
     updatePermission({
       roleId: roleKey,
@@ -423,21 +523,78 @@ export default function RolePermissionManager() {
 
   return (
     <div className="flex flex-col h-full gap-4">
-      {/* Portal to Header */}
+      {/* Portal to Header — desktop reset */}
       {typeof document !== 'undefined' && createPortal(
         <button
           onClick={() => initializeDefaults()}
           disabled={isInitializing}
-          className="px-5 py-2 rounded-full text-[11px] font-bold transition-all bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 shadow-lg shadow-slate-900/10 active:scale-95"
+          className="hidden lg:inline-flex px-5 py-2 rounded-full text-[11px] font-bold transition-all bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 shadow-lg shadow-slate-900/10 active:scale-95"
         >
           {isInitializing ? 'กำลังรีเซ็ต...' : 'RESET DEFAULT'}
         </button>,
         document.getElementById('header-portal-right-actions') || document.body
       )}
 
-      <div className="flex gap-4 flex-1 min-h-0">
+      {/* Mobile — hamburger menu: Widget / Menu */}
+      {mobileActionsEl && createPortal(
+        <div className="pointer-events-auto relative lg:hidden">
+          <button
+            type="button"
+            onClick={() => setMobilePanelMenuOpen((open) => !open)}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+            title="เลือกวิดเจ็ตหรือเมนู"
+            aria-label="เลือกวิดเจ็ตหรือเมนู"
+            aria-expanded={mobilePanelMenuOpen}
+          >
+            <HiBars3 className="h-4 w-4" />
+          </button>
+
+          {mobilePanelMenuOpen && (
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-[90]"
+                aria-label="ปิดเมนู"
+                onClick={() => setMobilePanelMenuOpen(false)}
+              />
+              <div className="absolute right-0 top-full z-[100] mt-1.5 w-48 rounded-2xl border border-slate-200 bg-white p-1 shadow-xl">
+                <p className="px-3 py-1.5 font-sukhumvit text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  จัดการสิทธิ์
+                </p>
+                {MOBILE_PANEL_OPTIONS.map((option) => {
+                  const Icon = option.icon;
+                  const isActive = mobilePanel === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => {
+                        setMobilePanel(option.id);
+                        if (option.id === 'widget') setLeftPage(0);
+                        else setRightPage(0);
+                        setMobilePanelMenuOpen(false);
+                      }}
+                      className={cn(
+                        'flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left font-sukhumvit text-[13px] font-bold transition-colors',
+                        isActive ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50',
+                      )}
+                    >
+                      <Icon className={cn('h-4 w-4 shrink-0', isActive ? 'text-white' : 'text-slate-400')} />
+                      <span>{option.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>,
+        mobileActionsEl,
+      )}
+
+      <div className="flex gap-4 flex-1 min-h-0 flex-col lg:flex-row">
 
         {/* LEFT — Widget push-button */}
+        <div className={cn('flex min-h-0 flex-1 flex-col', mobilePanel !== 'widget' && 'hidden lg:flex')}>
         <Panel
           title="วิดเจ็ต"
           icon={<LayoutGrid size={14} />}
@@ -457,11 +614,13 @@ export default function RolePermissionManager() {
             />
           ))}
         </Panel>
+        </div>
 
         {/* Divider */}
-        <div className="w-px self-stretch" style={{ background: BORDER }} />
+        <div className="hidden lg:block w-px self-stretch" style={{ background: BORDER }} />
 
         {/* RIGHT — Menu rotary knob */}
+        <div className={cn('flex min-h-0 flex-1 flex-col', mobilePanel !== 'menu' && 'hidden lg:flex')}>
         <Panel
           title="เมนู"
           icon={<Menu size={14} />}
@@ -481,6 +640,7 @@ export default function RolePermissionManager() {
             />
           ))}
         </Panel>
+        </div>
       </div>
     </div>
   );

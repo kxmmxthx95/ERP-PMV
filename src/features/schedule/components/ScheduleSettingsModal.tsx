@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Settings, Zap, X } from 'lucide-react';
+import { Zap } from 'lucide-react';
+import { HiCog6Tooth } from 'react-icons/hi2';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { useScheduleSettings } from '@/hooks/useScheduleSettings';
 
@@ -92,125 +92,130 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
       <DialogTrigger asChild>
         <button
           type="button"
-          className="w-full sm:w-auto h-auto py-1 px-2.5 rounded-md flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-colors hover:bg-black/5 border-none shadow-none text-black/70 flex-shrink-0"
+          className="flex items-center justify-center h-7 w-7 rounded-full transition-all text-black/35 hover:text-black/60 hover:bg-black/[0.02] border-none shadow-none flex-shrink-0"
+          title="ตั้งค่าคาบเรียนและเวลา"
         >
-          <Settings size={13} />
-          ตั้งค่า
+          <HiCog6Tooth className="w-4 h-4" />
         </button>
       </DialogTrigger>
-      <DialogContent className="w-[min(94vw,560px)] max-w-none max-h-[90vh] overflow-hidden bg-white rounded-[40px] shadow-2xl border-none p-0">
+      <DialogContent
+        className="w-[92vw] sm:max-w-lg rounded-[2rem] sm:rounded-[2.5rem] border-none p-0 shadow-2xl overflow-hidden"
+        style={{
+          background: 'rgba(255,255,255,0.7)',
+          backdropFilter: 'blur(24px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(180%)'
+        }}
+      >
         <div className="flex max-h-[90vh] flex-col">
-          <div className="relative px-8 pt-8 pb-4">
-            <button
-              onClick={() => setOpen(false)}
-              className="absolute right-6 top-6 flex h-8 w-8 items-center justify-center rounded-full bg-black/5 text-black/40 transition-colors hover:bg-black/10"
-            >
-              <X size={16} />
-            </button>
-            <h2 className="text-2xl font-black text-black/80">ตั้งค่าคาบเรียนและเวลา</h2>
-            <p className="mt-1 text-[13px] font-medium text-black/30">
+          <div className="px-6 sm:px-8 pt-6 sm:pt-8 pb-2 sm:pb-3 flex flex-col bg-transparent">
+            <DialogTitle className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">
+              ตั้งค่าคาบเรียนและเวลา
+            </DialogTitle>
+            <DialogDescription className="mt-1 text-[12px] font-medium text-slate-500">
               จัดการจำนวนคาบและเวลาในแต่ละช่วง ({targetId || 'ค่าเริ่มต้น'})
-            </p>
+            </DialogDescription>
           </div>
 
-          <div className="flex-1 space-y-8 overflow-y-auto px-8 py-4 custom-scrollbar">
+          <div className="flex-1 space-y-6 overflow-y-auto px-6 sm:px-8 py-4 custom-scrollbar">
             {/* Automatic Generation Section */}
-            <div className="space-y-6">
+            <div className="space-y-4">
               <div className="flex items-center gap-2">
-                <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
-                <h4 className="text-[12px] font-black uppercase tracking-widest text-black/20">
+                <div className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-400">
                   สร้างโครงสร้างเวลาอัตโนมัติ
                 </h4>
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-4 rounded-2xl bg-white/40 border border-white/20 p-4 shadow-sm">
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label className="pl-1 text-[12px] font-bold text-black/60">เริ่มเรียน <span className="text-rose-500">*</span></Label>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">เริ่มเรียน <span className="text-rose-500">*</span></label>
                     <Input
                       type="time"
                       value={genStartTime}
                       onChange={e => setGenStartTime(e.target.value)}
-                      className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                      className="h-10 rounded-xl bg-slate-50/70 border-none text-xs font-bold px-4 focus-visible:ring-2 focus-visible:ring-slate-900/20 focus-visible:bg-slate-50/90 transition-all"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="pl-1 text-[12px] font-bold text-black/60">นาทีต่อคาบ <span className="text-rose-500">*</span></Label>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">นาทีต่อคาบ <span className="text-rose-500">*</span></label>
                     <Input
                       type="number"
                       value={genPeriodDur}
                       onChange={e => setGenPeriodDur(Number(e.target.value))}
-                      className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                      className="h-10 rounded-xl bg-slate-50/70 border-none text-xs font-bold px-4 focus-visible:ring-2 focus-visible:ring-slate-900/20 focus-visible:bg-slate-50/90 transition-all"
                     />
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <Label className="pl-1 text-[12px] font-bold text-black/60">พักเบรกระหว่างคาบ (นาที)</Label>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">พักเบรกระหว่างคาบ (นาที)</label>
                   <Input
                     type="number"
                     value={genBreakDur}
                     onChange={e => setGenBreakDur(Number(e.target.value))}
-                    className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                    className="h-10 rounded-xl bg-slate-50/70 border-none text-xs font-bold px-4 focus-visible:ring-2 focus-visible:ring-slate-900/20 focus-visible:bg-slate-50/90 transition-all"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label className="pl-1 text-[12px] font-bold text-black/60">คาบที่พักเที่ยง</Label>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">คาบที่พักเที่ยง</label>
                     <Input
                       type="number"
                       value={genLunchPeriod}
                       onChange={e => setGenLunchPeriod(Number(e.target.value))}
-                      className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                      className="h-10 rounded-xl bg-slate-50/70 border-none text-xs font-bold px-4 focus-visible:ring-2 focus-visible:ring-slate-900/20 focus-visible:bg-slate-50/90 transition-all"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="pl-1 text-[12px] font-bold text-black/60">พักเที่ยง (นาที)</Label>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">พักเที่ยง (นาที)</label>
                     <Input
                       type="number"
                       value={genLunchDur}
                       onChange={e => setGenLunchDur(Number(e.target.value))}
-                      className="h-12 rounded-2xl border-none bg-black/[0.03] px-4 text-[14px] font-medium focus-visible:ring-0 focus-visible:bg-black/[0.05] transition-all"
+                      className="h-10 rounded-xl bg-slate-50/70 border-none text-xs font-bold px-4 focus-visible:ring-2 focus-visible:ring-slate-900/20 focus-visible:bg-slate-50/90 transition-all"
                     />
                   </div>
                 </div>
 
                 <Button
                   onClick={handleGenerate}
-                  className="h-12 w-full rounded-2xl bg-blue-50 text-blue-600 shadow-none hover:bg-blue-100 font-black text-[13px] transition-all active:scale-[0.98]"
+                  className="h-10 w-full rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 hover:text-slate-800 font-bold text-xs transition-all active:scale-[0.98] border border-slate-200/50 flex items-center justify-center gap-2 shadow-none"
                 >
-                  <Zap size={16} className="mr-2" />
+                  <Zap size={14} />
                   สร้างเวลาอัตโนมัติ
                 </Button>
               </div>
             </div>
 
             {/* Manual Setting Section */}
-            <div className="space-y-6 pb-8">
+            <div className="space-y-4 pb-4">
               <div className="flex items-center gap-2">
-                <div className="h-1.5 w-1.5 rounded-full bg-slate-300" />
-                <h4 className="text-[12px] font-black uppercase tracking-widest text-black/20">
+                <div className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-400">
                   จำนวนคาบต่อวัน
                 </h4>
               </div>
 
-              <div className="flex items-center justify-between rounded-[32px] bg-black/[0.03] p-6">
+              <div className="flex items-center justify-between rounded-2xl bg-white/40 border border-white/20 p-5 shadow-sm">
                 <div>
-                  <p className="text-xl font-black text-black/80">{localCount} คาบ</p>
-                  <p className="text-[12px] font-medium text-black/30">จำนวนคาบเรียนในหนึ่งวัน</p>
+                  <p className="text-lg font-black text-slate-800">{localCount} คาบ</p>
+                  <p className="text-[11px] font-bold text-slate-400 mt-0.5">จำนวนคาบเรียนในหนึ่งวัน</p>
                 </div>
-                <div className="flex items-center gap-3 bg-white/50 p-1.5 rounded-[20px] shadow-sm">
+                <div className="flex items-center gap-3 bg-slate-100/80 p-1 rounded-xl shadow-inner">
                   <button
+                    type="button"
                     onClick={() => setLocalCount(Math.max(1, localCount - 1))}
-                    className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-white text-lg font-bold shadow-sm transition-all hover:bg-slate-50 active:scale-90"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-slate-800 text-base font-bold shadow-sm transition-all hover:bg-slate-50 active:scale-90"
                   >
                     -
                   </button>
-                  <span className="w-8 text-center text-sm font-black text-black/60">{localCount}</span>
+                  <span className="w-6 text-center text-xs font-black text-slate-700">{localCount}</span>
                   <button
+                    type="button"
                     onClick={() => setLocalCount(localCount + 1)}
-                    className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-white text-lg font-bold shadow-sm transition-all hover:bg-slate-50 active:scale-90"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-slate-800 text-base font-bold shadow-sm transition-all hover:bg-slate-50 active:scale-90"
                   >
                     +
                   </button>
@@ -219,14 +224,23 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
             </div>
           </div>
 
-          <div className="px-8 py-6">
+          <DialogFooter className="px-6 sm:px-8 py-4 bg-transparent border-t border-white/20 flex items-center justify-end gap-3">
             <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setOpen(false)}
+              className="rounded-xl font-bold text-slate-500 h-10 hover:bg-slate-100/50"
+            >
+              ยกเลิก
+            </Button>
+            <Button
+              type="button"
               onClick={handleSave}
-              className="h-14 w-full rounded-[24px] bg-[#007AFF] text-white text-[15px] font-black shadow-xl shadow-blue-500/20 hover:bg-[#0063CC] hover:scale-[1.02] active:scale-[0.98] transition-all"
+              className="rounded-xl bg-slate-900 text-white font-bold px-8 h-10 shadow-lg shadow-slate-900/20 transition-all hover:bg-slate-800 active:scale-[0.98]"
             >
               บันทึกการตั้งค่า
             </Button>
-          </div>
+          </DialogFooter>
         </div>
       </DialogContent>
     </Dialog>

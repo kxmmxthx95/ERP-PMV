@@ -1,13 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, X, CheckCircle2, BookOpen, User, Home } from 'lucide-react';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
+import { AlertTriangle, CheckCircle2, BookOpen, User, Home } from 'lucide-react';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
+import FormModal from '@/components/ui/FormModal';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -151,48 +148,23 @@ export default function ScheduleSlotModal({
     }
   };
 
-  return (
-    <Dialog open={open} onOpenChange={v => !v && onClose()}>
-      <DialogContent
-        className="max-w-[420px] rounded-3xl border-0 p-0 overflow-hidden"
-        style={{
-          background: 'rgba(255,255,255,0.97)',
-          backdropFilter: 'blur(24px)',
-          boxShadow: '0 32px 80px rgba(0,0,0,0.12), 0 4px 16px rgba(0,0,0,0.06)',
-        }}
-      >
-        {/* Header */}
-        <DialogHeader className="px-6 pt-6 pb-0">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-3">
-              <div
-                className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-                style={{ background: 'rgba(99,102,241,0.10)', border: '1px solid rgba(99,102,241,0.20)' }}
-              >
-                <BookOpen size={16} className="text-indigo-600" />
-              </div>
-              <div>
-                <DialogTitle className="text-[15px] font-black text-black/85">
-                  {editingEntry ? 'แก้ไขคาบเรียน' : 'เพิ่มคาบเรียน'}
-                </DialogTitle>
-                <p className="text-[11px] text-black/40 mt-0.5 font-medium">
-                  {DAY_LABELS[day]}
-                  {period && ` · คาบ ${period}`}
-                  {periodTime && ` · ${periodTime}`}
-                  {effectiveClassId && ` · ${classes.find(c => c.id === effectiveClassId)?.label || effectiveClassId}`}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={onClose}
-              className="w-7 h-7 rounded-xl flex items-center justify-center text-black/30 hover:bg-black/[0.05] hover:text-black/55 transition-colors mt-0.5"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </DialogHeader>
+    const subtitle = `${DAY_LABELS[day]}${period ? ` · คาบ ${period}` : ''}${periodTime ? ` · ${periodTime}` : ''}${effectiveClassId ? ` · ${classes.find(c => c.id === effectiveClassId)?.label || effectiveClassId}` : ''}`;
 
-        <div className="px-6 py-5 space-y-4">
+    return (
+      <FormModal
+        open={open}
+        onClose={onClose}
+        title={editingEntry ? 'แก้ไขคาบเรียน' : 'เพิ่มคาบเรียน'}
+        subtitle={subtitle}
+        onSubmit={handleSave}
+        submitLabel={saving ? 'กำลังบันทึก...' : saved ? 'บันทึกแล้ว' : editingEntry ? 'บันทึก' : 'เพิ่มลงตาราง'}
+        submitDisabled={!isValid || isRest || saved || saving}
+        submitClassName="bg-[#1f1f23] text-white hover:bg-[#18181b] disabled:bg-[#3a3a40] disabled:text-white/85 disabled:opacity-100 shadow-lg shadow-black/20"
+        onDelete={editingEntry && onDelete ? () => { onDelete(editingEntry.id); onClose(); } : undefined}
+        deleteLabel="ลบคาบนี้"
+        maxWidth="sm"
+      >
+        <div className="space-y-4">
           {isRest && (
             <div
               className="flex items-center gap-2 p-3 rounded-2xl text-xs font-medium"
@@ -362,47 +334,9 @@ export default function ScheduleSlotModal({
             )}
           </AnimatePresence>
         </div>
-
-        {/* Footer */}
-        <div
-          className="px-6 pb-6 pt-2 flex items-center justify-between gap-2 border-t"
-          style={{ borderColor: 'rgba(0,0,0,0.05)' }}
-        >
-          <div>
-            {editingEntry && onDelete && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => { onDelete(editingEntry.id); onClose(); }}
-                className="text-red-500 hover:text-red-600 hover:bg-red-50 text-xs h-8 rounded-xl px-3"
-              >
-                ลบคาบนี้
-              </Button>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onClose}
-              className="text-xs h-8 rounded-xl border-slate-200 text-slate-600 hover:bg-slate-50 px-4"
-            >
-              ยกเลิก
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleSave}
-              disabled={!isValid || isRest || saved || saving}
-              className="text-xs h-8 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-40 px-4 shadow-sm shadow-indigo-200/60"
-            >
-              {saving ? 'กำลังบันทึก...' : saved ? 'บันทึกแล้ว' : editingEntry ? 'บันทึก' : 'เพิ่มลงตาราง'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
+      </FormModal>
+    );
+  }
 
 function FieldGroup({ icon, label, children }: {
   icon: React.ReactNode;

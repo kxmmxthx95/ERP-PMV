@@ -6,6 +6,12 @@ import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import type { ClassRoom } from '@/types/class';
 import { toast } from 'sonner';
+import {
+  buildHomeroomTeacherUpdate,
+  homeroomTeacherIdsEqual,
+  resolveHomeroomTeacherIds,
+  toggleHomeroomTeacherIds,
+} from '@/features/classes/utils/homeroomTeachers';
 
 interface Props {
   classRoom: ClassRoom;
@@ -24,19 +30,20 @@ export default function ClassTeacherTab({ classRoom }: Props) {
   const { teachers } = useTeacherManager();
   const { updateClass } = useClassroomManager();
 
-  const currentIds: string[] = classRoom.homeroomTeacherIds?.length
-    ? classRoom.homeroomTeacherIds
-    : classRoom.homeroomTeacherId ? [classRoom.homeroomTeacherId] : [];
+  const activeTeachers = useMemo(
+    () => teachers.filter(t => t.status === 'active'),
+    [teachers],
+  );
+
+  const currentIds = resolveHomeroomTeacherIds(classRoom, activeTeachers);
 
   const [selectedIds, setSelectedIds] = useState<string[]>(currentIds);
   const [search, setSearch] = useState('');
   const [selectedDept, setSelectedDept] = useState<string>('all');
 
-
-  const activeTeachers = useMemo(
-    () => teachers.filter(t => t.status === 'active'),
-    [teachers],
-  );
+  useEffect(() => {
+    setSelectedIds(resolveHomeroomTeacherIds(classRoom, activeTeachers));
+  }, [classRoom.id, classRoom.homeroomTeacherId, classRoom.homeroomTeacherIds, activeTeachers]);
 
   const filtered = useMemo(() =>
     activeTeachers.filter(t => {
@@ -56,36 +63,38 @@ export default function ClassTeacherTab({ classRoom }: Props) {
 
 
   const toggleTeacher = (id: string) => {
-    setSelectedIds(prev => {
-      if (prev.includes(id)) return prev.filter(x => x !== id);
-      if (prev.length >= 2) {
+    const teacher = activeTeachers.find((t) => t.id === id);
+    if (!teacher) return;
+
+    setSelectedIds((prev) => {
+      const pseudoRoom = {
+        homeroomTeacherId: classRoom.homeroomTeacherId,
+        homeroomTeacherIds: prev,
+      };
+      const { nextIds, changed, atLimit } = toggleHomeroomTeacherIds(teacher, pseudoRoom, activeTeachers);
+      if (atLimit) {
         toast.error('กำหนดครูประจำชั้นได้สูงสุด 2 คน');
         return prev;
       }
-      return [...prev, id];
+      return changed ? nextIds : prev;
     });
   };
 
-  // Auto-save when selectedIds changes
   useEffect(() => {
     const saveChanges = async () => {
-      // Only save if it's actually different from the current classroom data
-      const current = classRoom.homeroomTeacherIds || [];
-      if (JSON.stringify([...selectedIds].sort()) === JSON.stringify([...current].sort())) return;
+      const current = resolveHomeroomTeacherIds(classRoom, activeTeachers);
+      if (homeroomTeacherIdsEqual(selectedIds, current)) return;
 
       try {
-        await updateClass(classRoom.id, {
-          homeroomTeacherIds: selectedIds,
-          homeroomTeacherId: selectedIds[0] ?? '',
-        });
+        await updateClass(classRoom.id, buildHomeroomTeacherUpdate(selectedIds));
       } catch (err) {
         console.error("Auto-save failed:", err);
       }
     };
 
-    const timeoutId = setTimeout(saveChanges, 1000); // 1s debounce
+    const timeoutId = setTimeout(saveChanges, 1000);
     return () => clearTimeout(timeoutId);
-  }, [selectedIds, classRoom.id, updateClass, classRoom.homeroomTeacherIds]);
+  }, [selectedIds, classRoom, updateClass, activeTeachers]);
   return (
     <div className="flex flex-col gap-3 h-full">
       {/* ── Apple Music Style Header ── */}

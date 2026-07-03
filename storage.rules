@@ -1,0 +1,46 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isImageUpload() {
+      return request.resource.size < 10 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('image/.*')
+          || request.resource.contentType == 'application/octet-stream'
+        );
+    }
+
+    function isPdfUpload() {
+      return request.resource.size < 25 * 1024 * 1024
+        && (
+          request.resource.contentType == 'application/pdf'
+          || request.resource.contentType == 'application/octet-stream'
+        );
+    }
+
+    match /questions/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isImageUpload();
+    }
+
+    match /question_sets/covers/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isImageUpload();
+    }
+
+    // ข้อสอบ PDF (คลังข้อสอบ → อัปโหลด + นักเรียนเปิดดูตอนสอบ)
+    match /question_sets/pdfs/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isPdfUpload();
+      allow delete: if isSignedIn();
+    }
+
+    match /exam_rooms/{roomId}/attempts/{attemptId}/answers/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isImageUpload();
+    }
+  }
+}

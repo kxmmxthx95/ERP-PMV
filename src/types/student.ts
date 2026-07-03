@@ -15,6 +15,7 @@ export type BloodType = 'A' | 'B' | 'AB' | 'O';
 export interface Student {
   id: string;                   // Firebase Auth UID หรือ Firestore auto ID
   studentCode: string;          // เลขประจำตัวนักเรียน เช่น "67001"
+  nationalId?: string;          // เลขบัตรประชาชน 13 หลัก
   prefix: string;               // "เด็กชาย" | "เด็กหญิง" | "นาย" | "นางสาว"
   firstName: string;
   lastName: string;
@@ -97,12 +98,32 @@ export interface Student {
   address_latitude?: number;
   address_longitude?: number;
   address_mapImageURL?: string;
-  // ข้อมูลผู้ปกครอง
-  guardianPrefix?: string;      // "นาย" | "นาง" | "นางสาว"
+  // ข้อมูลบิดา
+  father_prefix?: string;
+  father_firstName?: string;
+  father_lastName?: string;
+  father_education?: string;
+  father_occupation?: string;
+  father_salary?: number;
+  father_phone?: string;
+  // ข้อมูลมารดา
+  mother_prefix?: string;
+  mother_firstName?: string;
+  mother_lastName?: string;
+  mother_education?: string;
+  mother_occupation?: string;
+  mother_salary?: number;
+  mother_phone?: string;
+  // ผู้ปกครอง: บิดา | มารดา | อื่นๆ
+  guardianType?: 'father' | 'mother' | 'other';
+  guardianPrefix?: string;
   guardianFirstName?: string;
   guardianLastName?: string;
   guardianPhone?: string;
-  guardianRelation?: string;    // "บิดา" | "มารดา" | "ผู้ปกครอง"
+  guardianRelation?: string;
+  guardian_education?: string;
+  guardian_occupation?: string;
+  guardian_salary?: number;
   // System
   authUid?: string;             // Firebase Auth UID (อาจต่างจาก id ถ้า id เป็น Firestore auto ID)
   userId?: string;              // alias สำหรับ authUid (legacy)

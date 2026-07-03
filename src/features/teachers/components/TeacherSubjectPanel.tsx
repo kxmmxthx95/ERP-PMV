@@ -1,12 +1,27 @@
 import React, { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { BookOpen, Search, X, Plus } from 'lucide-react';
+import {
+  HiBookOpen,
+  HiMagnifyingGlass,
+  HiXMark,
+  HiPlus,
+  HiLanguage,
+  HiCalculator,
+  HiBeaker,
+  HiGlobeAmericas,
+  HiHeart,
+  HiPaintBrush,
+  HiBriefcase,
+  HiChatBubbleLeftRight,
+  HiSparkles,
+} from 'react-icons/hi2';
 import { Input } from '@/components/ui/input';
 import type { TeacherProfile } from '@/types/teacher';
 import type { Subject, Department } from '@/types/curriculum';
-import { DEPARTMENT_CONFIG, CATEGORY_CONFIG } from '@/types/curriculum';
+import { DEPARTMENT_CONFIG, SUBJECT_GROUP_CONFIG, type SubjectGroupId } from '@/types/curriculum';
 import { useSchoolStructure } from '@/hooks/useSchoolStructure';
 import { useSubjectGroup } from '@/hooks/useSubjectGroup';
+import { SUBJECT_THEMES } from '@/features/curriculum/constants/subjectColors';
 
 interface TeacherSubjectPanelProps {
   // Main props for the teacher subject panel
@@ -23,6 +38,46 @@ const glassCard: React.CSSProperties = {
   WebkitBackdropFilter: 'blur(24px) saturate(150%)',
   border: '1px solid rgba(255,255,255,0.90)',
   boxShadow: '0 8px 32px rgba(0,0,0,0.06)',
+};
+
+const CATEGORY_STYLE = {
+  basic: { bg: 'bg-sky-50', text: 'text-sky-600', dot: 'bg-sky-400', label: 'พื้นฐาน' },
+  additional: { bg: 'bg-amber-50', text: 'text-amber-600', dot: 'bg-amber-400', label: 'เพิ่มเติม' },
+  activity: { bg: 'bg-emerald-50', text: 'text-emerald-600', dot: 'bg-emerald-400', label: 'กิจกรรม' },
+} as const;
+
+const THEME_COLORS: Record<string, [string, string]> = {
+  blue: ['#3b82f6', '#eff6ff'],
+  emerald: ['#10b981', '#ecfdf5'],
+  sky: ['#0ea5e9', '#f0f9ff'],
+  rose: ['#f43f5e', '#fff1f2'],
+  orange: ['#f97316', '#fff7ed'],
+  purple: ['#a855f7', '#faf5ff'],
+  red: ['#ef4444', '#fef2f2'],
+  stone: ['#78716c', '#fafaf9'],
+  gray: ['#6b7280', '#f9fafb'],
+};
+
+const getSubjectVisual = (subject: Subject) => {
+  const groupCfg = SUBJECT_GROUP_CONFIG[(subject.subjectGroup || 'other') as SubjectGroupId] || SUBJECT_GROUP_CONFIG.other;
+  const themeKey = (Object.entries(SUBJECT_THEMES).find(([key]) => {
+    const name = groupCfg.name?.toLowerCase() || '';
+    const nameEn = groupCfg.nameEn?.toLowerCase() || '';
+    return name.includes(key) || nameEn.includes(key);
+  })?.[1] || 'gray') as string;
+  const colors = THEME_COLORS[themeKey] || THEME_COLORS.gray;
+
+  const group = (subject.subjectGroup || '').toLowerCase();
+  if (group.includes('thai')) return { Icon: HiLanguage, colors };
+  if (group.includes('math')) return { Icon: HiCalculator, colors };
+  if (group.includes('science')) return { Icon: HiBeaker, colors };
+  if (group.includes('social')) return { Icon: HiGlobeAmericas, colors };
+  if (group.includes('health') || group.includes('pe')) return { Icon: HiHeart, colors };
+  if (group.includes('art')) return { Icon: HiPaintBrush, colors };
+  if (group.includes('career')) return { Icon: HiBriefcase, colors };
+  if (group.includes('foreign') || group.includes('lang')) return { Icon: HiChatBubbleLeftRight, colors };
+  if (group.includes('activity') || group.includes('other')) return { Icon: HiSparkles, colors };
+  return { Icon: HiBookOpen, colors };
 };
 
 export default function TeacherSubjectPanel({
@@ -76,7 +131,7 @@ export default function TeacherSubjectPanel({
       <div className="p-5 rounded-[2.2rem] shadow-sm shrink-0 space-y-5" style={glassCard}>
         {/* Row 2: Search Input */}
         <div className="relative group">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+          <HiMagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
           <Input
             value={searchTerm}
             onChange={e => updateFilter(() => setSearchTerm(e.target.value))}
@@ -104,7 +159,7 @@ export default function TeacherSubjectPanel({
               onClick={() => updateFilter(() => { setSearchDept('all'); setSearchGrade('all'); })}
               className="h-9 w-full rounded-full text-[11px] font-black bg-[#0f172a] text-white shadow-md flex items-center justify-center gap-2 group transition-all"
             >
-              <X size={12} className="group-hover:rotate-90 transition-transform" />
+              <HiXMark size={12} className="group-hover:rotate-90 transition-transform" />
               {departments.find(d => d.id === searchDept)?.label}
             </button>
           )}
@@ -120,7 +175,7 @@ export default function TeacherSubjectPanel({
                 animate={{ opacity: 0.6, scale: 1 }}
                 className="flex flex-col items-center"
               >
-                <BookOpen size={64} className="text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] mb-4" />
+                <HiBookOpen size={64} className="text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] mb-4" />
                 <p className="text-xl font-black text-white drop-shadow-md font-sukhumvit tracking-wide">ค้นหารายวิชา</p>
                 <p className="text-sm font-medium text-white/80 drop-shadow-sm font-sarabun mt-1">เลือกแผนกเพื่อเริ่มต้นจัดการข้อมูล</p>
               </motion.div>
@@ -148,54 +203,55 @@ export default function TeacherSubjectPanel({
                     setCurrentSearchPage(p => p - 1);
                   }
                 }}
-                className="grid grid-cols-2 gap-2 px-1 py-1 cursor-grab active:cursor-grabbing content-start"
+                className="grid grid-cols-1 gap-1.5 px-1 py-1 cursor-grab active:cursor-grabbing content-start"
               >
                 {paginatedSubjects.map(subject => {
                   const isAssigned = teacher.teachingSubjectIds.includes(subject.id);
-                  const subjDeptCfg = DEPARTMENT_CONFIG[subject.department];
-                  const catCfg = CATEGORY_CONFIG[subject.category];
+                  const catCfg = CATEGORY_STYLE[subject.category as keyof typeof CATEGORY_STYLE] || CATEGORY_STYLE.basic;
+                  const deptCfg = DEPARTMENT_CONFIG[subject.department];
+                  const { Icon: SubjectIcon, colors } = getSubjectVisual(subject);
+                  const [mainColor, softColor] = colors;
 
                   return (
                     <div key={subject.id}>
                       <button
                         onClick={() => onToggleSubject(subject.id)}
-                        className={`w-full min-h-[95px] flex flex-col justify-between p-2.5 rounded-xl transition-all text-left border relative overflow-hidden group pointer-events-auto ${isAssigned
-                          ? 'bg-emerald-50/70 border-emerald-100 shadow-sm'
-                          : 'bg-white/70 border-white/80 hover:border-blue-200 hover:shadow-lg'
-                          }`}
-                        style={{ backdropFilter: 'blur(10px)' }}
+                        className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all text-left border relative overflow-hidden group pointer-events-auto ${
+                          isAssigned
+                            ? 'bg-slate-50/60 border-black/[0.06]'
+                            : 'bg-transparent border-black/[0.03] hover:bg-slate-50/50 hover:border-black/[0.05]'
+                        }`}
                       >
-                        {/* Top: Code Badge */}
-                        <div className="flex justify-between items-start">
-                          <span className="font-mono text-[9px] font-black px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 shadow-inner">
-                            {subject.code}
-                          </span>
+                        <div
+                          className="w-10 h-10 rounded-xl shrink-0 flex items-center justify-center shadow-sm transition-all"
+                          style={{ background: `linear-gradient(135deg, ${softColor} 0%, ${mainColor} 100%)` }}
+                        >
+                          <SubjectIcon size={17} style={{ color: 'white' }} />
                         </div>
 
-                        {/* Middle: Subject Name */}
-                        <div className="flex-1 flex flex-col justify-center my-1.5">
-                          <span className="text-[12px] font-black text-slate-800 leading-[1.3] line-clamp-2 font-sukhumvit">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-[13px] font-black text-slate-800 tracking-tight leading-tight truncate">
                             {subject.name}
-                          </span>
-                          <span className="text-[8px] font-bold text-slate-400 mt-1 uppercase font-sarabun tracking-tighter">
-                            {subjDeptCfg.label} • {catCfg.label}
+                          </h4>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">
+                            {subject.code} · {deptCfg.label}
+                          </p>
+                        </div>
+
+                        <div className="w-20 shrink-0 flex justify-center">
+                          <span className={`inline-flex items-center gap-1 text-[9px] font-black px-2 py-1 rounded-full ${catCfg.bg} ${catCfg.text}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${catCfg.dot}`} />
+                            {catCfg.label}
                           </span>
                         </div>
 
-                        {/* Bottom: Action Icon */}
-                        <div className="flex justify-end">
-                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${isAssigned
-                            ? 'bg-emerald-500 text-white shadow-md rotate-45'
-                            : 'bg-white text-blue-600 border border-slate-100 shadow-sm group-hover:bg-blue-600 group-hover:text-white'
-                            }`}>
-                            <Plus size={16} strokeWidth={3} />
-                          </div>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all ${
+                          isAssigned
+                            ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm'
+                            : 'bg-white border-slate-200 text-slate-400 group-hover:border-blue-200 group-hover:text-blue-600'
+                        }`}>
+                          <HiPlus size={14} className={isAssigned ? 'rotate-45' : ''} />
                         </div>
-
-                        {/* Subtle Glow for Assigned */}
-                        {isAssigned && (
-                          <div className="absolute -bottom-4 -right-4 w-12 h-12 bg-emerald-500/10 rounded-full blur-xl" />
-                        )}
                       </button>
                     </div>
                   );

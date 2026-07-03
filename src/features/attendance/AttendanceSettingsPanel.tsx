@@ -357,7 +357,7 @@ export default function AttendanceSettingsPanel() {
                 <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
                   <Clock size={12} /> เวลาเริ่มงาน (สายหลังเวลานี้)
                 </p>
-                
+
                 <div className="flex items-center justify-center gap-4 py-2">
                   <div className="flex flex-col items-center gap-2">
                     <div className="flex items-center gap-2">
@@ -388,7 +388,7 @@ export default function AttendanceSettingsPanel() {
                 <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
                   <Clock size={12} /> เวลาออกงาน (เช็คเอาต์ปกติ)
                 </p>
-                
+
                 <div className="flex items-center justify-center gap-4 py-2">
                   <div className="flex flex-col items-center gap-2">
                     <div className="flex items-center gap-2">
@@ -408,6 +408,73 @@ export default function AttendanceSettingsPanel() {
                         {pad(draft.shiftEndMinute)}
                       </div>
                       <button onClick={() => set('shiftEndMinute', Math.min(55, draft.shiftEndMinute + 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
+                    </div>
+                    <span className="text-[9px] font-bold text-slate-300 uppercase">นาที</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Duty Time (ครูเวร) */}
+          <div className="space-y-6 pt-6 border-t border-slate-100">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+              {/* Duty Start Time */}
+              <div className="space-y-4">
+                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                  <Clock size={12} /> เวลาเริ่มเวรครู
+                </p>
+
+                <div className="flex items-center justify-center gap-4 py-2">
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => set('dutyStartHour', Math.max(0, draft.dutyStartHour - 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
+                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
+                        {pad(draft.dutyStartHour)}
+                      </div>
+                      <button onClick={() => set('dutyStartHour', Math.min(23, draft.dutyStartHour + 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
+                    </div>
+                    <span className="text-[9px] font-bold text-slate-300 uppercase">ชั่วโมง</span>
+                  </div>
+                  <span className="text-2xl font-black text-slate-200 mt-[-18px]">:</span>
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => set('dutyStartMinute', Math.max(0, draft.dutyStartMinute - 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
+                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
+                        {pad(draft.dutyStartMinute)}
+                      </div>
+                      <button onClick={() => set('dutyStartMinute', Math.min(55, draft.dutyStartMinute + 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
+                    </div>
+                    <span className="text-[9px] font-bold text-slate-300 uppercase">นาที</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Duty End Time */}
+              <div className="space-y-4">
+                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                  <Clock size={12} /> เวลาสิ้นสุดเวรครู
+                </p>
+
+                <div className="flex items-center justify-center gap-4 py-2">
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => set('dutyEndHour', Math.max(0, draft.dutyEndHour - 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
+                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
+                        {pad(draft.dutyEndHour)}
+                      </div>
+                      <button onClick={() => set('dutyEndHour', Math.min(23, draft.dutyEndHour + 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
+                    </div>
+                    <span className="text-[9px] font-bold text-slate-300 uppercase">ชั่วโมง</span>
+                  </div>
+                  <span className="text-2xl font-black text-slate-200 mt-[-18px]">:</span>
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => set('dutyEndMinute', Math.max(0, draft.dutyEndMinute - 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
+                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
+                        {pad(draft.dutyEndMinute)}
+                      </div>
+                      <button onClick={() => set('dutyEndMinute', Math.min(55, draft.dutyEndMinute + 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
                     </div>
                     <span className="text-[9px] font-bold text-slate-300 uppercase">นาที</span>
                   </div>

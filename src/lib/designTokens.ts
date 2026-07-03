@@ -48,6 +48,7 @@ export const colors = {
     black: '#000000',
     softLavender: '#E3E7FC',
     white: '#FFFFFF',
+    shell: '#f5f5f5',
   },
   gradient: {
     futurewave: 'linear-gradient(135deg, #0056FF 0%, #2277FF 100%)',

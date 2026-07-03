@@ -1,0 +1,136 @@
+/* Inline fraction display — editor + exam/question preview */
+.rte-fraction-wrap {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 0 3px;
+  text-align: center;
+  line-height: 1;
+  font-family: inherit;
+}
+
+.rte-fraction-stack {
+  display: inline-block;
+  text-align: center;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.rte-fraction-slot {
+  display: block;
+  font-size: 0.88em;
+  line-height: 1.15;
+  padding: 0 4px;
+  text-align: center;
+  outline: none;
+  min-width: 1em;
+}
+
+.rte-fraction-num:not(:empty) {
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 1px;
+}
+
+.rte-fraction-mixed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rte-fraction-whole:not(:empty) {
+  font-size: 0.95em;
+  line-height: 1;
+}
+
+.rte-fraction-nested {
+  display: inline-block;
+}
+
+.rte-fraction-nested-bar {
+  display: block;
+  border-top: 1.5px solid currentColor;
+  margin: 3px -10px;
+  width: calc(100% + 20px);
+}
+
+.rte-fraction-sm .rte-fraction-slot {
+  font-size: 0.82em;
+  padding-left: 3px;
+  padding-right: 3px;
+}
+
+/* Word-like empty boxes — editor only */
+[contenteditable] .rte-fraction-slot:empty {
+  border: 1px solid #94a3b8;
+  border-radius: 2px;
+  background: #f8fafc;
+  min-height: 1.25em;
+  min-width: 1.4em;
+}
+
+[contenteditable] .rte-fraction-slot:empty::before {
+  content: '\00a0';
+}
+
+[contenteditable] .rte-fraction-whole:empty {
+  min-width: 1em;
+}
+
+/* เศษส่วนในตัวยก — เช่น 27^(2/3) แบบ Word/LaTeX */
+sup.rte-sup-fraction .rte-fraction-wrap,
+sup:has(.rte-fraction-wrap) .rte-fraction-wrap,
+.rte-fraction-wrap.rte-fraction-sup {
+  display: inline-block;
+  vertical-align: baseline;
+  margin: 0;
+  line-height: 1;
+  font-size: 0.46em;
+  font-variant-numeric: tabular-nums;
+}
+
+sup.rte-sup-fraction .rte-fraction-stack,
+sup:has(.rte-fraction-wrap) .rte-fraction-stack,
+.rte-fraction-sup .rte-fraction-stack {
+  display: inline-block;
+  vertical-align: baseline;
+  line-height: 1;
+}
+
+sup.rte-sup-fraction .rte-fraction-slot,
+sup:has(.rte-fraction-wrap) .rte-fraction-slot,
+.rte-fraction-sup .rte-fraction-slot {
+  display: block;
+  padding: 0 3px;
+  line-height: 0.95;
+  font-size: 1em;
+  min-width: 0;
+}
+
+sup.rte-sup-fraction .rte-fraction-num:not(:empty),
+sup:has(.rte-fraction-wrap) .rte-fraction-num:not(:empty),
+.rte-fraction-sup .rte-fraction-num:not(:empty) {
+  border-bottom: 1px solid currentColor;
+  padding: 0 4px 1px;
+  margin-bottom: 0;
+}
+
+sup.rte-sup-fraction .rte-fraction-den:not(:empty),
+sup:has(.rte-fraction-wrap) .rte-fraction-den:not(:empty),
+.rte-fraction-sup .rte-fraction-den:not(:empty) {
+  padding-top: 0;
+}
+
+sup.rte-sup-fraction [contenteditable] .rte-fraction-slot:empty,
+sup:has(.rte-fraction-wrap) [contenteditable] .rte-fraction-slot:empty,
+[contenteditable] .rte-fraction-sup .rte-fraction-slot:empty {
+  min-height: 0.55em;
+  min-width: 0.65em;
+  padding: 0 2px;
+}
+
+sup.rte-sup-fraction .rte-fraction-nested-bar,
+sup:has(.rte-fraction-wrap) .rte-fraction-nested-bar,
+.rte-fraction-sup .rte-fraction-nested-bar {
+  margin: 1px -4px;
+  width: calc(100% + 8px);
+  border-top-width: 1px;
+}

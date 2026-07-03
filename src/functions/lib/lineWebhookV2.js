@@ -3,16 +3,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.lineWebhookV2 = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
-const firestore_1 = require("firebase-admin/firestore");
 const crypto = require("crypto");
+const getAdminFirestore_1 = require("./getAdminFirestore");
 const REGION = "asia-southeast1";
 const LINK_KEYWORD = "PMV";
 const LEGACY_LINK_KEYWORD = "PMV-LINK";
 const LINK_SESSION_TTL_MINUTES = 10;
-const DATABASE_ID = (process.env.FIRESTORE_DATABASE_ID ?? "").trim();
-const db = DATABASE_ID && DATABASE_ID !== "(default)"
-    ? (0, firestore_1.getFirestore)(DATABASE_ID)
-    : (0, firestore_1.getFirestore)();
+const db = (0, getAdminFirestore_1.getAdminFirestore)();
 function getLineSecret() {
     return process.env.LINE_CHANNEL_SECRET || "";
 }
@@ -52,7 +49,13 @@ async function createLinkSession(lineUid) {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         expiresAt: admin.firestore.Timestamp.fromMillis(expiresMs),
         source: "line_webhook_v2",
+        databaseId: (0, getAdminFirestore_1.getFirestoreDatabaseId)(),
     }, { merge: true });
+    console.log("[lineWebhook] created link session", {
+        databaseId: (0, getAdminFirestore_1.getFirestoreDatabaseId)(),
+        tokenPrefix: token.slice(0, 8),
+        lineUidPrefix: lineUid.slice(0, 8),
+    });
     return token;
 }
 async function replyMessage(replyToken, text, token) {

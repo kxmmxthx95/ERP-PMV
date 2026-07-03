@@ -17,6 +17,7 @@ interface CalendarPanelProps {
   onSelectDate: (day: Date) => void;
   onAddEventForDate?: (day: Date) => void;
   onMoveEvent?: (eventId: string, newDate: Date) => void;
+  onGoToToday?: () => void;
 }
 
 function buildMonthGrid(currentMonth: Date): Date[] {
@@ -43,6 +44,7 @@ export default function CalendarPanel({
   onSelectDate,
   onAddEventForDate,
   onMoveEvent,
+  onGoToToday,
 }: CalendarPanelProps) {
   const days = buildMonthGrid(currentMonth);
 
@@ -56,6 +58,7 @@ export default function CalendarPanel({
         currentMonth={currentMonth}
         onPrev={() => onChangeMonth(subMonths(currentMonth, 1))}
         onNext={() => onChangeMonth(addMonths(currentMonth, 1))}
+        onGoToToday={onGoToToday}
       />
 
       <CalendarDayGrid

@@ -1,405 +1,447 @@
 // src/features/duty/DutySchedulePage.tsx
-import { useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import { HiMagnifyingGlass, HiXMark } from 'react-icons/hi2';
+import { useMyPermissions } from '@/hooks/useMyPermissions';
+import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
+import { db } from '@/lib/firebase';
 import {
-  ShieldCheck, Plus, Pencil, Trash2, ChevronLeft, ChevronRight,
-  Clock, MapPin, User, Calendar,
-} from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+  addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query,
+} from 'firebase/firestore';
+import { toast } from 'sonner';
+import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface DutyAssignment {
   id: string;
-  date: string;          // "YYYY-MM-DD"
+  date: string;
   teacherId: string;
   teacherName: string;
   location: string;
-  startTime: string;     // "HH:MM"
+  startTime: string;
   endTime: string;
   note?: string;
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-const DEFAULT_COLOR = { bg: '#f0fdfa', text: '#0d9488', border: '#5eead4' };
+interface TeacherRecord {
+  id: string;
+  name: string;
+  department: string;
+  status: string;
+  photoURL?: string;
+}
 
-// ── Mock data — will be replaced with Firestore ───────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 const today = new Date();
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
-function addDays(d: Date, n: number) {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
-}
+function isoDate(d: Date) { return d.toISOString().slice(0, 10); }
+function addDays(d: Date, n: number) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 
-const MOCK_DUTIES: DutyAssignment[] = [
-  { id: '1', date: isoDate(today),          teacherId: 't01', teacherName: 'ครูสมชาย ใจดี',   location: 'ประตูหน้า',      startTime: '07:00', endTime: '08:00' },
-  { id: '2', date: isoDate(today),          teacherId: 't02', teacherName: 'ครูสมหญิง รักดี', location: 'ประตูหลัง',      startTime: '07:00', endTime: '08:00' },
-  { id: '3', date: isoDate(today),          teacherId: 't03', teacherName: 'ครูประเสริฐ ดีมาก',location: 'โรงอาหาร',       startTime: '11:30', endTime: '12:30' },
-  { id: '4', date: isoDate(addDays(today,1)),teacherId: 't04', teacherName: 'ครูวิมล สุขใจ',  location: 'ประตูหน้า',      startTime: '07:00', endTime: '08:00' },
-  { id: '5', date: isoDate(addDays(today,1)),teacherId: 't01', teacherName: 'ครูสมชาย ใจดี',  location: 'อาคารหลัก',      startTime: '15:30', endTime: '16:30' },
-  { id: '6', date: isoDate(addDays(today,2)),teacherId: 't02', teacherName: 'ครูสมหญิง รักดี',location: 'ประตูหน้า',       startTime: '07:00', endTime: '08:00' },
+const WEEKDAY_LABELS = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+const WEEKDAY_COLORS = [
+  { bg: 'bg-red-400', light: 'bg-red-100/40', badge: 'bg-red-100 text-red-700' },                 // อา
+  { bg: 'bg-orange-400', light: 'bg-orange-100/40', badge: 'bg-orange-100 text-orange-700' },     // จ
+  { bg: 'bg-yellow-400', light: 'bg-yellow-100/40', badge: 'bg-yellow-100 text-yellow-700' },     // อ
+  { bg: 'bg-green-400', light: 'bg-green-100/40', badge: 'bg-green-100 text-green-700' },         // พ
+  { bg: 'bg-blue-400', light: 'bg-blue-100/40', badge: 'bg-blue-100 text-blue-700' },             // พฤ
+  { bg: 'bg-purple-400', light: 'bg-purple-100/40', badge: 'bg-purple-100 text-purple-700' },     // ศ
+  { bg: 'bg-pink-400', light: 'bg-pink-100/40', badge: 'bg-pink-100 text-pink-700' },             // ส
 ];
 
-// ── Glass style ───────────────────────────────────────────────────────────────
-const GLASS: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.72)',
-  backdropFilter: 'blur(24px) saturate(150%)',
-  WebkitBackdropFilter: 'blur(24px) saturate(150%)',
-  border: '1px solid rgba(255,255,255,0.90)',
-  boxShadow: '0 8px 32px rgba(0,0,0,0.06)',
-};
 
-// ── Modal ─────────────────────────────────────────────────────────────────────
-interface DutyFormModalProps {
-  initial?: Partial<DutyAssignment>;
-  onSave: (d: Omit<DutyAssignment, 'id'>) => void;
-  onClose: () => void;
+// ── Hooks ─────────────────────────────────────────────────────────────────────
+function usePrefersFineHover() {
+  const [prefersHover, setPrefersHover] = useState(() =>
+    typeof window !== 'undefined'
+      ? window.matchMedia('(hover: hover) and (pointer: fine)').matches
+      : false,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(hover: hover) and (pointer: fine)');
+    const onChange = () => setPrefersHover(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  return prefersHover;
 }
 
-function DutyFormModal({ initial, onSave, onClose }: DutyFormModalProps) {
-  const [form, setForm] = useState({
-    date:        initial?.date        ?? isoDate(today),
-    teacherName: initial?.teacherName ?? '',
-    location:    initial?.location    ?? 'ประตูหน้า',
-    startTime:   initial?.startTime   ?? '07:00',
-    endTime:     initial?.endTime     ?? '08:00',
-    note:        initial?.note        ?? '',
+// ── Teacher Card (UsersPage style) ────────────────────────────────────────────
+interface TeacherCardProps {
+  teacher: TeacherRecord;
+  index: number;
+  isActive: boolean;
+  weekDays: Date[];
+  duties: DutyAssignment[];
+  canEdit: boolean;
+  enableHoverActivate: boolean;
+  onActivate: () => void;
+  onDeactivate: () => void;
+  onAssignDay: (date: string) => Promise<void>;
+  onUnassignDay: (id: string) => Promise<void>;
+}
+
+function TeacherCard({
+  teacher, index, isActive, weekDays, duties, canEdit, enableHoverActivate,
+  onActivate, onDeactivate, onAssignDay, onUnassignDay,
+}: TeacherCardProps) {
+  const deptConf = DEPARTMENT_CONFIG[teacher.department as keyof typeof DEPARTMENT_CONFIG];
+  const deptColor = deptConf?.color ?? '#64748b';
+
+  const weekDuties = weekDays.map(d => {
+    const key = isoDate(d);
+    return duties.find(du => du.date === key && (du.teacherId === teacher.id || du.teacherName === teacher.name)) ?? null;
   });
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.teacherName.trim()) return;
-    onSave({ ...form, teacherId: '' });
+  const nameForInitial = teacher.name
+    .replace(/^(นาย|นาง(?:สาว)?|เด็กชาย|เด็กหญิง|ด\.ช\.|ด\.ญ\.|ครู|อาจารย์)\s*/u, '')
+    .trim();
+  const initial = nameForInitial.charAt(0) || '?';
+
+  async function handleDayClick(d: Date, i: number) {
+    const existing = weekDuties[i];
+    if (existing) {
+      await onUnassignDay(existing.id);
+    } else {
+      await onAssignDay(isoDate(d));
+    }
   }
 
   return (
     <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.25)', backdropFilter: 'blur(4px)' }}
-      onClick={onClose}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, delay: index * 0.01 }}
+      className="flex flex-col gap-1.5 group cursor-pointer select-none"
+      onMouseEnter={() => enableHoverActivate && canEdit && onActivate()}
+      onMouseLeave={() => enableHoverActivate && canEdit && onDeactivate()}
+      onClick={() => {
+        if (!canEdit) return;
+        if (enableHoverActivate) {
+          if (isActive) onDeactivate();
+          else onActivate();
+          return;
+        }
+        if (!isActive) onActivate();
+      }}
     >
-      <motion.div
-        initial={{ scale: 0.95, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 16 }}
-        onClick={e => e.stopPropagation()}
-        className="w-full max-w-md rounded-2xl p-6"
-        style={GLASS}
+      {/* Card image area */}
+      <div
+        className="relative aspect-square rounded-2xl overflow-hidden bg-slate-100 border border-slate-200/60 transition-all duration-300 hover:shadow-lg"
+        role={canEdit ? 'button' : undefined}
+        aria-label={canEdit ? `เลือกวันเวร ${teacher.name}` : undefined}
       >
-        <h3 className="text-base font-black text-slate-800 mb-4">
-          {initial?.id ? 'แก้ไขครูเวร' : 'เพิ่มครูเวร'}
-        </h3>
-        <form onSubmit={handleSubmit} className="space-y-3">
-          {/* Date */}
-          <div>
-            <label className="text-xs font-bold text-slate-500 mb-1 block">วันที่</label>
-            <input
-              type="date"
-              value={form.date}
-              onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-white/70 outline-none focus:ring-2 focus:ring-teal-400"
+        {teacher.photoURL ? (
+          <>
+            <img
+              src={teacher.photoURL}
+              alt={teacher.name}
+              className="absolute inset-0 w-full h-full object-cover"
             />
-          </div>
-          {/* Teacher name */}
-          <div>
-            <label className="text-xs font-bold text-slate-500 mb-1 block">ชื่อครู</label>
-            <input
-              type="text"
-              placeholder="ชื่อ-นามสกุลครู"
-              value={form.teacherName}
-              onChange={e => setForm(f => ({ ...f, teacherName: e.target.value }))}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-white/70 outline-none focus:ring-2 focus:ring-teal-400"
-              required
-            />
-          </div>
-          
-          {/* Location + times */}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-3 sm:col-span-1">
-              <label className="text-xs font-bold text-slate-500 mb-1 block">สถานที่</label>
-              <input
-                type="text"
-                value={form.location}
-                onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-white/70 outline-none focus:ring-2 focus:ring-teal-400"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-slate-500 mb-1 block">เริ่ม</label>
-              <input
-                type="time"
-                value={form.startTime}
-                onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-white/70 outline-none focus:ring-2 focus:ring-teal-400"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-slate-500 mb-1 block">สิ้นสุด</label>
-              <input
-                type="time"
-                value={form.endTime}
-                onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-white/70 outline-none focus:ring-2 focus:ring-teal-400"
-              />
+            <div className="absolute inset-0 bg-gradient-to-t from-slate-900/20 via-transparent to-transparent z-0" />
+          </>
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-50">
+            <div
+              className="w-16 h-16 rounded-full flex items-center justify-center text-white font-black shadow-inner"
+              style={{ fontSize: '24px', background: deptColor }}
+            >
+              {initial}
             </div>
           </div>
-          {/* Note */}
-          <div>
-            <label className="text-xs font-bold text-slate-500 mb-1 block">หมายเหตุ (ถ้ามี)</label>
-            <input
-              type="text"
-              value={form.note}
-              onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-white/70 outline-none focus:ring-2 focus:ring-teal-400"
-            />
-          </div>
-          {/* Buttons */}
-          <div className="flex gap-2 pt-1">
-            <button type="button" onClick={onClose}
-              className="flex-1 py-2 rounded-xl text-sm font-bold text-slate-600 border border-slate-200 bg-white/60 hover:bg-slate-50 transition-colors">
-              ยกเลิก
-            </button>
-            <button type="submit"
-              className="flex-1 py-2 rounded-xl text-sm font-bold text-white transition-colors"
-              style={{ background: 'linear-gradient(135deg,#0d9488,#0891b2)' }}>
-              บันทึก
-            </button>
-          </div>
-        </form>
-      </motion.div>
-    </motion.div>
-  );
-}
+        )}
 
-// ── Duty card ─────────────────────────────────────────────────────────────────
-interface DutyCardProps {
-  duty: DutyAssignment;
-  canEdit: boolean;
-  onEdit: () => void;
-  onDelete: () => void;
-}
-function DutyCard({ duty, canEdit, onEdit, onDelete }: DutyCardProps) {
-  return (
-    <motion.div
-      layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-      className="flex items-start gap-3 p-3 rounded-xl border"
-      style={{ background: DEFAULT_COLOR.bg, borderColor: DEFAULT_COLOR.border }}
-    >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap mb-1">
-          <span className="text-xs font-bold text-slate-600 flex items-center gap-1">
-            <Clock size={11} /> {duty.startTime}–{duty.endTime}
-          </span>
-        </div>
-        <p className="mt-1 text-sm font-black text-slate-800 flex items-center gap-1.5">
-          <User size={13} className="flex-shrink-0 text-teal-600" />
-          {duty.teacherName}
-        </p>
-        <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-          <MapPin size={11} /> {duty.location}
-        </p>
-        {duty.note && <p className="text-xs text-slate-400 mt-0.5 italic">{duty.note}</p>}
+        {/* Day-selector overlay */}
+        <AnimatePresence>
+          {isActive && canEdit && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px] flex flex-col items-center justify-center z-20 p-4"
+              onClick={e => {
+                e.stopPropagation();
+                onDeactivate();
+              }}
+            >
+              {/* Day buttons grid */}
+              <div className="grid grid-cols-3 gap-4">
+                  {weekDays.map((d, i) => {
+                    const assigned = !!weekDuties[i];
+                    const isToday = isoDate(d) === isoDate(today);
+                    const color = WEEKDAY_COLORS[i];
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={e => { e.stopPropagation(); handleDayClick(d, i); }}
+                        className={`flex items-center justify-center rounded-md w-10 h-10 transition-all font-black text-[11px] text-white ${
+                          assigned
+                            ? `${color.bg} shadow-lg`
+                            : isToday
+                            ? `${color.light} border border-white/50`
+                            : `${color.light} hover:opacity-80`
+                        }`}
+                      >
+                        {WEEKDAY_LABELS[i]}
+                      </button>
+                    );
+                  })}
+                </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-      {canEdit && (
-        <div className="flex gap-1 flex-shrink-0">
-          <button onClick={onEdit}
-            className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/60 transition-colors text-slate-500">
-            <Pencil size={13} />
-          </button>
-          <button onClick={onDelete}
-            className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/60 transition-colors text-rose-400">
-            <Trash2 size={13} />
-          </button>
+
+      {/* Name + duty days below */}
+      <div className="px-0.5 mt-0.5 space-y-0">
+        <p className="text-[10px] sm:text-[14px] font-bold text-slate-800 leading-tight truncate">
+          {teacher.name}
+        </p>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-0.5">
+          {weekDuties.some(d => d) ? (
+            <div className="flex flex-wrap gap-1">
+              {weekDuties.map((duty, i) => duty && (
+                <span
+                  key={i}
+                  className={`text-[8px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded tracking-wider ${WEEKDAY_COLORS[i].badge}`}
+                >
+                  {WEEKDAY_LABELS[i]}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="text-[8px] sm:text-[10px] text-slate-400 italic">
+              ยังไม่มีเวร
+            </span>
+          )}
         </div>
-      )}
+      </div>
     </motion.div>
   );
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function DutySchedulePage() {
-  const { role } = useAuth();
-  const canEdit = role === 'admin' || role === 'sysadmin';
+  const { canEdit: checkCanEdit } = useMyPermissions();
+  const { teachers } = useTeacherManager();
+  const canEdit = checkCanEdit('dutySchedule');
+  const enableHoverActivate = usePrefersFineHover();
 
-  const [duties, setDuties] = useState<DutyAssignment[]>(MOCK_DUTIES);
-  const [weekOffset, setWeekOffset] = useState(0);
-  const [modalState, setModalState] = useState<
-    | { mode: 'add'; prefillDate?: string }
-    | { mode: 'edit'; duty: DutyAssignment }
-    | null
-  >(null);
+  const [duties, setDuties] = useState<DutyAssignment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [teacherQuery, setTeacherQuery] = useState('');
+  const [filterDept, setFilterDept] = useState<string>('all');
+  const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [isSearchMode, setIsSearchMode] = useState(false);
 
-  // ── Week range ──
-  const weekStart = (() => {
+  useEffect(() => {
+    const q = query(collection(db, 'duty_assignments'), orderBy('date', 'asc'));
+    const unsub = onSnapshot(q, snap => {
+      setDuties(snap.docs.map(d => {
+        const data = d.data() as Partial<DutyAssignment>;
+        return {
+          id: d.id,
+          date: data.date ?? '',
+          teacherId: data.teacherId ?? '',
+          teacherName: data.teacherName ?? '',
+          location: data.location ?? '',
+          startTime: data.startTime ?? '',
+          endTime: data.endTime ?? '',
+          note: data.note ?? '',
+        };
+      }));
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // ── Week range (current week: Sun-Sat) ──
+  const weekStart = useMemo(() => {
     const d = new Date(today);
-    const day = d.getDay(); // 0=Sun
-    const diff = day === 0 ? -6 : 1 - day; // Monday
-    d.setDate(d.getDate() + diff + weekOffset * 7);
+    const day = d.getDay();
+    const diff = -day; // Sunday = 0, so go back to start of week
+    d.setDate(d.getDate() + diff);
     return d;
-  })();
+  }, []);
 
-  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const weekDays = useMemo(() =>
+    Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
+    [weekStart],
+  );
 
-  const thaiDay = (d: Date) =>
-    new Intl.DateTimeFormat('th-TH', { weekday: 'short', day: 'numeric', month: 'short' }).format(d);
+  // ── Teacher list ──
+  const deptOptions = useMemo(() => {
+    return (Object.keys(DEPARTMENT_CONFIG) as Array<keyof typeof DEPARTMENT_CONFIG>).map(d => ({
+      id: d,
+      label: DEPARTMENT_CONFIG[d].label,
+    }));
+  }, []);
 
-  // ── Grouped by date ──
-  const grouped = weekDays.reduce<Record<string, DutyAssignment[]>>((acc, d) => {
-    const key = isoDate(d);
-    acc[key] = duties.filter(du => du.date === key);
-    return acc;
-  }, {});
+  const filteredTeachers = useMemo(() =>
+    teachers
+      .filter(t => t.status === 'active')
+      .filter(t => filterDept === 'all' || t.department === filterDept)
+      .filter(t => !teacherQuery.trim() || t.name.toLowerCase().includes(teacherQuery.toLowerCase()))
+      .sort((a, b) => {
+        const dA = DEPARTMENT_CONFIG[a.department as keyof typeof DEPARTMENT_CONFIG]?.label ?? a.department;
+        const dB = DEPARTMENT_CONFIG[b.department as keyof typeof DEPARTMENT_CONFIG]?.label ?? b.department;
+        if (dA !== dB) return dA.localeCompare(dB, 'th');
+        return a.name.localeCompare(b.name, 'th');
+      }),
+    [teachers, teacherQuery, filterDept],
+  );
 
   // ── Handlers ──
-  function handleSave(data: Omit<DutyAssignment, 'id'>) {
-    if (modalState?.mode === 'edit') {
-      setDuties(ds => ds.map(d => d.id === modalState.duty.id ? { ...d, ...data } : d));
-    } else {
-      setDuties(ds => [...ds, { ...data, id: String(Date.now()) }]);
-    }
-    setModalState(null);
+  async function handleAssignDay(teacher: TeacherRecord, date: string) {
+    const hasDup = duties.some(d => d.date === date && (d.teacherId === teacher.id || d.teacherName === teacher.name));
+    if (hasDup) { toast.error('ครูคนนี้มีเวรในวันนี้แล้ว'); return; }
+    await addDoc(collection(db, 'duty_assignments'), {
+      date,
+      teacherId: teacher.id,
+      teacherName: teacher.name,
+      location: 'จุดเวรหลัก',
+      startTime: '07:00',
+      endTime: '08:00',
+      note: '',
+    });
+    toast.success(`เพิ่มเวรให้ ${teacher.name} แล้ว`);
   }
 
-  function handleDelete(id: string) {
-    setDuties(ds => ds.filter(d => d.id !== id));
+  async function handleUnassignDay(dutyId: string) {
+    await deleteDoc(doc(db, 'duty_assignments', dutyId));
+    toast.success('ลบเวรแล้ว');
   }
-
-  const weekLabel = (() => {
-    const s = new Intl.DateTimeFormat('th-TH', { day: 'numeric', month: 'short' }).format(weekStart);
-    const e = new Intl.DateTimeFormat('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }).format(addDays(weekStart, 6));
-    return `${s} – ${e}`;
-  })();
-
-  const totalThisWeek = weekDays.reduce((s, d) => s + (grouped[isoDate(d)]?.length ?? 0), 0);
 
   return (
-    <div className="min-h-full">
-      {/* ── Header ── */}
-      <div className="flex items-start justify-between gap-4 mb-5">
-        <div>
-          <div className="flex items-center gap-2 mb-0.5">
-            <div className="w-8 h-8 rounded-xl flex items-center justify-center"
-              style={{ background: 'linear-gradient(135deg,#0d9488,#0891b2)' }}>
-              <ShieldCheck size={16} className="text-white" />
-            </div>
-            <h1 className="text-xl font-black text-slate-800">ตารางครูเวร</h1>
-          </div>
-          <p className="text-xs text-slate-500 ml-10">Duty Teacher Schedule — มาก่อนเวลาเพื่อดูแลนักเรียน</p>
-        </div>
-        {canEdit && (
-          <button
-            onClick={() => setModalState({ mode: 'add' })}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold text-white shadow-md flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg,#0d9488,#0891b2)' }}
-          >
-            <Plus size={15} /> เพิ่มครูเวร
-          </button>
-        )}
-      </div>
-
-      {/* ── Stats row ── */}
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        {/* Week navigator */}
-        <div className="flex items-center gap-2 rounded-xl px-3 py-2" style={GLASS}>
-          <button onClick={() => setWeekOffset(w => w - 1)}
-            className="w-6 h-6 rounded-lg flex items-center justify-center hover:bg-slate-100 transition-colors text-slate-600">
-            <ChevronLeft size={14} />
-          </button>
-          <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5 px-1">
-            <Calendar size={12} /> {weekLabel}
-          </span>
-          <button onClick={() => setWeekOffset(w => w + 1)}
-            className="w-6 h-6 rounded-lg flex items-center justify-center hover:bg-slate-100 transition-colors text-slate-600">
-            <ChevronRight size={14} />
-          </button>
-          {weekOffset !== 0 && (
-            <button onClick={() => setWeekOffset(0)}
-              className="text-[10px] font-bold text-teal-600 hover:text-teal-800 px-1">
-              ปัจจุบัน
-            </button>
-          )}
-        </div>
-
-        {/* Summary badge */}
-        <div className="px-3 py-2 rounded-xl text-xs font-bold text-teal-700"
-          style={{ background: '#ccfbf1', border: '1px solid #5eead4' }}>
-          สัปดาห์นี้ {totalThisWeek} เวร
-        </div>
-      </div>
-
-      {/* ── Week grid ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 gap-3">
-        {weekDays.map(d => {
-          const key = isoDate(d);
-          const isToday = key === isoDate(today);
-          const dayDuties = grouped[key] ?? [];
-          return (
-            <div key={key} className="rounded-2xl overflow-hidden" style={GLASS}>
-              {/* Day header */}
-              <div className="px-3 py-2 flex items-center justify-between"
-                style={{
-                  background: isToday
-                    ? 'linear-gradient(135deg,#0d9488,#0891b2)'
-                    : 'rgba(248,250,252,0.6)',
-                  borderBottom: '1px solid rgba(255,255,255,0.7)',
-                }}>
-                <span className={`text-xs font-black ${isToday ? 'text-white' : 'text-slate-700'}`}>
-                  {thaiDay(d)}
-                </span>
-                {isToday && (
-                  <span className="text-[9px] font-bold bg-white/20 text-white px-1.5 py-0.5 rounded-full">
-                    วันนี้
-                  </span>
-                )}
-                {canEdit && (
-                  <button
-                    onClick={() => setModalState({ mode: 'add', prefillDate: key })}
-                    className={`w-5 h-5 rounded-full flex items-center justify-center transition-colors ml-1 ${isToday ? 'text-white hover:bg-white/20' : 'text-slate-400 hover:bg-slate-200'}`}
+    <>
+      {/* ── Render filter in header via portal ── */}
+      {createPortal(
+        <motion.div
+          layout
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className={`flex items-center gap-1.5 h-10 p-1 rounded-full pointer-events-auto transition-all duration-300 ${
+            isSearchMode
+              ? 'bg-blue-50/90 shadow-md border border-blue-100'
+              : 'bg-white/60 backdrop-blur-xl border border-white shadow-[0_8px_32px_rgba(0,0,0,0.04)]'
+          }`}
+        >
+          {isSearchMode ? (
+            <motion.div
+              key="search-active"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="flex items-center gap-2 px-2.5 w-full sm:w-[320px] h-full"
+            >
+              <HiMagnifyingGlass className="text-slate-400 flex-shrink-0 w-3.5 h-3.5" />
+              <input
+                type="text"
+                value={teacherQuery}
+                onChange={e => setTeacherQuery(e.target.value)}
+                placeholder="ค้นหาชื่อครู..."
+                autoFocus
+                className="bg-transparent text-xs font-bold text-slate-800 placeholder:text-slate-400 outline-none w-full"
+              />
+              <button
+                onClick={() => {
+                  setTeacherQuery('');
+                  setIsSearchMode(false);
+                }}
+                className="flex items-center justify-center w-6 h-6 rounded-full text-slate-400 hover:text-slate-600 hover:bg-black/5 transition-all flex-shrink-0"
+              >
+                <HiXMark className="w-3.5 h-3.5" />
+              </button>
+            </motion.div>
+          ) : (
+            <div className="flex items-center gap-1.5 w-full px-1">
+              {/* Department Filter Buttons */}
+              <div className="flex items-center gap-1">
+                <motion.button
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0 }}
+                  onClick={() => setFilterDept('all')}
+                  className={`h-8 px-6 rounded-full text-[11px] font-black transition-all whitespace-nowrap flex-shrink-0 flex items-center justify-center ${
+                    filterDept === 'all'
+                      ? 'bg-slate-900 text-white shadow-md'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
+                  }`}
+                >
+                  ทั้งหมด
+                </motion.button>
+                {deptOptions.map((d, idx) => (
+                  <motion.button
+                    key={d.id}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: (idx + 1) * 0.05 }}
+                    onClick={() => setFilterDept(filterDept === d.id ? 'all' : d.id)}
+                    className={`h-8 px-6 rounded-full text-[11px] font-black transition-all whitespace-nowrap flex-shrink-0 flex items-center justify-center ${
+                      filterDept === d.id
+                        ? 'bg-slate-900 text-white shadow-md'
+                        : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
+                    }`}
                   >
-                    <Plus size={11} />
-                  </button>
-                )}
+                    {d.label}
+                  </motion.button>
+                ))}
               </div>
-              {/* Duties */}
-              <div className="p-2 space-y-2 min-h-[80px]">
-                <AnimatePresence>
-                  {dayDuties.length === 0 ? (
-                    <p className="text-[11px] text-slate-300 text-center py-4">ไม่มีเวร</p>
-                  ) : (
-                    dayDuties.map(duty => (
-                      <DutyCard
-                        key={duty.id}
-                        duty={duty}
-                        canEdit={canEdit}
-                        onEdit={() => setModalState({ mode: 'edit', duty })}
-                        onDelete={() => handleDelete(duty.id)}
-                      />
-                    ))
-                  )}
-                </AnimatePresence>
-              </div>
-            </div>
-          );
-        })}
-      </div>
 
-      {/* ── Modal ── */}
-      <AnimatePresence>
-        {modalState && (
-          <DutyFormModal
-            initial={
-              modalState.mode === 'edit'
-                ? modalState.duty
-                : modalState.prefillDate
-                  ? { date: modalState.prefillDate }
-                  : undefined
-            }
-            onSave={handleSave}
-            onClose={() => setModalState(null)}
-          />
+              <div className="w-px h-5 bg-black/10 mx-1 shrink-0" />
+
+              {/* Search Toggle Button */}
+              <button
+                onClick={() => setIsSearchMode(true)}
+                className="flex items-center justify-center w-8 h-8 rounded-full text-slate-600 hover:bg-black/5 transition-all active:scale-90 flex-shrink-0"
+              >
+                <HiMagnifyingGlass className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+        </motion.div>,
+        document.getElementById('header-portal-filters') || document.body,
+      )}
+
+      {/* ── Main content ── */}
+      <div className="min-h-full flex flex-col gap-4">
+
+        {/* ── Teacher card grid ── */}
+        {loading ? (
+          <p className="text-xs text-slate-400 py-6">กำลังโหลด...</p>
+        ) : filteredTeachers.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-slate-400 gap-3">
+            <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center">
+              <span className="text-2xl text-slate-300">👤</span>
+            </div>
+            <p className="text-sm font-bold text-slate-500">ไม่พบรายชื่อครู</p>
+          </div>
+        ) : (
+          <div
+            className="grid gap-4 sm:gap-6 pb-4"
+            style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}
+          >
+            {filteredTeachers.map((t, i) => (
+              <TeacherCard
+                key={t.id}
+                teacher={t}
+                index={i}
+                isActive={activeCardId === t.id}
+                weekDays={weekDays}
+                duties={duties}
+                canEdit={canEdit}
+                enableHoverActivate={enableHoverActivate}
+                onActivate={() => setActiveCardId(t.id)}
+                onDeactivate={() => setActiveCardId(null)}
+                onAssignDay={date => handleAssignDay(t, date)}
+                onUnassignDay={handleUnassignDay}
+              />
+            ))}
+          </div>
         )}
-      </AnimatePresence>
-    </div>
+      </div>
+    </>
   );
 }

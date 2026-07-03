@@ -1,114 +1,53 @@
 import { useMutation } from '@tanstack/react-query';
-import { doc, getDoc, setDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { useEffect, useState } from 'react';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { useSyncExternalStore } from 'react';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
 import type { RolePermissionConfig, FeaturePermission } from '@/types/rolePermission';
 import { FEATURE_LIST } from '@/types/rolePermission';
+import { getRolePermissionsStore } from '@/lib/firestoreShared/rolePermissionsStore';
+
+const emptySubscribe = () => () => {};
 
 export function useRolePermissions(roleId?: string) {
-  const [snapshot, setSnapshot] = useState<{ roleId: string; data: RolePermissionConfig | null } | null>(null);
+  const store = roleId ? getRolePermissionsStore(roleId) : null;
+  const data = useSyncExternalStore(
+    store?.subscribe ?? emptySubscribe,
+    () => (roleId && store ? store.getSnapshot() : null),
+    () => (roleId && store ? store.getSnapshot() : null),
+  );
 
-  useEffect(() => {
-    if (!roleId) return;
-    const docRef = doc(db, 'role_permissions', roleId);
-
-    let cancelled = false;
-    const unsubscribe = onSnapshot(
-      docRef,
-      (docSnap) => {
-        if (cancelled) return;
-        const rawData = docSnap.exists() ? docSnap.data() : null;
-        let newData = rawData as RolePermissionConfig | null;
-
-        if (newData && newData.permissions) {
-          // Merge with FEATURE_LIST to ensure new features are present
-          const mergedPermissions = mergeWithDefaults(newData.permissions);
-          newData = {
-            ...newData,
-            permissions: mergedPermissions,
-            permMap: buildPermMap(mergedPermissions)
-          };
-        }
-
-        console.log(`[useRolePermissions] Listener fired for role: ${roleId}`, newData);
-        setSnapshot({ roleId, data: newData });
-      },
-      (error) => {
-        if (cancelled) return;
-        console.error(`[useRolePermissions] Error listening to role ${roleId}:`, error);
-        setSnapshot({ roleId, data: null });
-      }
-    );
-
-    return () => { cancelled = true; unsubscribe(); };
-  }, [roleId]);
-
-  const isLoading = !!roleId && snapshot?.roleId !== roleId;
-  const data = roleId && snapshot?.roleId === roleId ? snapshot.data : null;
+  // รอ getDoc ครั้งแรก — ถ้ามี cache แล้ว startReady จะเป็น true ทันที
+  const isLoading = !!roleId && !!store && !store.getReady();
 
   return { data, isLoading };
 }
 
 export function useAllRolePermissions() {
-  const [data, setData] = useState<Record<string, RolePermissionConfig | null> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const studentStore = getRolePermissionsStore('student');
+  const parentStore = getRolePermissionsStore('parent');
+  const teacherStore = getRolePermissionsStore('teacher');
+  const staffStore = getRolePermissionsStore('staff');
+  const adminStore = getRolePermissionsStore('admin');
+  const sysadminStore = getRolePermissionsStore('sysadmin');
 
-  useEffect(() => {
-    let cancelled = false;
-    const roles = ['student', 'parent', 'teacher', 'staff', 'admin', 'sysadmin'];
-    const result: Record<string, RolePermissionConfig | null> = {};
-    let loadedCount = 0;
+  const student = useSyncExternalStore(studentStore.subscribe, studentStore.getSnapshot, studentStore.getSnapshot);
+  const parent = useSyncExternalStore(parentStore.subscribe, parentStore.getSnapshot, parentStore.getSnapshot);
+  const teacher = useSyncExternalStore(teacherStore.subscribe, teacherStore.getSnapshot, teacherStore.getSnapshot);
+  const staff = useSyncExternalStore(staffStore.subscribe, staffStore.getSnapshot, staffStore.getSnapshot);
+  const admin = useSyncExternalStore(adminStore.subscribe, adminStore.getSnapshot, adminStore.getSnapshot);
+  const sysadmin = useSyncExternalStore(sysadminStore.subscribe, sysadminStore.getSnapshot, sysadminStore.getSnapshot);
 
-    // Set up listeners for each role
-    const unsubscribers: Array<() => void> = [];
-
-    roles.forEach((role) => {
-      const docRef = doc(db, 'role_permissions', role);
-        const unsubscribe = onSnapshot(
-          docRef,
-        (docSnap) => {
-          if (cancelled) return;
-            const rawData = docSnap.exists() ? docSnap.data() : null;
-            let roleData = rawData as RolePermissionConfig | null;
-
-            if (roleData && roleData.permissions) {
-              const mergedPermissions = mergeWithDefaults(roleData.permissions);
-              roleData = {
-                ...roleData,
-                permissions: mergedPermissions,
-                permMap: buildPermMap(mergedPermissions)
-              };
-            }
-
-          result[role] = roleData;
-          loadedCount++;
-
-          if (loadedCount === roles.length) {
-            setData({ ...result });
-            setIsLoading(false);
-          } else {
-            setData({ ...result });
-          }
-        },
-        (error) => {
-          if (cancelled) return;
-          console.error(`Error listening to ${role} permissions:`, error);
-          loadedCount++;
-          if (loadedCount === roles.length) {
-            setIsLoading(false);
-          }
-        }
-      );
-
-      unsubscribers.push(unsubscribe);
-    });
-
-    return () => {
-      cancelled = true;
-      unsubscribers.forEach(unsub => unsub());
-    };
-  }, []);
+  const data: Record<string, RolePermissionConfig | null> = {
+    student,
+    parent,
+    teacher,
+    staff,
+    admin,
+    sysadmin,
+  };
+  const isLoading = [studentStore, parentStore, teacherStore, staffStore, adminStore, sysadminStore]
+    .some((store) => !store.getReady());
 
   return { data, isLoading };
 }
@@ -121,47 +60,59 @@ function buildPermMap(permissions: FeaturePermission[]): Record<string, string> 
   return map;
 }
 
-function mergeWithDefaults(existing: FeaturePermission[]): FeaturePermission[] {
-  // Start with a copy of ALL features from FEATURE_LIST
-  const merged = FEATURE_LIST.map(f => ({ ...f }));
-  
-  // Overlay existing permissions from database
-  existing.forEach(p => {
-    const idx = merged.findIndex(f => f.featureKey === p.featureKey);
-    if (idx >= 0) {
-      merged[idx] = { ...merged[idx], ...p };
-    }
-  });
-  
-  return merged;
-}
-
 export function useUpdateRolePermission() {
   return useMutation({
     mutationFn: async ({ roleId, permission }: { roleId: string; permission: FeaturePermission }) => {
       const docRef = doc(db, 'role_permissions', roleId);
       const docSnap = await getDoc(docRef);
+      type FeaturePermissionExt = FeaturePermission & { _activatedOnce?: boolean };
 
-      let permissions: FeaturePermission[];
+      let permissions: FeaturePermissionExt[];
       if (docSnap.exists()) {
         const existingData = docSnap.data() as RolePermissionConfig;
+        const prevPermissions = (Array.isArray(existingData.permissions) ? existingData.permissions : []) as FeaturePermissionExt[];
+        const existingPerm = prevPermissions.find((p) => p.featureKey === permission.featureKey);
+        const wasEnabled = !!existingPerm?.enabled;
+        const wasActivatedOnce = !!existingPerm?._activatedOnce;
+        const isWidgetFeature = permission.featureKey.startsWith('widget_');
+        const nextPermission: FeaturePermissionExt = {
+          ...(permission as FeaturePermissionExt),
+          _activatedOnce: permission.enabled ? true : wasActivatedOnce,
+        };
+
         const permIndex = existingData.permissions.findIndex(p => p.featureKey === permission.featureKey);
         if (permIndex >= 0) {
-          existingData.permissions[permIndex] = permission;
+          (existingData.permissions as FeaturePermissionExt[])[permIndex] = nextPermission;
         } else {
-          existingData.permissions.push(permission);
+          (existingData.permissions as FeaturePermissionExt[]).push(nextPermission);
         }
-        permissions = existingData.permissions;
+        permissions = existingData.permissions as FeaturePermissionExt[];
+
+        // When a widget is enabled now (OFF -> ON), move it right after currently-enabled widgets.
+        // This preserves "enabled later = shown later" ordering.
+        // If widget was enabled before, keep its previous slot on re-enable.
+        if (isWidgetFeature && permission.enabled && !wasEnabled && !wasActivatedOnce) {
+          const withoutTarget = permissions.filter((p) => p.featureKey !== permission.featureKey);
+          const lastEnabledWidgetIndex = withoutTarget.reduce((lastIndex, p, idx) => {
+            if (p.featureKey.startsWith('widget_') && p.enabled) return idx;
+            return lastIndex;
+          }, -1);
+          const insertAt = lastEnabledWidgetIndex + 1;
+          withoutTarget.splice(insertAt, 0, nextPermission);
+          permissions = withoutTarget;
+        }
       } else {
         // document ยังไม่มี → สร้างใหม่พร้อม features ทั้งหมด (disabled ทั้งหมดก่อน แล้ว override ตัวที่กำลัง toggle)
         permissions = FEATURE_LIST.map(f =>
-          f.featureKey === permission.featureKey ? permission : { ...f, enabled: false }
+          f.featureKey === permission.featureKey
+            ? ({ ...(permission as FeaturePermissionExt), _activatedOnce: permission.enabled } as FeaturePermissionExt)
+            : ({ ...f, enabled: false, _activatedOnce: false } as FeaturePermissionExt)
         );
       }
 
       const config: RolePermissionConfig = {
         roleId,
-        permissions,
+        permissions: permissions as FeaturePermission[],
         permMap: buildPermMap(permissions),
         updatedAt: serverTimestamp(),
       };
@@ -206,10 +157,10 @@ export function useInitializeRolePermissions() {
         ),
         teacher: makeConfig('teacher',
           FEATURE_LIST.map(f => {
-            if (['syllabus', 'teaching', 'schedule', 'students', 'grades', 'attendance', 'calendar', 'exams', 'questionBank', 'feedback_manage'].includes(f.featureKey)) {
-              return { ...f, enabled: true, accessLevel: 'edit' as const };
-            }
-            if (['classes', 'announcements', 'widget_announcements', 'feedback', 'feedback_view_identity', 'widget_feedbackStatus', 'widget_leaveQuota'].includes(f.featureKey)) {
+        if (['syllabus', 'teaching', 'schedule', 'students', 'grades', 'attendance', 'morningRollCall', 'calendar', 'exams', 'questionBank', 'feedback_manage', 'dutySchedule'].includes(f.featureKey)) {
+          return { ...f, enabled: true, accessLevel: 'edit' as const };
+        }
+        if (['classes', 'announcements', 'widget_announcements', 'feedback', 'feedback_view_identity', 'widget_feedbackStatus', 'widget_leaveQuota', 'widget_schedule', 'widget_morningRollCall', 'widget_teacherDailyTasks', 'widget_staffAttendance'].includes(f.featureKey)) {
               return { ...f, enabled: true, accessLevel: 'view-only' as const };
             }
             return { ...f, enabled: false, accessLevel: 'view-only' as const };
@@ -220,7 +171,7 @@ export function useInitializeRolePermissions() {
             if (['staffAttendance'].includes(f.featureKey)) {
               return { ...f, enabled: true, accessLevel: 'edit' as const };
             }
-            if (['students', 'attendance', 'announcements', 'widget_announcements', 'feedback', 'widget_feedbackStatus', 'calendar', 'schedule'].includes(f.featureKey)) {
+            if (['students', 'attendance', 'announcements', 'widget_announcements', 'feedback', 'widget_feedbackStatus', 'calendar', 'schedule', 'widget_schedule'].includes(f.featureKey)) {
               return { ...f, enabled: true, accessLevel: 'view-only' as const };
             }
             return { ...f, enabled: false, accessLevel: 'view-only' as const };
@@ -228,7 +179,7 @@ export function useInitializeRolePermissions() {
         ),
         parent: makeConfig('parent',
           FEATURE_LIST.map(f => {
-            if (['calendar', 'announcements', 'widget_announcements', 'widget_feedbackStatus', 'grades', 'attendance', 'schedule'].includes(f.featureKey)) {
+            if (['calendar', 'announcements', 'widget_announcements', 'widget_feedbackStatus', 'grades', 'attendance', 'schedule', 'widget_schedule'].includes(f.featureKey)) {
               return { ...f, enabled: true, accessLevel: 'view-only' as const };
             }
             return { ...f, enabled: false, accessLevel: 'view-only' as const };
@@ -236,7 +187,7 @@ export function useInitializeRolePermissions() {
         ),
         student: makeConfig('student',
           FEATURE_LIST.map(f => {
-            if (['calendar', 'announcements', 'widget_announcements', 'feedback', 'widget_feedbackStatus', 'grades', 'attendance', 'schedule', 'exams', 'widget_studentProfile', 'widget_leaveQuota', 'widget_studentLeave'].includes(f.featureKey)) {
+            if (['calendar', 'announcements', 'widget_announcements', 'feedback', 'widget_feedbackStatus', 'grades', 'attendance', 'schedule', 'exams', 'widget_studentProfile', 'widget_leaveQuota', 'widget_studentLeave', 'widget_schedule'].includes(f.featureKey)) {
               return { ...f, enabled: true, accessLevel: 'view-only' as const };
             }
             return { ...f, enabled: false, accessLevel: 'view-only' as const };

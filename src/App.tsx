@@ -26,24 +26,34 @@ const StudentManager = lazy(() => import('@/features/students/StudentManager'));
 const RolePermissionManager = lazy(() => import('@/features/roles/RolePermissionManager'));
 const SettingsPage = lazy(() => import('@/features/settings/SettingsPage'));
 const CourseMigrationTool = lazy(() => import('@/features/settings/CourseMigrationTool'));
-const TeachingManager = lazy(() => import('@/features/teaching/TeachingManager'));
+const ExamLayout = lazy(() => import('@/features/exam/ExamLayout'));
+const ExamDashboardPage = lazy(() => import('@/features/exam/ExamDashboardPage'));
 const ExamManager = lazy(() => import('@/features/exam/ExamManager'));
 const StudentExamPage = lazy(() => import('@/features/exam/StudentExamPage'));
 const QuestionBankManager = lazy(() => import('@/features/questionBank/QuestionBankManager'));
 const StaffAttendancePage = lazy(() => import('@/features/attendance/StaffAttendancePage'));
+const FingerprintDeviceManagerPage = lazy(() => import('@/features/fingerprintDevices/FingerprintDeviceManagerPage'));
 const AttendanceCenterPage = lazy(() => import('@/features/attendance/AttendanceCenterPage'));
 const ProfilePage = lazy(() => import('@/features/profile/ProfilePage'));
 const LeaveManagementPage = lazy(() => import('@/features/leave/LeaveManagementPage'));
 const LeaveReportPage = lazy(() => import('@/features/leave/LeaveReportPage'));
 const LessonPlanManager = lazy(() => import('@/features/lessonPlan/LessonPlanManager'));
+const MicroSyllabusPage = lazy(() => import('@/features/microSyllabus/MicroSyllabusPage'));
 const DutySchedulePage = lazy(() => import('@/features/duty/DutySchedulePage'));
-const ExecutiveReportPage = lazy(() => import('@/features/reports/ExecutiveReportPage'));
 const ReportControlCenter = lazy(() => import('@/features/reports/ReportControlCenter'));
 const AnnouncementsPage = lazy(() => import('@/features/announcements/AnnouncementsPage'));
 const FeedbackPage = lazy(() => import('@/features/feedback/FeedbackPage'));
+const BehaviorScorePage = lazy(() => import('@/features/behavior/BehaviorScorePage'));
 const GradeBookPage = lazy(() => import('@/features/grades/GradeBookPage'));
 const LineConnectPage = lazy(() => import('@/features/profile/LineConnectPage'));
+const LineCheckInPage = lazy(() => import('@/features/lineCheckIn/LineCheckInPage'));
+const MorningRollCallLayout = lazy(() => import('@/features/attendance/MorningRollCallLayout'));
 const MorningRollCallPage = lazy(() => import('@/features/attendance/MorningRollCallPage'));
+const MorningRollCallDashboardPage = lazy(() => import('@/features/attendance/MorningRollCallDashboardPage'));
+const FuturePlanPage = lazy(() => import('@/features/futurePlan/FuturePlanPage'));
+const WordGamePage = lazy(() => import('@/features/wordGame/WordGamePage'));
+const AiAgentCommandPage = lazy(() => import('@/features/aiAgents/AiAgentCommandPage'));
+const TasksPage = lazy(() => import('@/features/tasks/TasksPage'));
 
 
 /** แสดง component การเข้าเรียน (ของนักเรียน) */
@@ -98,6 +108,7 @@ export default function App() {
           <Route path="/login"  element={<LoginPage />} />
           <Route path="/signup" element={<LoginPage />} />
           <Route path="/line/connect" element={<LineConnectPage />} />
+          <Route path="/line/checkin" element={<LineCheckInPage />} />
 
           {/* ── Portal Pages (Nested under PortalLayout) ── */}
           <Route
@@ -154,6 +165,11 @@ export default function App() {
                 <LessonPlanManager />
               </PermissionGate>
             } />
+            <Route path="micro-syllabus" element={
+              <PermissionGate featureKey="microSyllabus">
+                <MicroSyllabusPage />
+              </PermissionGate>
+            } />
             <Route path="classes" element={
               <PermissionGate featureKey="classes">
                 <ClassManager />
@@ -164,24 +180,28 @@ export default function App() {
                 <StudentManager />
               </PermissionGate>
             } />
-            <Route path="profile" element={
-              <PermissionGate featureKey="widget_studentProfile">
-                <ProfilePage />
-              </PermissionGate>
-            } />
-            <Route path="teaching" element={
-              <PermissionGate featureKey="teaching">
-                <TeachingManager />
-              </PermissionGate>
-            } />
+            <Route path="profile" element={<ProfilePage />} />
             <Route path="exams" element={
               <PermissionGate featureKey="exams">
-                <ExamManager />
+                <ExamLayout />
               </PermissionGate>
-            } />
+            }>
+              <Route path="rooms" element={<ExamManager />} />
+              <Route index element={<ExamDashboardPage />} />
+            </Route>
             <Route path="question-bank" element={
               <PermissionGate featureKey="questionBank">
                 <QuestionBankManager />
+              </PermissionGate>
+            } />
+            <Route path="ai-agents" element={
+              <PermissionGate featureKey="aiAgents">
+                <AiAgentCommandPage />
+              </PermissionGate>
+            } />
+            <Route path="tasks" element={
+              <PermissionGate featureKey="tasks">
+                <TasksPage />
               </PermissionGate>
             } />
             <Route path="grades" element={
@@ -199,11 +219,20 @@ export default function App() {
                 <StaffAttendancePage />
               </PermissionGate>
             } />
-            <Route path="morning-rollcall" element={
-              <PermissionGate featureKey="morningRollCall">
-                <MorningRollCallPage />
+            <Route path="fingerprint-devices" element={
+              <PermissionGate featureKey="fingerprintDevices">
+                <FingerprintDeviceManagerPage />
               </PermissionGate>
             } />
+            <Route path="morning-rollcall" element={
+              <PermissionGate featureKey="morningRollCall">
+                <MorningRollCallLayout />
+              </PermissionGate>
+            }>
+              <Route path="dashboard" element={<Navigate to="/portal/morning-rollcall" replace />} />
+              <Route path="check" element={<MorningRollCallPage />} />
+              <Route index element={<MorningRollCallDashboardPage />} />
+            </Route>
             <Route path="leave" element={
               <PermissionGate featureKey="leave">
                 <LeaveManagementPage />
@@ -219,11 +248,6 @@ export default function App() {
                 <DutySchedulePage />
               </PermissionGate>
             } />
-            <Route path="reports" element={
-              <PermissionGate featureKey="reports">
-                <ExecutiveReportPage />
-              </PermissionGate>
-            } />
             <Route path="report-control" element={
               <PermissionGate featureKey="reports" require="edit">
                 <ReportControlCenter />
@@ -237,6 +261,21 @@ export default function App() {
             <Route path="feedback" element={
               <PermissionGate featureKey="feedback">
                 <FeedbackPage />
+              </PermissionGate>
+            } />
+            <Route path="behavior" element={
+              <PermissionGate featureKey="behaviorScore">
+                <BehaviorScorePage />
+              </PermissionGate>
+            } />
+            <Route path="future-plan" element={
+              <PermissionGate featureKey="futurePlan">
+                <FuturePlanPage />
+              </PermissionGate>
+            } />
+            <Route path="word-game" element={
+              <PermissionGate featureKey="wordGame">
+                <WordGamePage />
               </PermissionGate>
             } />
             {/* settings — sysadmin เท่านั้น require='full' */}

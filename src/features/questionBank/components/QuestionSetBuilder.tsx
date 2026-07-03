@@ -18,11 +18,15 @@ import {
 } from '@/types/curriculum';
 import { TYPE_CONFIG, type NewQuestionSet, type QuestionSet } from '@/types/questionBank';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { previewQuestionSetCode } from '@/features/questionBank/utils/questionSetCode';
+import { safeStorageFilename, imageUploadContentType } from '@/lib/safeStorageFilename';
 
 interface Props {
   open: boolean;
   onClose: () => void;
   initial?: QuestionSet | null;
+  prefill?: Partial<BuilderState> | null;
+  existingSets?: QuestionSet[];
   onSubmit: (data: NewQuestionSet) => Promise<void> | void;
 }
 
@@ -62,10 +66,13 @@ const getInitialState = (initial?: QuestionSet | null): BuilderState => {
   };
 };
 
-export default function QuestionSetBuilder({ open, onClose, initial, onSubmit }: Props) {
+export default function QuestionSetBuilder({ open, onClose, initial, prefill, existingSets = [], onSubmit }: Props) {
   const { year } = useActiveAcademicYear();
   const isEdit = Boolean(initial);
-  const init = getInitialState(initial);
+  const init = {
+    ...getInitialState(initial),
+    ...(!initial && prefill ? prefill : {}),
+  };
 
   const [title, setTitle] = useState(init.title);
   const [description, setDescription] = useState(init.description);
@@ -79,6 +86,29 @@ export default function QuestionSetBuilder({ open, onClose, initial, onSubmit }:
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canSubmit = useMemo(() => title.trim().length > 0, [title]);
+
+  const previewSetCode = useMemo(() => {
+    if (isEdit && initial?.setCode) return initial.setCode;
+    return previewQuestionSetCode(
+      {
+        curriculumYear: year ?? '',
+        department: department || undefined,
+        gradeLevel: gradeLevel || undefined,
+        subjectGroup,
+        subSubjectGroup: subSubjectGroup || undefined,
+      },
+      existingSets,
+    );
+  }, [
+    department,
+    existingSets,
+    gradeLevel,
+    initial?.setCode,
+    isEdit,
+    subjectGroup,
+    subSubjectGroup,
+    year,
+  ]);
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -103,8 +133,10 @@ export default function QuestionSetBuilder({ open, onClose, initial, onSubmit }:
     if (!file) return;
 
     setIsUploading(true);
-    const storageRef = ref(storage, `question_sets/covers/${Date.now()}_${file.name}`);
-    const uploadTask = uploadBytesResumable(storageRef, file);
+    const storageRef = ref(storage, `question_sets/covers/${safeStorageFilename(file.name)}`);
+    const uploadTask = uploadBytesResumable(storageRef, file, {
+      contentType: imageUploadContentType(file),
+    });
 
     uploadTask.on(
       'state_changed',
@@ -181,6 +213,11 @@ export default function QuestionSetBuilder({ open, onClose, initial, onSubmit }:
               />
             </div>
           </div>
+          {/* รหัสชุดข้อสอบ — แสดงก่อนชื่อชุด */}
+          <p className="px-1 font-mono text-sm font-black tracking-wide text-blue-600">
+            {previewSetCode}
+          </p>
+
           {/* Row 1: ชื่อชุด + กลุ่มสาระ */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="ชื่อชุดข้อสอบ" required>

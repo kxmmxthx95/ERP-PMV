@@ -1,13 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, UserCheck, Layout, Upload, Loader2 } from 'lucide-react';
+import { Search, UserCheck, Camera, Trash2 } from 'lucide-react';
 import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '@/lib/firebase';
+import { db } from '@/lib/firebase';
 import { useNamePrefix } from '@/hooks/useNamePrefix';
 import type { TeacherProfile, NewTeacherProfile } from '@/types/teacher';
 import type { Department } from '@/types/curriculum';
-import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 import { toast } from 'sonner';
 import {
   Select,
@@ -17,7 +15,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import FormModal from '@/components/ui/FormModal';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 interface AddTeacherModalProps {
   open: boolean;
@@ -50,6 +52,28 @@ const DEFAULT_FORM: NewTeacherProfile = {
 };
 
 const POSITIONS = ['ครูบรรจุ', 'ครูอัตราจ้าง', 'ครูพิเศษ'];
+const DEPARTMENT_SHORT_LABEL: Record<Department, string> = {
+  early: 'ปฐมวัย',
+  primary: 'ประถม',
+  secondary: 'มัธยม',
+};
+
+const compressImage = (file: File): Promise<string> =>
+  new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const MAX = 400;
+      const scale = Math.min(MAX / img.width, MAX / img.height, 1);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.75));
+    };
+    img.src = url;
+  });
 
 export default function AddTeacherModal({
   open,
@@ -63,19 +87,18 @@ export default function AddTeacherModal({
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<UserSearchResult[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
   const { prefixes, formatFullName, extractNameParts } = useNamePrefix('teacher');
   const [prefix, setPrefix] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const loadData = async () => {
       if (open) {
         if (editingTeacher) {
-          // 1. Initial set from teacher record
           setForm({
             name: editingTeacher.name || '',
             email: editingTeacher.email || '',
@@ -88,7 +111,6 @@ export default function AddTeacherModal({
             userId: editingTeacher.userId,
           });
 
-          // 2. If has userId, try to sync latest photo from 'users' feature
           if (editingTeacher.userId) {
             setSelectedUserId(editingTeacher.userId);
             try {
@@ -122,32 +144,7 @@ export default function AddTeacherModal({
     };
 
     loadData();
-  }, [open, editingTeacher]);
-
-  const handleUploadImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      toast.error('กรุณาเลือกไฟล์รูปภาพเท่านั้น');
-      return;
-    }
-
-    setIsUploading(true);
-    try {
-      const fileName = `teacher_photos/${Date.now()}_${file.name}`;
-      const storageRef = ref(storage, fileName);
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
-      setForm(prev => ({ ...prev, photoURL: url }));
-      toast.success('อัปโหลดรูปภาพสำเร็จ');
-    } catch (error) {
-      console.error('Upload error:', error);
-      toast.error('เกิดข้อผิดพลาดในการอัปโหลด');
-    } finally {
-      setIsUploading(false);
-    }
-  };
+  }, [open, editingTeacher, extractNameParts]);
 
   const handleSearchUsers = async (val: string) => {
     setSearchTerm(val);
@@ -201,6 +198,11 @@ export default function AddTeacherModal({
       toast.error('กรุณากรอกข้อมูลที่จำเป็นให้ครบถ้วน');
       return;
     }
+    if (!selectedUserId) {
+      toast.error('กรุณาเชื่อมบัญชีผู้ใช้ก่อนบันทึกข้อมูลครู');
+      setActiveTab('search');
+      return;
+    }
     setIsSubmitting(true);
 
     try {
@@ -209,7 +211,7 @@ export default function AddTeacherModal({
         ...form,
         name: fullName,
         email: form.email?.trim().toLowerCase() || '',
-        userId: selectedUserId || undefined
+        userId: selectedUserId
       };
 
       if (editingTeacher && onUpdate) {
@@ -219,250 +221,274 @@ export default function AddTeacherModal({
       }
 
       onClose();
-    } catch (error: any) {
-      toast.error('เกิดข้อผิดพลาด: ' + error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'ไม่ทราบสาเหตุ';
+      toast.error('เกิดข้อผิดพลาด: ' + message);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const Label = ({ children, required }: { children: React.ReactNode, required?: boolean }) => (
-    <label className="text-[10px] font-bold text-black/40 uppercase tracking-widest pl-1 font-sarabun mb-1.5 block">
-      {children} {required && <span className="text-red-400">*</span>}
-    </label>
-  );
-
   return (
-    <FormModal
-      open={open}
-      onClose={onClose}
-      title={editingTeacher ? 'แก้ไขข้อมูลครู' : 'เพิ่มครูใหม่'}
-      subtitle={editingTeacher ? 'ปรับปรุงข้อมูลพื้นฐานและสังกัดของบุคลากร' : 'เพิ่มข้อมูลบุคลากรใหม่เข้าสู่ระบบบริหารจัดการ'}
-      onSubmit={handleSubmit}
-      submitLabel={isSubmitting ? 'กำลังบันทึก...' : editingTeacher ? 'บันทึกการแก้ไข' : 'สร้างข้อมูลครู'}
-      submitDisabled={isSubmitting}
-      icon={<Layout size={18} />}
-    >
-      <div className="flex flex-col gap-5 py-2 font-sarabun">
-        {/* Tabs Control - Minimal Style */}
-        {!editingTeacher && (
-          <div className="flex p-1 bg-black/[0.03] rounded-xl w-full mb-2">
+    <Dialog open={open} onOpenChange={(isOpen) => {
+      if (!isOpen) onClose();
+    }}>
+      <DialogContent
+        className="w-[92vw] sm:max-w-md rounded-[2rem] sm:rounded-[2.5rem] border-none p-0 shadow-2xl overflow-hidden"
+        style={{
+          background: 'rgba(255,255,255,0.7)',
+          backdropFilter: 'blur(24px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(180%)'
+        }}
+      >
+        <div className="px-5 sm:px-6 pt-6 sm:pt-7 pb-2 sm:pb-3 flex justify-between items-center bg-transparent">
+          <DialogTitle className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">
+            {editingTeacher ? 'แก้ไขข้อมูลครู' : 'เพิ่มครูใหม่'}
+          </DialogTitle>
+        </div>
+
+        <div className="px-5 sm:px-6 pb-3 flex gap-1.5">
             <button
+              type="button"
               onClick={() => setActiveTab('profile')}
-              className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all ${activeTab === 'profile'
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-600'
+              className={`flex-1 h-8 rounded-lg text-[12px] font-bold transition-all ${activeTab === 'profile'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-500 hover:text-slate-700'
                 }`}
             >
               กรอกข้อมูลใหม่
             </button>
             <button
+              type="button"
               onClick={() => setActiveTab('search')}
-              className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all ${activeTab === 'search'
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-600'
+              className={`flex-1 h-8 rounded-lg text-[12px] font-bold transition-all ${activeTab === 'search'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-500 hover:text-slate-700'
                 }`}
             >
-              ค้นหาจากรายชื่อในระบบ
+              ค้นหาจากระบบ
             </button>
-          </div>
-        )}
+        </div>
 
-        <AnimatePresence mode="wait">
-          {activeTab === 'profile' ? (
-            <motion.div
-              key="profile"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-4"
-            >
-              {/* Photo Preview (Small & Subtle) */}
-              {(form.photoURL || firstName) && (
-                <div className="flex justify-center mb-2">
-                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-600/10 border border-slate-100 flex items-center justify-center overflow-hidden shadow-sm">
-                    {form.photoURL ? (
-                      <img src={form.photoURL} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-3xl font-black text-indigo-500/30">{firstName ? firstName.charAt(0) : '+'}</span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Form Fields - Strictly Vertical */}
-              <div>
-                <Label required>คำนำหน้า</Label>
-                <Select value={prefix} onValueChange={setPrefix}>
-                  <SelectTrigger className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm">
-                    <SelectValue placeholder="เลือกคำนำหน้าชื่อ" />
-                  </SelectTrigger>
-                  <SelectContent className="rounded-xl border-white/50 backdrop-blur-xl">
-                    {prefixes.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div>
-                <Label required>ชื่อ</Label>
-                <Input
-                  placeholder="ระบุชื่อ (เช่น สมชาย)"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
-                />
-              </div>
-
-              <div>
-                <Label required>นามสกุล</Label>
-                <Input
-                  placeholder="ระบุนามสกุล (เช่น ใจดี)"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
-                />
-              </div>
-
-              <div>
-                <Label>เบอร์โทรศัพท์</Label>
-                <Input
-                  placeholder="เช่น 0901234567"
-                  value={form.phone || ''}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                  className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
-                />
-              </div>
-
-              <div>
-                <Label>อีเมล</Label>
-                <Input
-                  type="email"
-                  placeholder="ระบุอีเมลผู้ใช้งาน"
-                  value={form.email || ''}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
-                />
-              </div>
-
-              <div>
-                <Label>ตำแหน่ง</Label>
-                <Select
-                  value={form.position}
-                  onValueChange={(val) => setForm({ ...form, position: val })}
-                >
-                  <SelectTrigger className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm">
-                    <SelectValue placeholder="ระบุตำแหน่งบุคลากร" />
-                  </SelectTrigger>
-                  <SelectContent className="rounded-xl border-white/50 backdrop-blur-xl">
-                    {POSITIONS.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div>
-                <Label>ฝ่าย / สังกัด</Label>
-                <div className="flex p-1 bg-black/[0.03] rounded-xl h-11">
-                  {(['early', 'primary', 'secondary'] as const).map((dept) => (
-                    <button
-                      key={dept}
-                      type="button"
-                      onClick={() => setForm({ ...form, department: dept })}
-                      className={`flex-1 rounded-lg text-[10px] font-bold transition-all ${form.department === dept
-                          ? 'bg-white text-slate-900 shadow-sm'
-                          : 'text-slate-400 hover:text-slate-600'
-                        }`}
-                    >
-                      {DEPARTMENT_CONFIG[dept].label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <Label>URL รูปถ่าย</Label>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Input
-                      placeholder="วางลิงก์รูปภาพ (ถ้ามี)"
-                      value={form.photoURL || ''}
-                      onChange={(e) => setForm({ ...form, photoURL: e.target.value })}
-                      className="h-11 rounded-xl bg-black/[0.03] border-transparent focus:ring-slate-300 transition-all font-medium text-sm"
-                    />
-                  </div>
-                  <label className="shrink-0 cursor-pointer h-11 w-11 rounded-xl bg-black/[0.03] hover:bg-black/[0.06] flex items-center justify-center transition-all group">
-                    {isUploading ? (
-                      <Loader2 size={18} className="text-slate-400 animate-spin" />
-                    ) : (
-                      <Upload size={18} className="text-slate-400 group-hover:text-blue-600" />
-                    )}
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept="image/*"
-                      onChange={handleUploadImage}
-                      disabled={isUploading}
-                    />
-                  </label>
-                </div>
-              </div>
-            </motion.div>
+        <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="px-5 sm:px-6 pb-6 sm:pb-7 space-y-3 max-h-[80vh] overflow-y-auto custom-scrollbar">
+          {selectedUserId ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-700">
+              เชื่อมบัญชีผู้ใช้แล้ว: {selectedUserId}
+            </div>
           ) : (
-            <motion.div
-              key="search"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-4"
-            >
-              <div>
-                <Label>ค้นหารายชื่อจากระบบ</Label>
-                <div className="relative">
-                  <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    placeholder="ระบุชื่อหรืออีเมลเพื่อค้นหา..."
-                    value={searchTerm}
-                    onChange={(e) => handleSearchUsers(e.target.value)}
-                    className="h-12 rounded-xl bg-black/[0.03] border-transparent pl-10 focus:ring-slate-300 transition-all font-medium text-sm"
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-700">
+              ยังไม่ได้เชื่อมบัญชีผู้ใช้ (ต้องเลือกจากแท็บ "ค้นหาจากระบบ")
+            </div>
+          )}
+          <AnimatePresence mode="wait">
+            {activeTab === 'profile' ? (
+              <motion.div
+                key="profile"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-3"
+              >
+                {/* Name Fields */}
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                  <div className="sm:col-span-3 space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">คำนำหน้า</label>
+                    <Select value={prefix} onValueChange={setPrefix} required>
+                      <SelectTrigger className="h-9 rounded-xl bg-slate-50 border-none shadow-none text-xs font-bold">
+                        <SelectValue placeholder="เลือก" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        {prefixes.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="sm:col-span-4 space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ชื่อ</label>
+                    <Input
+                      required
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      placeholder="เช่น สมชาย"
+                      className="h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-5 space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">นามสกุล</label>
+                    <Input
+                      required
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      placeholder="เช่น ใจดี"
+                      className="h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4"
+                    />
+                  </div>
+                </div>
+
+                {/* Email & Phone */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">อีเมล</label>
+                    <Input
+                      type="email"
+                      value={form.email || ''}
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                      placeholder="ระบุอีเมล"
+                      className="h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">เบอร์โทร</label>
+                    <Input
+                      value={form.phone || ''}
+                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                      placeholder="เช่น 0901234567"
+                      className="h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4"
+                    />
+                  </div>
+                </div>
+
+                {/* Position & Department */}
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ตำแหน่ง</label>
+                    <Select value={form.position} onValueChange={(val) => setForm({ ...form, position: val })}>
+                      <SelectTrigger className="h-9 rounded-xl bg-slate-50 border-none shadow-none text-xs font-bold w-full">
+                        <SelectValue placeholder="เลือกตำแหน่ง" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        {POSITIONS.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">แผนก</label>
+                    <Select value={form.department} onValueChange={(val) => setForm({ ...form, department: val as Department })}>
+                      <SelectTrigger className="h-9 rounded-xl bg-slate-50 border-none shadow-none text-xs font-bold w-full">
+                        <SelectValue placeholder="เลือกแผนก" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        {(['early', 'primary', 'secondary'] as const).map(dept => (
+                          <SelectItem key={dept} value={dept}>{DEPARTMENT_SHORT_LABEL[dept]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Photo */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">รูปภาพ</label>
+                  <div
+                    className="relative h-24 rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-slate-400 transition-all overflow-hidden group"
+                    onClick={() => photoInputRef.current?.click()}
+                  >
+                    {form.photoURL ? (
+                      <img src={form.photoURL} alt="preview" className="w-full h-full object-cover group-hover:opacity-90 transition-opacity" />
+                    ) : (
+                      <>
+                        <Camera size={20} className="text-slate-400" />
+                        <p className="text-[11px] font-bold text-slate-500">คลิกเพื่ออัปโหลดรูปภาพ</p>
+                      </>
+                    )}
+                    {form.photoURL && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setForm({ ...form, photoURL: undefined }); }}
+                        className="absolute top-2 right-2 p-1.5 rounded-full bg-rose-500/90 hover:bg-rose-600 text-white shadow-lg transition-colors"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (file) setForm({ ...form, photoURL: await compressImage(file) });
+                      e.target.value = '';
+                    }}
                   />
                 </div>
-              </div>
 
-              <div className="space-y-2 max-h-[350px] overflow-y-auto scrollbar-hide pr-1">
-                {searchResults.map((user) => (
-                  <button
-                    key={user.id}
-                    onClick={() => selectUser(user)}
-                    className="w-full p-4 rounded-xl bg-black/[0.02] border border-transparent hover:bg-white hover:border-slate-200 hover:shadow-sm transition-all text-left flex items-center gap-4 group"
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all overflow-hidden shadow-sm border border-black/[0.03]">
-                      {user.photoURL ? (
-                        <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        <UserCheck size={18} />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-slate-800 truncate">{user.name}</p>
-                      <p className="text-[11px] font-medium text-slate-400 truncate tracking-tight">{user.email}</p>
-                    </div>
-                  </button>
-                ))}
-                {searchResults.length === 0 && searchTerm.length >= 2 && (
-                  <div className="py-12 text-center">
-                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">ไม่พบข้อมูลผู้ใช้งาน</p>
+                {/* Submit Button */}
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full h-10 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 disabled:opacity-50 transition-all mt-2"
+                >
+                  {isSubmitting ? 'กำลังบันทึก...' : editingTeacher ? 'บันทึกการแก้ไข' : 'สร้างข้อมูลครู'}
+                </button>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="search"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-3"
+              >
+                {/* Search Input */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ค้นหารายชื่อ</label>
+                  <div className="relative">
+                    <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      placeholder="ระบุชื่อหรืออีเมล..."
+                      value={searchTerm}
+                      onChange={(e) => handleSearchUsers(e.target.value)}
+                      className="h-9 rounded-xl bg-slate-50 border-none pl-11 pr-4 text-xs font-bold focus:ring-2 focus:ring-slate-300"
+                    />
                   </div>
-                )}
-                {searchTerm.length < 2 && (
-                  <div className="py-12 text-center opacity-20">
-                    <Search size={32} className="mx-auto mb-2" />
-                    <p className="text-[10px] font-black uppercase tracking-widest">พิมพ์เพื่อเริ่มต้นค้นหา</p>
+                </div>
+
+                {/* Search Results */}
+                <div className="rounded-xl bg-slate-50/50 p-3">
+                  <div className="space-y-2 max-h-[340px] overflow-y-auto scrollbar-hide pr-1">
+                    {searchResults.map((user) => (
+                      <button
+                        key={user.id}
+                        type="button"
+                        onClick={() => selectUser(user)}
+                        className="w-full p-3 rounded-xl bg-white border border-slate-100 hover:bg-slate-50 hover:border-slate-200 hover:shadow-sm transition-all text-left flex items-center gap-3 group"
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all overflow-hidden shadow-sm border border-slate-100">
+                          {user.photoURL ? (
+                            <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <UserCheck size={18} />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-slate-800 truncate">{user.name}</p>
+                          <p className="text-[12px] font-medium text-slate-400 truncate tracking-tight">{user.email}</p>
+                        </div>
+                      </button>
+                    ))}
+                    {searchResults.length === 0 && searchTerm.length >= 2 && (
+                      <div className="py-12 text-center">
+                        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">ไม่พบข้อมูล</p>
+                      </div>
+                    )}
+                    {searchTerm.length < 2 && (
+                      <div className="py-12 text-center opacity-25">
+                        <Search size={32} className="mx-auto mb-2" />
+                        <p className="text-[10px] font-black uppercase tracking-widest">พิมพ์เพื่อค้นหา</p>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    </FormModal>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

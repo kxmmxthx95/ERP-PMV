@@ -43,6 +43,7 @@ export interface ExamRoomSettings {
   gradeBookScoreType?: GradeScoreType; // ส่งเป็นคะแนนประเภทไหน
   // การตั้งค่าการเก็บคะแนน
   scoreCollectionEnabled?: boolean;      // เปิด/ปิด การนำคะแนนไปใช้ใน grade book
+  scoreCollectionLinked?: boolean;       // false = ยกเลิกการเชื่อมต่อแล้ว แต่ยังแสดงการ์ดใน Grade Book
   scoreCollectionType?: ScoreCollectionType; // ประเภทการเก็บคะแนน
   scoreCollectionMaxScore?: number;      // คะแนนเต็ม
 }
@@ -57,6 +58,7 @@ export interface ExamRoom {
   className?: string;
   teacherId: string;
   teacherName: string;
+  teacherPhotoURL?: string;
   academicYearId: string;
   departmentId: string;
   gradeLevel?: string;
@@ -85,6 +87,8 @@ export interface ExamRoom {
     // Cart-mode support: map each selected question to its source set
     // so we can restore question content across multiple sets after reload.
     questionSetByQuestionId?: Record<string, string>;
+    /** Per-question point values for this round (questionId → points). */
+    questionPoints?: Record<string, number>;
     totalPoints: number;
   }>;
 }
@@ -99,10 +103,21 @@ export interface ExamAttempt {
   answers: Record<string, string>; // questionId → selectedOptionId
   suspiciousActivities: number; // tab switch count
   score: number | null; // null until graded
+  /** คะแนนเต็มเฉพาะข้อที่ตรวจอัตโนมัติได้ (ปรนัย + อัตนัยที่มีเฉลย) */
+  objectiveMaxPoints?: number | null;
+  /** มีข้ออัตนัยที่รอครูตรวจ */
+  pendingManualGrading?: boolean;
+  manualEssayCount?: number;
+  /** คะแนนข้อปรนัย (ก่อนรวมข้ออัตนัยที่ครูให้) */
+  objectiveScore?: number | null;
+  /** คะแนนข้ออัตนัยที่ครูให้แล้ว (questionId → คะแนน) */
+  manualScores?: Record<string, number>;
   startedAt: number;
   submittedAt: number | null;
   lastSavedAt: number;
 }
 
 // Client-safe question (no correctOptionId)
-export type ExamQuestionPublic = Omit<ExamQuestion, 'correctOptionId'>;
+export type ExamQuestionPublic = Omit<ExamQuestion, 'correctOptionId'> & {
+  questionType?: 'multiple_choice' | 'essay';
+};

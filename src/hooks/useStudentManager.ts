@@ -1,6 +1,19 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { collection, addDoc, updateDoc, deleteDoc, doc, writeBatch, query, where, getDocs } from 'firebase/firestore';
+import { useState, useMemo, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { collection, addDoc, updateDoc, deleteDoc, doc, writeBatch, query, where, getDocs, arrayRemove } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import {
+  getClassesByYearStore,
+  getEnrollmentsByYearStore,
+  getStudentsByYearStore,
+  invalidateStudentSummaryCache,
+} from '@/lib/firestoreShared/studentSummaryStore';
+import {
+  buildResolveStudentsCacheKey,
+  resolveStudentsForYear,
+} from '@/lib/students/resolveStudentsForYear';
+import { resolveStudentClassDisplayName } from '@/lib/students/classRoster';
+import { isStudyingStudent } from '@/lib/students/studentStatus';
+import { isFemaleStudent, isMaleStudent } from '@/lib/students/studentGender';
 import type {
   Student, NewStudent, Enrollment, NewEnrollment, StudentCard, StudentStatus,
 } from '@/types/student';
@@ -23,12 +36,41 @@ const GRADE_ORDER: Record<string, string[]> = {
   secondary: ['ม.1', 'ม.2', 'ม.3', 'ม.4', 'ม.5', 'ม.6'],
 };
 
+function normalizeEnrollmentYear(e: Enrollment, fallbackYear: string): Enrollment {
+  const row = e as Enrollment & { academicYear?: string };
+  const year = String(row.academicYearId ?? row.academicYear ?? fallbackYear);
+  return { ...e, academicYearId: year };
+}
+
+function enrollmentMatchesYear(e: Enrollment, yearId: string): boolean {
+  const row = e as Enrollment & { academicYear?: string };
+  return String(row.academicYearId ?? row.academicYear ?? '') === String(yearId);
+}
+
+const noopSubscribe = () => () => {};
+const readySnapshot = () => true;
+const getEmptyRowsSnapshot = <T,>(): T => [] as T;
+
+function useSharedStoreRows<T>(
+  store: {
+    subscribe: (listener: () => void) => () => void;
+    getSnapshot: () => T;
+    getReady: () => boolean;
+  } | null,
+) {
+  const subscribe = store?.subscribe ?? noopSubscribe;
+  const getSnapshot = store ? store.getSnapshot : getEmptyRowsSnapshot<T>;
+  const getReady = store ? store.getReady : readySnapshot;
+  const rows = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const ready = useSyncExternalStore(subscribe, getReady, getReady);
+  return { rows, ready };
+}
+
 // ── Hook ───────────────────────────────────────────────────────────────────────
 
 export function useStudentManager(defaultYear?: string) {
   const [students, setStudents] = useState<Student[]>([]);
-  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
-  const [classrooms, setClassrooms] = useState<any[]>([]);
+  const [resolvingStudents, setResolvingStudents] = useState(false);
 
   const [filter, setFilter] = useState<StudentFilter>({
     academicYearId: defaultYear ?? '2568',
@@ -39,8 +81,6 @@ export function useStudentManager(defaultYear?: string) {
     status: '',
   });
 
-  const dataLoadedRef = useRef(false);
-
   // อัปเดตปีการศึกษาเมื่อ defaultYear (จากระบบ) เปลี่ยนแปลง
   useEffect(() => {
     if (defaultYear) {
@@ -48,45 +88,62 @@ export function useStudentManager(defaultYear?: string) {
     }
   }, [defaultYear]);
 
-  // ── Load data on-demand with academicYearId filter ──────────────────────────────
-  const loadData = useCallback(async (academicYearId: string) => {
-    if (dataLoadedRef.current) return;
+  const yearId = filter.academicYearId;
+  const enrollmentStore = useMemo(() => getEnrollmentsByYearStore(yearId), [yearId]);
+  const classStore = useMemo(() => getClassesByYearStore(yearId), [yearId]);
+  const studentsStore = useMemo(() => getStudentsByYearStore(yearId), [yearId]);
 
-    try {
-      // Load enrollments filtered by academicYearId
-      const enrollmentsQuery = query(
-        collection(db, 'enrollments'),
-        where('academicYearId', '==', academicYearId)
-      );
-      const enrollmentsSnap = await getDocs(enrollmentsQuery);
-      const enrollmentsData = enrollmentsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Enrollment));
-      setEnrollments(enrollmentsData);
+  const { rows: enrollmentRows, ready: enrollmentsReady } = useSharedStoreRows(enrollmentStore);
+  const { rows: classRows, ready: classesReady } = useSharedStoreRows(classStore);
+  const { rows: yearStudents, ready: yearStudentsReady } = useSharedStoreRows(studentsStore);
 
-      // Load classes filtered by academicYearId
-      const classesQuery = query(
-        collection(db, 'classes'),
-        where('academicYearId', '==', academicYearId)
-      );
-      const classesSnap = await getDocs(classesQuery);
-      const classesData = classesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setClassrooms(classesData);
+  const enrollments = useMemo(
+    () => enrollmentRows.map((row) => normalizeEnrollmentYear(row as Enrollment, yearId)),
+    [enrollmentRows, yearId],
+  );
+  const classrooms = classRows;
 
-      // Load all students (no filter needed — used for enrollment lookup)
-      const studentsSnap = await getDocs(collection(db, 'students'));
-      const studentsData = studentsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
-      setStudents(studentsData);
+  const resolveCacheKey = useMemo(
+    () => buildResolveStudentsCacheKey(yearId, enrollmentRows, classRows, yearStudents),
+    [yearId, enrollmentRows, classRows, yearStudents],
+  );
 
-      dataLoadedRef.current = true;
-    } catch (err) {
-      console.error('[useStudentManager] Error loading data:', err);
-    }
-  }, []);
-
-  // Load data when academicYearId changes
   useEffect(() => {
-    dataLoadedRef.current = false;
-    loadData(filter.academicYearId);
-  }, [filter.academicYearId, loadData]);
+    if (!enrollmentsReady || !classesReady || !yearStudentsReady) {
+      setResolvingStudents(true);
+      return;
+    }
+
+    let cancelled = false;
+    setResolvingStudents(true);
+
+    void resolveStudentsForYear(yearId, enrollmentRows, classRows, yearStudents)
+      .then((merged) => {
+        if (cancelled) return;
+        setStudents(merged as Student[]);
+      })
+      .catch((err) => {
+        console.error('[useStudentManager] resolveStudentsForYear failed:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setResolvingStudents(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    resolveCacheKey,
+    yearId,
+    enrollmentRows,
+    classRows,
+    yearStudents,
+    enrollmentsReady,
+    classesReady,
+    yearStudentsReady,
+  ]);
+
+  const isDataLoaded = enrollmentsReady && classesReady && yearStudentsReady && !resolvingStudents;
 
   // ── CRUD — Students ──────────────────────────────────────────────────────────
 
@@ -156,19 +213,26 @@ export function useStudentManager(defaultYear?: string) {
       }
     }
 
-    await deleteDoc(doc(db, 'students', id));
-    setStudents(prev => prev.filter(s => s.id !== id));
+    const classesWithStudent = getClassesByYearStore(yearId)
+      .getSnapshot()
+      .filter((c) => (c.studentIds ?? []).includes(id));
+
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'students', id));
 
     const relatedEnrollments = enrollments.filter(e => e.studentId === id);
-    if (relatedEnrollments.length > 0) {
-      const batch = writeBatch(db);
-      relatedEnrollments.forEach(e => {
-        batch.delete(doc(db, 'enrollments', e.id));
-      });
-      await batch.commit();
-      setEnrollments(prev => prev.filter(e => e.studentId !== id));
-    }
-  }, [students, enrollments]);
+    relatedEnrollments.forEach(e => {
+      batch.delete(doc(db, 'enrollments', e.id!));
+    });
+
+    classesWithStudent.forEach((c) => {
+      batch.update(doc(db, 'classes', c.id), { studentIds: arrayRemove(id) });
+    });
+
+    await batch.commit();
+    setStudents(prev => prev.filter(s => s.id !== id));
+    await invalidateStudentSummaryCache(yearId);
+  }, [students, enrollments, yearId]);
 
   const toggleStudentStatus = useCallback(async (id: string) => {
     const student = students.find(s => s.id === id);
@@ -191,9 +255,6 @@ export function useStudentManager(defaultYear?: string) {
     );
     if (existing) {
       await updateDoc(doc(db, 'enrollments', existing.id), data as any);
-      setEnrollments(prev =>
-        prev.map(e => e.id === existing.id ? { ...e, ...data } : e)
-      );
       return { ...existing, ...data } as Enrollment;
     }
     const newEnrollmentData = {
@@ -201,16 +262,11 @@ export function useStudentManager(defaultYear?: string) {
       enrolledAt: new Date().toISOString().slice(0, 10),
     };
     const docRef = await addDoc(collection(db, 'enrollments'), newEnrollmentData);
-    const newEnrollment = { id: docRef.id, ...newEnrollmentData } as Enrollment;
-    setEnrollments(prev => [...prev, newEnrollment]);
-    return newEnrollment;
+    return { id: docRef.id, ...newEnrollmentData } as Enrollment;
   }, [enrollments]);
 
   const updateEnrollment = useCallback(async (id: string, data: Partial<Enrollment>) => {
     await updateDoc(doc(db, 'enrollments', id), data as any);
-    setEnrollments(prev =>
-      prev.map(e => e.id === id ? { ...e, ...data } : e)
-    );
   }, []);
 
   // ── Derived — Filtered Students ───────────────────────────────────────────────
@@ -218,14 +274,13 @@ export function useStudentManager(defaultYear?: string) {
   // หา enrollment ของนักเรียนในปี/ภาคเรียนที่ filter
   const getEnrollment = (studentId: string): Enrollment | null =>
     enrollments.find(
-      e => e.studentId === studentId &&
-        e.academicYearId === filter.academicYearId
+      (e) => e.studentId === studentId && enrollmentMatchesYear(e, filter.academicYearId),
     ) ?? null;
 
   const filteredStudentCards = useMemo((): StudentCard[] => {
     // 1. กรอง Enrollments ตามปี, แผนก, ชั้น, ห้อง
-    const matchingEnrollments = enrollments.filter(e => {
-      if (e.academicYearId !== filter.academicYearId) return false;
+    const matchingEnrollments = enrollments.filter((e) => {
+      if (!enrollmentMatchesYear(e, filter.academicYearId)) return false;
       if (filter.gradeLevel && e.gradeLevel !== filter.gradeLevel) return false;
       if (filter.classId && e.classId !== filter.classId) return false;
       
@@ -278,6 +333,8 @@ export function useStudentManager(defaultYear?: string) {
 
     return baseStudents
       .filter(s => {
+        // นักเรียนที่จบการศึกษาหรือย้ายออกแล้ว ไม่แสดงในรายชื่อ
+        if (!isStudyingStudent(s)) return false;
         if (filter.status && s.status !== filter.status) return false;
         if (filter.searchText) {
           const q = filter.searchText.toLowerCase();
@@ -289,49 +346,94 @@ export function useStudentManager(defaultYear?: string) {
       })
       .map(s => {
         const enrollment = getEnrollment(s.id);
-        const sData = s as any;
+        const sData = s as Student & {
+          className?: string;
+          classroomId?: string;
+          classId?: string;
+          gradeLevel?: string;
+          roomNumber?: string;
+        };
         return {
           student: s,
           enrollment,
-          currentClass: enrollment?.className || sData.className || null,
+          currentClass: resolveStudentClassDisplayName(
+            sData,
+            enrollment,
+            classrooms,
+            filter.academicYearId,
+          ),
           currentGrade: enrollment?.gradeLevel || sData.gradeLevel || null,
         };
       })
       .sort((a, b) => {
         const codeA = a.student.studentCode || '';
         const codeB = b.student.studentCode || '';
-        // เรียงตามรหัส (ตัวเลข)
         return codeA.localeCompare(codeB, undefined, { numeric: true });
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [students, enrollments, filter]);
+  }, [students, enrollments, classrooms, filter]);
+
+  const visibleStudentCards = useMemo((): StudentCard[] => {
+    const hasExtraFilters = !!(filter.searchText || filter.status || filter.department || filter.gradeLevel || filter.classId);
+    if (filteredStudentCards.length > 0 || hasExtraFilters || students.length === 0) {
+      return filteredStudentCards;
+    }
+    // ปีการศึกษาไม่ตรงกับ enrollment — แสดงนักเรียนทั้งหมด (sysadmin/admin ยังเห็นข้อมูล)
+    return students
+      .filter((s) => isStudyingStudent(s))
+      .map((s) => {
+        const sData = s as Student & {
+          className?: string;
+          classroomId?: string;
+          classId?: string;
+          gradeLevel?: string;
+          roomNumber?: string;
+        };
+        const enrollment = getEnrollment(s.id);
+        return {
+          student: s,
+          enrollment,
+          currentClass: resolveStudentClassDisplayName(
+            sData,
+            enrollment,
+            classrooms,
+            filter.academicYearId,
+          ),
+          currentGrade: enrollment?.gradeLevel || sData.gradeLevel || null,
+        };
+      })
+      .sort((a, b) => (a.student.studentCode || '').localeCompare(b.student.studentCode || '', undefined, { numeric: true }));
+  }, [filteredStudentCards, filter, students, enrollments, classrooms]);
 
   // ── Derived — Available grades & classes for filter dropdowns ─────────────────
 
   const availableGradeLevels = useMemo((): string[] => {
-    const yearEnrollments = enrollments.filter(
-      e => e.academicYearId === filter.academicYearId
+    const yearEnrollments = enrollments.filter((e) =>
+      enrollmentMatchesYear(e, filter.academicYearId),
     );
     return [...new Set(yearEnrollments.map(e => e.gradeLevel))].sort();
   }, [enrollments, filter.academicYearId]);
 
   const availableClasses = useMemo((): Array<{ classId: string; className: string }> => {
-    const yearClasses = classrooms.filter(
-      c => c.academicYearId === filter.academicYearId &&
-        (filter.gradeLevel ? c.gradeLevel === filter.gradeLevel : true)
-    );
-    return yearClasses.map(c => ({ classId: c.id, className: c.className }))
+    const yearClasses = classrooms.filter((c) => {
+      const sameYear =
+        String(c.academicYearId) === String(filter.academicYearId) ||
+        String(c.academicYear) === String(filter.academicYearId);
+      return sameYear && (filter.gradeLevel ? c.gradeLevel === filter.gradeLevel : true);
+    });
+    return yearClasses
+      .map((c) => ({ classId: c.id, className: String(c.className ?? '') }))
       .sort((a, b) => a.className.localeCompare(b.className, 'th'));
   }, [classrooms, filter.academicYearId, filter.gradeLevel]);
 
   // ── Stats ────────────────────────────────────────────────────────────────────
 
   const stats = useMemo(() => {
-    const active = filteredStudentCards.filter(c => c.student.status === 'active').length;
-    const male = filteredStudentCards.filter(c => c.student.gender === 'male').length;
-    const female = filteredStudentCards.filter(c => c.student.gender === 'female').length;
-    return { total: filteredStudentCards.length, active, male, female };
-  }, [filteredStudentCards]);
+    const active = visibleStudentCards.filter(c => c.student.status === 'active').length;
+    const male = visibleStudentCards.filter(c => isMaleStudent(c.student)).length;
+    const female = visibleStudentCards.filter(c => isFemaleStudent(c.student)).length;
+    return { total: visibleStudentCards.length, active, male, female };
+  }, [visibleStudentCards]);
 
   // ── Queries ──────────────────────────────────────────────────────────────────
 
@@ -345,8 +447,9 @@ export function useStudentManager(defaultYear?: string) {
     // Data
     students,
     enrollments,
-    filteredStudentCards,
+    filteredStudentCards: visibleStudentCards,
     stats,
+    isDataLoaded,
 
     // Filter
     filter,

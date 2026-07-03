@@ -1,16 +1,20 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Users,
-  Layout,
-  RotateCcw,
-} from 'lucide-react';
+  HiChevronLeft,
+  HiHome,
+  HiAcademicCap,
+  HiCalendar,
+  HiCalendarDays,
+} from 'react-icons/hi2';
 import { createPortal } from 'react-dom';
 import { useScheduleManager } from './hooks/useScheduleManager';
+import { buildJointClassInfo } from './utils/jointClass';
 import { ClassView } from './views/ClassView';
 import { TeacherView } from './views/TeacherView';
 import ScheduleSlotModal from './components/ScheduleSlotModal';
 import ScheduleSettingsModal from './components/ScheduleSettingsModal';
+import ScheduleTeacherSyncButton from './components/ScheduleTeacherSyncButton';
 import type { Subject } from '@/types/curriculum';
 import {
   Carousel,
@@ -19,13 +23,6 @@ import {
   CarouselNext,
   CarouselPrevious,
 } from '@/components/ui/carousel';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 
 type ScheduleSubjectCard = Pick<Subject, 'id' | 'code' | 'name' | 'credits' | 'hoursPerWeek' | 'subjectGroup' | 'category'> & {
   semester?: number;
@@ -35,8 +32,8 @@ type ScheduleSubjectCard = Pick<Subject, 'id' | 'code' | 'name' | 'credits' | 'h
 };
 
 const VIEW_TABS = [
-  { id: 'class', label: 'รายห้อง', icon: Layout },
-  { id: 'teacher', label: 'รายครู', icon: Users },
+  { id: 'class', label: 'รายห้อง', icon: HiHome },
+  { id: 'teacher', label: 'รายครู', icon: HiAcademicCap },
 ] as const;
 
 const DEPT_OPTIONS = [
@@ -79,18 +76,22 @@ export default function ScheduleEditor() {
     teachers,
     filteredClasses,
     availableGrades,
-    exportRef
+    exportRef,
+    pendingTeacherSync,
+    isSyncingTeachers,
+    syncTeachersFromClassManagement,
   } = useScheduleManager();
   // Portals
-  const [filtersTarget, setFiltersTarget] = useState<HTMLElement | null>(null);
   const [rightTarget, setRightTarget] = useState<HTMLElement | null>(null);
+  const [headerFiltersPortalEl, setHeaderFiltersPortalEl] = useState<HTMLElement | null>(null);
+  const [headerCenterMobilePortalEl, setHeaderCenterMobilePortalEl] = useState<HTMLElement | null>(null);
+  const [mobileActionsPortalEl, setMobileActionsPortalEl] = useState<HTMLElement | null>(null);
 
   React.useEffect(() => {
-    setFiltersTarget(
-      document.getElementById('header-portal-center')
-      || document.getElementById('header-portal-filters')
-    );
     setRightTarget(document.getElementById('header-portal-right-actions'));
+    setHeaderFiltersPortalEl(document.getElementById('header-portal-filters'));
+    setHeaderCenterMobilePortalEl(document.getElementById('header-portal-center-mobile'));
+    setMobileActionsPortalEl(document.getElementById('header-portal-mobile-actions'));
   }, []);
 
   const filteredGrades = useMemo(() => {
@@ -146,16 +147,32 @@ export default function ScheduleEditor() {
 
     return excessIds;
   }, [allEntries, availableSubjects, selectedClassId, semester, viewMode, year]);
+
+  const { entryIds: jointClassEntryIds, partnersByEntryId: jointClassPartnersByEntryId } = useMemo(
+    () => buildJointClassInfo(allEntries),
+    [allEntries],
+  );
   
   const handleDeleteEntry = async (id: string) => {
+    // In edit mode: delete immediately (handles both temp and Firebase IDs)
+    if (isEditMode) {
+      await deleteEntry(id);
+      return;
+    }
+
+    // In view mode: look up entry for confirmation and joint-class checks
     const entry = allEntries.find(e => e.id === id);
     if (!entry) return;
 
+    if (!window.confirm('ต้องการลบคาบเรียนนี้ใช่หรือไม่?')) {
+      return;
+    }
+
     // Check for joint classes: same teacher, day, period but different class
-    const jointEntries = allEntries.filter(e => 
-      e.id !== id && 
-      e.day === entry.day && 
-      e.period === entry.period && 
+    const jointEntries = allEntries.filter(e =>
+      e.id !== id &&
+      e.day === entry.day &&
+      e.period === entry.period &&
       e.teacherId === entry.teacherId
     );
 
@@ -166,18 +183,15 @@ export default function ScheduleEditor() {
         `กด "ยกเลิก" เพื่อลบเฉพาะห้องนี้`
       );
       if (choice) {
-        await deleteEntriesInSlot(entry.day, entry.period, { 
+        await deleteEntriesInSlot(entry.day, entry.period, {
           teacherId: entry.teacherId,
-          classId: undefined // delete all classes in this slot for this teacher
+          classId: undefined
         });
         return;
       }
     }
 
-    // Regular single deletion
-    if (window.confirm('ต้องการลบคาบเรียนนี้ใช่หรือไม่?')) {
-      await deleteEntry(id);
-    }
+    await deleteEntry(id);
   };
 
   const headerTeachers = useMemo(
@@ -192,39 +206,168 @@ export default function ScheduleEditor() {
     [filteredClasses],
   );
 
-  const classSearchReady = filterDept !== 'all' && filterGrade !== 'all' && Boolean(selectedClassId);
-  const teacherSearchReady = Boolean(selectedTeacherId);
+  const syncDisabled = viewMode !== 'class' || !selectedClassId;
+  const syncDisabledReason = viewMode !== 'class'
+    ? 'ใช้ได้ในโหมดรายห้อง'
+    : !selectedClassId
+      ? 'เลือกห้องเรียนก่อน'
+      : undefined;
+  const selectedClassLabel = roomOptions.find((room) => room.id === selectedClassId)?.label;
+
+  useEffect(() => {
+    if (viewMode !== 'class') return;
+    if (filterDept === 'all' || filterGrade === 'all') return;
+    if (roomOptions.length === 0) {
+      if (selectedClassId) setSelectedClassId('');
+      return;
+    }
+    const stillValid = roomOptions.some((room) => room.id === selectedClassId);
+    if (!stillValid) setSelectedClassId(roomOptions[0].id);
+  }, [viewMode, filterDept, filterGrade, roomOptions, selectedClassId, setSelectedClassId]);
+
+  const tabLongPressRef = useRef<number | null>(null);
+  const tabLongPressFiredRef = useRef(false);
+
+  const clearTabLongPress = () => {
+    if (tabLongPressRef.current) {
+      window.clearTimeout(tabLongPressRef.current);
+      tabLongPressRef.current = null;
+    }
+  };
+
+  const mobileViewModeSwitcher = (
+    <div className="grid grid-cols-2 gap-1 rounded-xl bg-black/[0.04] p-1">
+      {VIEW_TABS.map((m) => {
+        const Icon = m.icon;
+        const active = viewMode === m.id;
+        return (
+          <button
+            key={m.id}
+            onTouchStart={() => {
+              tabLongPressFiredRef.current = false;
+              clearTabLongPress();
+              tabLongPressRef.current = window.setTimeout(() => {
+                tabLongPressFiredRef.current = true;
+                setViewMode(m.id);
+                setIsEditMode(true);
+                if (navigator.vibrate) navigator.vibrate(40);
+                clearTabLongPress();
+              }, 500);
+            }}
+            onTouchEnd={() => {
+              clearTabLongPress();
+              if (!tabLongPressFiredRef.current) {
+                // Normal tap: if already in edit mode → exit, else switch tab
+                if (isEditMode) {
+                  setIsEditMode(false);
+                } else {
+                  setViewMode(m.id);
+                }
+              }
+              tabLongPressFiredRef.current = false;
+            }}
+            onTouchCancel={clearTabLongPress}
+            onClick={() => {
+              // Desktop fallback (no touch events)
+              if (isEditMode) {
+                setIsEditMode(false);
+              } else {
+                setViewMode(m.id);
+              }
+            }}
+            className={`h-9 rounded-lg text-[11px] font-black transition-all flex items-center justify-center gap-1.5 select-none ${
+              isEditMode && active
+                ? 'bg-rose-600 text-white shadow-sm'
+                : active
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-black/55 hover:bg-white/50'
+            }`}
+          >
+            <Icon className="w-4 h-4" />
+            <span>{m.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div ref={exportRef} className="flex flex-col h-full text-black font-sukhumvit">
+      {headerFiltersPortalEl && createPortal(
+        <div className="hidden md:flex items-center gap-1.5 h-11 p-1 rounded-full bg-white/60 backdrop-blur-xl border border-white shadow-[0_8px_32px_rgba(0,0,0,0.04)] pointer-events-auto">
+          <AnimatePresence mode="wait">
+            {viewMode === 'class' && filterDept !== 'all' && filterGrade !== 'all' ? (
+              <motion.div key="room-mode-desktop" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} className="flex items-center gap-1">
+                <button onClick={() => setFilterGrade('all')} className="w-9 h-9 flex items-center justify-center rounded-full text-slate-500 hover:text-slate-800 hover:bg-black/5 transition-all">
+                  <HiChevronLeft size={16} />
+                </button>
+                <span className="text-[10px] font-black text-slate-400 px-1">{filterGrade}</span>
+                <div className="w-px h-4 bg-black/10" />
+                {roomOptions.map((room) => (
+                  <button key={room.id} onClick={() => setSelectedClassId(room.id)} className={`h-9 px-4 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${selectedClassId === room.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'}`}>{room.label || room.className}</button>
+                ))}
+              </motion.div>
+            ) : viewMode === 'class' && filterDept !== 'all' ? (
+              <motion.div key="grade-mode-desktop" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} className="flex items-center gap-1">
+                <button onClick={() => { setFilterDept('all'); setFilterGrade('all'); }} className="w-9 h-9 flex items-center justify-center rounded-full text-slate-500 hover:text-slate-800 hover:bg-black/5 transition-all">
+                  <HiChevronLeft size={16} />
+                </button>
+                {filteredGrades.map((grade) => (
+                  <button key={grade} onClick={() => setFilterGrade(grade)} className={`h-9 px-4 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${filterGrade === grade ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'}`}>{grade}</button>
+                ))}
+              </motion.div>
+            ) : (
+              <motion.div key="dept-mode-desktop" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }} className="flex items-center gap-1">
+                {DEPT_OPTIONS.filter((opt) => opt.id !== 'all').map((opt) => {
+                  const active = filterDept === opt.id;
+                  return (
+                    <button key={opt.id} onClick={() => { setFilterDept(opt.id as 'all' | 'early' | 'primary' | 'secondary'); if (viewMode === 'class') setFilterGrade('all'); }} className={`h-9 px-6 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${active ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'}`}>{opt.label}</button>
+                  );
+                })}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>,
+        headerFiltersPortalEl!
+      )}
 
-      {/* Portal: Mobile View Mode Switcher (Icons only) */}
-      {rightTarget && createPortal(
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="flex md:hidden items-center h-9 border border-black/[0.07] p-0.5 rounded-full bg-white shadow-sm"
-        >
-          {VIEW_TABS.map(m => {
-            const Icon = m.icon;
-            const active = viewMode === m.id;
-            return (
-              <button
-                key={m.id}
-                onClick={() => setViewMode(m.id)}
-                className={`h-8 w-8 flex items-center justify-center rounded-full transition-all ${
-                  active
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-black/35 hover:text-black/60'
-                }`}
-                title={m.label}
-              >
-                <Icon size={14} />
-              </button>
-            );
-          })}
-        </motion.div>,
-        rightTarget!
+      {headerCenterMobilePortalEl && createPortal(
+        <div className="md:hidden pointer-events-auto flex items-center gap-1.5">
+          <HiCalendarDays className="w-4 h-4 text-slate-500 shrink-0" />
+          <span className="text-[13px] font-black text-slate-800 tracking-tight leading-none whitespace-nowrap">
+            ตารางเรียน
+          </span>
+          {viewMode === 'class' && selectedClassId && (
+            <>
+              <span className="text-slate-300 text-xs">·</span>
+              <span className="text-[11px] font-black text-blue-600 whitespace-nowrap">
+                {selectedClassLabel ?? ''}
+              </span>
+            </>
+          )}
+          {viewMode === 'teacher' && selectedTeacherId && (
+            <>
+              <span className="text-slate-300 text-xs">·</span>
+              <span className="text-[11px] font-black text-blue-600 whitespace-nowrap truncate max-w-[100px]">
+                {teachers.find(t => t.id === selectedTeacherId)?.name ?? ''}
+              </span>
+            </>
+          )}
+        </div>,
+        headerCenterMobilePortalEl!
+      )}
+
+      {mobileActionsPortalEl && createPortal(
+        <ScheduleTeacherSyncButton
+          pendingUpdates={pendingTeacherSync}
+          isSyncing={isSyncingTeachers}
+          onSync={syncTeachersFromClassManagement}
+          classLabel={selectedClassLabel}
+          iconOnly
+          disabled={syncDisabled}
+          disabledReason={syncDisabledReason}
+        />,
+        mobileActionsPortalEl,
       )}
 
       {/* Portal: View Mode Switcher */}
@@ -232,39 +375,57 @@ export default function ScheduleEditor() {
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="hidden md:flex items-center h-9 border border-black/[0.07] p-1 rounded-full bg-white/50 backdrop-blur-md"
+          className="hidden md:flex items-center h-10 border border-black/[0.07] p-1 rounded-full bg-white/50 backdrop-blur-md gap-0.5"
         >
-          {VIEW_TABS.map(m => (
-            <button
-              key={m.id}
-              onClick={() => setViewMode(m.id)}
-              className={`flex items-center justify-center h-full px-5 rounded-full text-[10.5px] font-black transition-all whitespace-nowrap ${viewMode === m.id
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-black/35 hover:text-black/60 hover:bg-black/[0.02]'
-                }`}
-            >
-              <span>{m.label}</span>
-            </button>
-          ))}
+          {VIEW_TABS.map(m => {
+            const Icon = m.icon;
+            return (
+              <button
+                key={m.id}
+                onClick={() => setViewMode(m.id)}
+                className={`flex items-center justify-center h-8 w-9 rounded-full transition-all ${viewMode === m.id
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-black/35 hover:text-black/60 hover:bg-black/[0.02]'
+                  }`}
+                title={m.label}
+              >
+                <Icon className="w-4 h-4" />
+              </button>
+            );
+          })}
 
           <div className="w-[1px] h-4 bg-black/[0.07] mx-1" />
 
           <div className="flex items-center gap-0.5">
-            {[1, 2].map(s => (
-              <button
-                key={s}
-                onClick={() => setSemester(s as 1 | 2)}
-                className={`h-7 px-3 rounded-full text-[10px] font-black transition-all ${semester === s
-                    ? 'bg-blue-600 text-white'
-                    : 'text-black/35 hover:bg-black/5'
-                  }`}
-              >
-                ภาค {s}
-              </button>
-            ))}
+            {[1, 2].map(s => {
+              const Icon = s === 1 ? HiCalendar : HiCalendarDays;
+              return (
+                <button
+                  key={s}
+                  onClick={() => setSemester(s as 1 | 2)}
+                  className={`h-8 px-2.5 rounded-full text-[10px] font-black transition-all flex items-center gap-1 ${semester === s
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-black/35 hover:bg-slate-200/50'
+                    }`}
+                  title={`ภาคเรียนที่ ${s}`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{s}</span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="w-[1px] h-4 bg-black/[0.07] mx-1" />
+
+          <ScheduleTeacherSyncButton
+            pendingUpdates={pendingTeacherSync}
+            isSyncing={isSyncingTeachers}
+            onSync={syncTeachersFromClassManagement}
+            classLabel={selectedClassLabel}
+            disabled={syncDisabled}
+            disabledReason={syncDisabledReason}
+          />
 
           <ScheduleSettingsModal 
             targetId={viewMode === 'teacher' ? selectedTeacherId : selectedClassId} 
@@ -273,183 +434,17 @@ export default function ScheduleEditor() {
         rightTarget!
       )}
 
-      {/* Portal: Filters (same style as Attendance) */}
-      {filtersTarget && (viewMode === 'class' || viewMode === 'teacher') && createPortal(
-        <div className="hidden md:flex w-full items-center justify-center gap-2.5">
-            <Select
-              value={filterDept}
-              onValueChange={(val) => {
-                setFilterDept(val as 'all' | 'early' | 'primary' | 'secondary');
-                if (viewMode === 'class') setFilterGrade('all');
-              }}
-            >
-              <SelectTrigger className="h-9 min-w-[110px] rounded-full border border-black/[0.05] bg-white/40 px-3 text-[10px] font-black backdrop-blur-md shadow-sm transition-all hover:bg-white/60">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-black/30 uppercase tracking-tighter">แผนก</span>
-                  <SelectValue placeholder="แผนก" />
-                </div>
-              </SelectTrigger>
-              <SelectContent>
-                {DEPT_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.id} value={opt.id}>{opt.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {viewMode === 'class' && filterDept !== 'all' && (
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
-                <Select value={filterGrade === 'all' ? undefined : filterGrade} onValueChange={setFilterGrade}>
-                  <SelectTrigger className="h-9 min-w-[90px] rounded-full border border-black/[0.05] bg-white/40 px-3 text-[10px] font-black backdrop-blur-md shadow-sm transition-all hover:bg-white/60">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-black/30 uppercase tracking-tighter">ชั้น</span>
-                      <SelectValue placeholder="ชั้น" />
-                    </div>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {filteredGrades.map((grade) => (
-                      <SelectItem key={grade} value={grade}>{grade}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </motion.div>
-            )}
-
-            {viewMode === 'class' && filterDept !== 'all' && filterGrade !== 'all' && (
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
-                <Select value={selectedClassId || undefined} onValueChange={setSelectedClassId}>
-                  <SelectTrigger className="h-9 min-w-[110px] rounded-full border border-black/[0.05] bg-white/40 px-3 text-[10px] font-black backdrop-blur-md shadow-sm transition-all hover:bg-white/60">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-black/30 uppercase tracking-tighter">ห้อง</span>
-                      <SelectValue placeholder="ห้อง" />
-                    </div>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {roomOptions.map((room) => (
-                      <SelectItem key={room.id} value={room.id}>
-                        {room.className || room.roomNumber}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </motion.div>
-            )}
-
-
-        </div>,
-        filtersTarget,
-      )}
+      {/* Legacy inline class/room filters removed per new capsule flow */}
 
 
 
       {/* ── Main Layout ── */}
       <div className="flex flex-1 min-h-0">
         <div className="flex-1 min-w-0 overflow-auto px-3 md:px-6 scrollbar-hide">
-          <div className="md:hidden sticky top-0 z-20 -mx-3 px-3 py-2 bg-white/75 backdrop-blur-md">
-            <div className="rounded-2xl border border-black/[0.06] bg-white/85 p-2.5 shadow-sm">
-              <div className="mb-2 flex w-full gap-1">
-                {DEPT_OPTIONS.map((opt) => {
-                  const active = filterDept === opt.id;
-                  return (
-                    <button
-                      key={opt.id}
-                      onClick={() => {
-                        setFilterDept(opt.id as 'all' | 'early' | 'primary' | 'secondary');
-                        if (viewMode === 'class') setFilterGrade('all');
-                      }}
-                      className={`h-8 flex-1 rounded-lg px-3 text-[10px] font-black transition-all ${
-                        active
-                          ? 'bg-blue-600 text-white shadow-sm'
-                          : 'bg-black/[0.04] text-black/55'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  );
-                })}
-              </div>
+          {/* Mobile: Class room picker (sticky below header) removed as it is handled by the capsule filter */}
 
-              {viewMode === 'class' && (
-                <div className="flex gap-2 w-full">
-                  {filterDept !== 'all' && (
-                    <div className="flex-1 min-w-0">
-                      <Select value={filterGrade === 'all' ? undefined : filterGrade} onValueChange={setFilterGrade}>
-                        <SelectTrigger className="h-10 w-full rounded-xl border-black/[0.07] bg-white text-xs font-bold text-black/70">
-                          <SelectValue placeholder="เลือกระดับชั้น" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {filteredGrades.map((grade) => (
-                            <SelectItem key={grade} value={grade}>{grade}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-
-                  {filterDept !== 'all' && filterGrade !== 'all' && (
-                    <div className="flex-1 min-w-0">
-                      <Select value={selectedClassId || undefined} onValueChange={setSelectedClassId}>
-                        <SelectTrigger className="h-10 w-full rounded-xl border-black/[0.07] bg-white text-xs font-bold text-black/70">
-                          <SelectValue placeholder="เลือกห้องเรียน" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {roomOptions.map((room) => (
-                            <SelectItem key={room.id} value={room.id}>
-                              {room.className || room.roomNumber}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-
-                  {filterDept !== 'all' && (
-                    <button
-                      onClick={() => {
-                        setFilterDept('all');
-                        setFilterGrade('all');
-                        setSelectedClassId('');
-                      }}
-                      className="h-10 w-10 flex items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-600 transition-all hover:bg-red-100 active:scale-95 shrink-0"
-                    >
-                      <RotateCcw size={16} />
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {viewMode === 'teacher' && (
-                <div className="flex gap-2 w-full">
-                  <div className="flex-1 min-w-0">
-                    <Select value={selectedTeacherId || undefined} onValueChange={setSelectedTeacherId}>
-                      <SelectTrigger className="h-10 w-full rounded-xl border-black/[0.07] bg-white text-xs font-bold text-black/70">
-                        <SelectValue placeholder="เลือกครูผู้สอน" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {headerTeachers.map((teacher) => (
-                          <SelectItem key={teacher.id} value={teacher.id}>
-                            {teacher.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {selectedTeacherId && (
-                    <button
-                      onClick={() => {
-                        setSelectedTeacherId('');
-                      }}
-                      className="h-10 w-10 flex items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-600 transition-all hover:bg-red-100 active:scale-95 shrink-0"
-                    >
-                      <RotateCcw size={16} />
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {viewMode === 'teacher' && filterDept !== 'all' && headerTeachers.length > 0 && (
-            <div className="hidden md:block mb-3 mt-1 rounded-2xl border border-black/[0.06] bg-white/80 p-2.5 shadow-sm backdrop-blur-md">
+          {viewMode === 'teacher' && headerTeachers.length > 0 && (
+            <div className="hidden md:block mb-3 mt-1 overflow-hidden rounded-2xl border border-white/70 bg-white/80 p-2.5 shadow-[0_8px_24px_rgba(15,23,42,0.07)] backdrop-blur-xl">
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-[10px] font-black uppercase tracking-widest text-black/40">รายชื่อครู</p>
                 <span className="rounded-full border border-black/[0.08] bg-black/[0.03] px-2 py-0.5 text-[9px] font-black text-black/45">
@@ -480,8 +475,8 @@ export default function ScheduleEditor() {
                     );
                   })}
                 </CarouselContent>
-                <CarouselPrevious className="-left-0.5 top-1/2 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/90 text-black/55 hover:bg-white" />
-                <CarouselNext className="-right-0.5 top-1/2 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/90 text-black/55 hover:bg-white" />
+                <CarouselPrevious className="left-1 top-1/2 z-10 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/90 text-black/55 shadow-sm hover:bg-white" />
+                <CarouselNext className="right-1 top-1/2 z-10 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/90 text-black/55 shadow-sm hover:bg-white" />
               </Carousel>
             </div>
           )}
@@ -495,59 +490,50 @@ export default function ScheduleEditor() {
               transition={{ duration: 0.18 }}
             >
               {viewMode === 'class' && (
-                classSearchReady ? (
-                  <ClassView
-                    grid={grid}
-                    selectedClassId={selectedClassId}
-                    isEditMode={isEditMode}
-                    setIsEditMode={setIsEditMode}
-                    openSlotModal={openSlotModal}
-                    deleteEntry={handleDeleteEntry}
-                    moveEntry={moveEntry}
-                    onDropSubject={handleSubjectDrop}
-                    allClasses={classes}
-                    teachers={teachers}
-                    excessEntryIds={excessEntryIds}
-                    draggableSubjects={availableSubjects}
-                  />
-                ) : (
-                  <div className="flex h-[55vh] items-center justify-center rounded-2xl border border-dashed border-black/10 bg-white/40 text-center">
-                    <div className="px-6">
-                      <p className="text-[13px] font-black text-black/70">ยังไม่แสดงตาราง</p>
-                      <p className="mt-1 text-[11px] font-medium text-black/45">
-                        กรุณาเลือกแผนก ชั้น และห้องเรียนเพื่อค้นหา
-                      </p>
-                    </div>
-                  </div>
-                )
+                <ClassView
+                  grid={grid}
+                  selectedClassId={selectedClassId}
+                  setSelectedClassId={setSelectedClassId}
+                  filterDept={filterDept}
+                  setFilterDept={setFilterDept}
+                  filterGrade={filterGrade}
+                  setFilterGrade={setFilterGrade}
+                  filteredClasses={filteredClasses}
+                  isEditMode={isEditMode}
+                  setIsEditMode={setIsEditMode}
+                  openSlotModal={openSlotModal}
+                  deleteEntry={handleDeleteEntry}
+                  moveEntry={moveEntry}
+                  onDropSubject={handleSubjectDrop}
+                  allClasses={classes}
+                  teachers={teachers}
+                  excessEntryIds={excessEntryIds}
+                  draggableSubjects={availableSubjects}
+                  mobileHeaderContent={mobileViewModeSwitcher}
+                  jointClassEntryIds={jointClassEntryIds}
+                  jointClassPartnersByEntryId={jointClassPartnersByEntryId}
+                />
               )}
               {viewMode === 'teacher' && (
-                teacherSearchReady ? (
-                  <TeacherView
-                    selectedTeacherId={selectedTeacherId}
-                    isEditMode={isEditMode}
-                    setIsEditMode={setIsEditMode}
-                    grid={grid}
-                    openSlotModal={openSlotModal}
-                    deleteEntry={handleDeleteEntry}
-                    moveEntry={moveEntry}
-                    handleSubjectDrop={handleSubjectDrop}
-                    teachers={teachers}
-                    allClasses={classes}
-                    draggableSubjects={availableSubjects}
-                  />
-                ) : (
-                  <div className="flex h-[55vh] items-center justify-center rounded-2xl border border-dashed border-black/10 bg-white/40 text-center">
-                    <div className="px-6">
-                      <p className="text-[13px] font-black text-black/70">ยังไม่แสดงตาราง</p>
-                      <p className="mt-1 text-[11px] font-medium text-black/45">
-                        {filterDept === 'all'
-                          ? 'กรุณาเลือกแผนกเพื่อค้นหาครู'
-                          : 'กรุณาเลือกครูเพื่อค้นหาตารางสอน'}
-                      </p>
-                    </div>
-                  </div>
-                )
+                <TeacherView
+                  selectedTeacherId={selectedTeacherId}
+                  setSelectedTeacherId={setSelectedTeacherId}
+                  filterDept={filterDept}
+                  setFilterDept={setFilterDept}
+                  isEditMode={isEditMode}
+                  setIsEditMode={setIsEditMode}
+                  grid={grid}
+                  openSlotModal={openSlotModal}
+                  deleteEntry={handleDeleteEntry}
+                  moveEntry={moveEntry}
+                  handleSubjectDrop={handleSubjectDrop}
+                  teachers={teachers}
+                  allClasses={classes}
+                  draggableSubjects={availableSubjects}
+                  mobileHeaderContent={mobileViewModeSwitcher}
+                  jointClassEntryIds={jointClassEntryIds}
+                  jointClassPartnersByEntryId={jointClassPartnersByEntryId}
+                />
               )}
             </motion.div>
           </AnimatePresence>

@@ -1,7 +1,24 @@
 {
-  "firestore": {
-    "rules": "src/firestore.rules",
-    "indexes": "firestore.indexes.json"
+  "database": [
+    {
+      "instance": "pmv1-90180-default-rtdb",
+      "rules": "database.rules.json"
+    }
+  ],
+  "firestore": [
+    {
+      "database": "(default)",
+      "rules": "src/firestore.rules",
+      "indexes": "firestore.indexes.json"
+    },
+    {
+      "database": "pmv1",
+      "rules": "src/firestore.rules",
+      "indexes": "firestore.indexes.json"
+    }
+  ],
+  "storage": {
+    "rules": "storage.rules"
   },
  "functions": {
     "source": "src/functions",
@@ -21,6 +38,27 @@
         "source": "/lineWebhook",
         "function": {
           "functionId": "lineWebhookV2",
+          "region": "asia-southeast1"
+        }
+      },
+      {
+        "source": "/api/horoscope",
+        "function": {
+          "functionId": "horoscopeDaily",
+          "region": "asia-southeast1"
+        }
+      },
+      {
+        "source": "/api/exam-pdf",
+        "function": {
+          "functionId": "examPdfBytes",
+          "region": "asia-southeast1"
+        }
+      },
+      {
+        "source": "/api/device-fingerprint",
+        "function": {
+          "functionId": "deviceFingerprintAttendance",
           "region": "asia-southeast1"
         }
       },

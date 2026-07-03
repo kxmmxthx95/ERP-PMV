@@ -1,32 +1,42 @@
 // src/features/leave/LeaveManagementPage.tsx
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import LeaveHeaderTabs from './components/LeaveHeaderTabs';
 import {
   ClipboardList, Plus, Check, X, Clock, FileText,
-  ChevronDown, User, Calendar, Save, AlertCircle, SlidersHorizontal,
-  CheckCircle2, XCircle
+  ChevronLeft, ChevronRight, Save, AlertCircle, SlidersHorizontal,
+  CheckCircle2, XCircle,
 } from 'lucide-react';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/hooks/useAuth';
 import {
   useMyLeaveRequests,
-  useApproverLeaveRequests,
-  useAllLeaveRequests,
+  useLeaveRequestsSince,
   useStudentLeaveRequests,
   countDays,
   formatDate,
+  getEarliestLeaveStartDate,
+  isSameDayLeaveCutoffPassed,
+  LEAVE_SAME_DAY_CUTOFF_MESSAGE,
+  validateLeaveSubmissionDates,
 } from '@/hooks/useLeaveRequests';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import type { LeaveRequest, LeaveType, LeaveStatus } from '@/types/leave';
 import { cn } from '@/lib/utils';
 import FormModal, { modalInputCls, modalLabelCls } from '@/components/ui/FormModal';
 import { db } from '@/lib/firebase';
+import LeavePageTabMenu, { type LeavePageTab } from '@/features/leave/components/LeavePageTabMenu';
+import { useLeaveRequesterClassMap, type LeaveRequesterProfile } from '@/features/leave/hooks/useLeaveRequesterClassMap';
+import { getInitials } from '@/features/profile/profileLayoutShared';
+import { getGradeLevelBadgeStyle } from '@/lib/school/gradeLevelBadge';
+import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
 
-type Tab = 'students' | 'my' | 'approve' | 'settings' | 'staff';
 type StatusFilter = 'all' | LeaveStatus;
+
+function defaultAcademicYearStart() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+}
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const LEAVE_TYPE_LABEL: Record<LeaveType, string> = {
@@ -40,14 +50,154 @@ const STATUS_CONFIG: Record<LeaveStatus, { label: string; bg: string; border: st
   rejected: { label: 'ไม่อนุมัติ', bg: 'bg-rose-50', border: 'border-rose-100', text: 'text-rose-700', icon: X },
 };
 
+const LEAVE_REQUESTS_PER_PAGE = 8;
+
+const LEAVE_CARD_OUTER = 'px-0.5 py-0.5';
+const LEAVE_CARD_SHELL =
+  'rounded-2xl bg-white/90 p-3 shadow-sm cursor-pointer transition-all hover:bg-white';
+
+function formatLeaveDateCompact(startDate: string, endDate: string): string {
+  if (startDate === endDate) return formatDate(startDate);
+  const start = new Date(startDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+  return `${start} – ${formatDate(endDate)}`;
+}
+
+function parseLeaveTimestamp(ts: LeaveRequest['createdAt'] | undefined): Date | null {
+  if (!ts) return null;
+  if (typeof ts === 'object' && 'toDate' in ts && typeof ts.toDate === 'function') {
+    return ts.toDate();
+  }
+  if (typeof ts === 'object' && 'toMillis' in ts && typeof ts.toMillis === 'function') {
+    return new Date(ts.toMillis());
+  }
+  if (typeof ts === 'object' && 'seconds' in ts) {
+    return new Date((ts as { seconds: number }).seconds * 1000);
+  }
+  return null;
+}
+
+function formatLeaveSubmittedAt(ts: LeaveRequest['createdAt'] | undefined): string {
+  const date = parseLeaveTimestamp(ts);
+  if (!date || Number.isNaN(date.getTime())) return '—';
+  return `${date.toLocaleString('th-TH', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })} น.`;
+}
+
+function resolveLeaveApproverLabels(
+  req: LeaveRequest,
+  profile?: LeaveRequesterProfile | null,
+): string[] {
+  if (req.status !== 'pending' && req.approverName?.trim()) {
+    return [req.approverName.trim()];
+  }
+  if (profile?.approverNames?.length) {
+    return profile.approverNames;
+  }
+  if (req.approverName?.trim()) {
+    return [req.approverName.trim()];
+  }
+  return [];
+}
+
 // ── Status Badge ─────────────────────────────────────────────────────────────
-function StatusBadge({ status }: { status: LeaveStatus }) {
-  const c = STATUS_CONFIG[status];
-  const Icon = c.icon;
+function LeaveListPagination({
+  page,
+  totalPages,
+  totalItems,
+  rangeStart,
+  rangeEnd,
+  itemLabel,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  rangeStart: number;
+  rangeEnd: number;
+  itemLabel: string;
+  onPageChange: (page: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+
   return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${c.bg} ${c.text} border ${c.border}`}>
-      <Icon size={10} />
+    <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
+      <p className="text-[11px] font-semibold text-slate-400">
+        แสดง {rangeStart}–{rangeEnd} จาก {totalItems} {itemLabel}
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={page === 1}
+          onClick={() => onPageChange(Math.max(page - 1, 1))}
+          className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-4 py-1.5 text-[11px] font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+          ก่อนหน้า
+        </button>
+        <span className="px-2 text-[11px] font-medium text-slate-400">
+          {page} / {totalPages}
+        </span>
+        <button
+          type="button"
+          disabled={page === totalPages}
+          onClick={() => onPageChange(Math.min(page + 1, totalPages))}
+          className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-4 py-1.5 text-[11px] font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          ถัดไป
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: LeaveStatus }) {
+  const c = STATUS_CONFIG[status];
+  return (
+    <span className={cn(
+      'inline-flex min-w-8 items-center justify-center rounded-lg px-2 py-0.5 text-[11px] font-black',
+      c.bg,
+      c.text,
+    )}>
       {c.label}
+    </span>
+  );
+}
+
+function DepartmentBadge({ departmentId }: { departmentId: Department }) {
+  const cfg = DEPARTMENT_CONFIG[departmentId];
+  return (
+    <span
+      className="inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-black"
+      style={{
+        color: cfg.color,
+        background: cfg.bg,
+        border: `1px solid ${cfg.border}`,
+      }}
+    >
+      {cfg.label}
+    </span>
+  );
+}
+
+function GradeLevelBadge({ gradeLevel }: { gradeLevel: string }) {
+  const style = getGradeLevelBadgeStyle(gradeLevel);
+  return (
+    <span
+      className="inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-black"
+      style={{
+        color: style.color,
+        backgroundColor: style.bg,
+        border: `1px solid ${style.border}`,
+      }}
+    >
+      {gradeLevel}
     </span>
   );
 }
@@ -56,97 +206,158 @@ function LeaveCard({
   req,
   showApprover = false,
   showRequester = false,
+  requesterProfile,
   onApprove,
   onReject,
 }: {
   req: LeaveRequest;
   showApprover?: boolean;
   showRequester?: boolean;
-  onApprove?: (id: string) => void;
+  requesterProfile?: LeaveRequesterProfile | null;
+  onApprove?: (id: string) => Promise<void>;
   onReject?: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const days = countDays(req.startDate, req.endDate);
-  const statusCfg = STATUS_CONFIG[req.status];
+  const displayName = req.requesterName?.trim() || '—';
+  const dateLabel = formatLeaveDateCompact(req.startDate, req.endDate);
+  const submittedAtLabel = formatLeaveSubmittedAt(req.createdAt);
+  const showAvatar = showRequester || Boolean(req.requesterPhotoUrl || req.requesterName);
+  const approverLabels = resolveLeaveApproverLabels(req, requesterProfile);
+  const showApproverList = showRequester || showApprover;
 
   return (
-    <motion.div
-      layout
-      className={cn(
-        "group relative rounded-[2.5rem] p-7 cursor-pointer transition-all border-2 bg-white/90 backdrop-blur-md hover:bg-white hover:border-slate-200",
-        expanded ? "border-blue-300 ring-4 ring-blue-50/50 bg-white" : "border-slate-100"
-      )}
-      onClick={() => setExpanded(v => !v)}
-    >
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
-        <div className="flex items-center gap-5">
-          <div className={cn(
-            "w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 border-2 transition-transform duration-300 group-hover:scale-105 overflow-hidden",
-            statusCfg.bg, statusCfg.border, statusCfg.text
-          )}>
-            {req.requesterPhotoUrl ? (
-              <img src={req.requesterPhotoUrl} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <IconForType type={req.leaveType} />
+    <motion.div layout className={LEAVE_CARD_OUTER}>
+      <div
+        className={cn(LEAVE_CARD_SHELL, expanded && 'ring-2 ring-blue-100')}
+        onClick={() => setExpanded(v => !v)}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-1 items-start gap-2.5">
+            {showAvatar && (
+              req.requesterPhotoUrl ? (
+                <img
+                  src={req.requesterPhotoUrl}
+                  alt=""
+                  className="h-10 w-10 shrink-0 rounded-xl object-cover"
+                />
+              ) : (
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 text-[11px] font-black text-slate-600">
+                  {getInitials(displayName)}
+                </div>
+              )
             )}
-          </div>
 
-          <div className="min-w-0">
-            <div className="flex items-center gap-3 mb-1.5">
-              <h3 className="font-black text-slate-800 text-base tracking-tight">
-                {LEAVE_TYPE_LABEL[req.leaveType]}
-              </h3>
-              <StatusBadge status={req.status} />
-            </div>
+            <div className="min-w-0 flex-1">
+              <p
+                className="truncate text-[13px] font-bold text-slate-800"
+                title={showRequester ? displayName : LEAVE_TYPE_LABEL[req.leaveType]}
+              >
+                {showRequester ? displayName : LEAVE_TYPE_LABEL[req.leaveType]}
+              </p>
 
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-              {showRequester && (
-                <p className="text-xs font-bold text-slate-500 flex items-center gap-2">
-                  <div className="w-5 h-5 rounded-full bg-slate-100 flex items-center justify-center">
-                    <User size={10} className="text-slate-400" />
-                  </div>
-                  {req.requesterName}
+              {showRequester && req.requesterStudentCode && (
+                <p className="mt-0.5 text-[11px] font-medium text-blue-600 tabular-nums">
+                  รหัส {req.requesterStudentCode}
                 </p>
               )}
-              <p className="text-xs font-bold text-slate-500 flex items-center gap-2">
-                <div className="w-5 h-5 rounded-full bg-slate-100 flex items-center justify-center">
-                  <Calendar size={10} className="text-slate-400" />
+
+              {showRequester && requesterProfile && (requesterProfile.departmentId || requesterProfile.gradeLevel) && (
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  {requesterProfile.departmentId && (
+                    <DepartmentBadge departmentId={requesterProfile.departmentId} />
+                  )}
+                  {requesterProfile.gradeLevel && (
+                    <GradeLevelBadge gradeLevel={requesterProfile.gradeLevel} />
+                  )}
                 </div>
-                {formatDate(req.startDate)}
-                {req.startDate !== req.endDate && ` – ${formatDate(req.endDate)}`}
-                <span className="text-blue-600 font-black ml-1">({days} วัน)</span>
-              </p>
+              )}
             </div>
+          </div>
+
+          <div className="shrink-0 text-center">
+            <p className="mb-0.5 text-[9px] font-black uppercase tracking-wide text-slate-400">
+              สถานะ
+            </p>
+            <StatusPill status={req.status} />
           </div>
         </div>
 
-        <div className="flex items-center justify-between sm:justify-end gap-4 border-t sm:border-0 pt-4 sm:pt-0">
-          <div className="flex items-center gap-2">
-            {req.status === 'pending' && onApprove && onReject && (
-              <>
-                <button
-                  onClick={e => { e.stopPropagation(); onApprove(req.id); }}
-                  className="h-10 px-5 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 hover:bg-emerald-600 hover:text-white transition-all text-xs font-black shadow-sm"
-                >
-                  อนุมัติ
-                </button>
-                <button
-                  onClick={e => { e.stopPropagation(); onReject(req.id); }}
-                  className="h-10 px-5 rounded-2xl bg-rose-50 text-rose-600 border border-rose-100 hover:bg-rose-600 hover:text-white transition-all text-xs font-black shadow-sm"
-                >
-                  ปฏิเสธ
-                </button>
-              </>
-            )}
+        <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-slate-100 pt-2.5">
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+              ประเภท
+            </p>
+            <p className="mt-0.5 text-[11px] font-bold text-slate-700">
+              {LEAVE_TYPE_LABEL[req.leaveType]}
+            </p>
           </div>
-          <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center transition-all group-hover:bg-slate-100 ring-1 ring-slate-100">
-            <ChevronDown
-              size={16}
-              className={cn("text-slate-400 transition-transform duration-500 ease-out", expanded && "rotate-180 text-blue-500")}
-            />
+
+          <div className="text-center">
+            <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+              ยื่นคำขอ
+            </p>
+            <p
+              className="mt-0.5 text-[10px] font-bold leading-tight text-slate-600 tabular-nums"
+              title={submittedAtLabel}
+            >
+              {submittedAtLabel}
+            </p>
+          </div>
+
+          <div className="text-right">
+            <p className="mb-0.5 text-[9px] font-black uppercase tracking-wide text-slate-400">
+              วันที่ลา
+            </p>
+            <span
+              className="inline-flex max-w-[11rem] items-center justify-center rounded-lg bg-blue-50 px-2 py-0.5 text-[11px] font-black text-blue-700 sm:max-w-none"
+              title={dateLabel}
+            >
+              <span className="truncate">{dateLabel}</span>
+              <span className="ml-1 shrink-0 text-blue-500">({days} วัน)</span>
+            </span>
           </div>
         </div>
-      </div>
+
+        {showApproverList && approverLabels.length > 0 && (
+          <div className="mt-2.5 border-t border-slate-100 pt-2.5">
+            <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+              ผู้อนุมัติ
+            </p>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {approverLabels.map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-bold text-violet-700"
+                >
+                  {name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {req.status === 'pending' && onApprove && onReject && (
+          <div
+            className="mt-2.5 flex items-center justify-end gap-1.5 border-t border-slate-100 pt-2.5"
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={async () => { await onApprove(req.id); }}
+              className="inline-flex h-7 items-center justify-center rounded-lg bg-emerald-50 px-3 text-[11px] font-black text-emerald-700 transition-all hover:bg-emerald-100"
+            >
+              อนุมัติ
+            </button>
+            <button
+              type="button"
+              onClick={() => onReject(req.id)}
+              className="inline-flex h-7 items-center justify-center rounded-lg bg-rose-50 px-3 text-[11px] font-black text-rose-700 transition-all hover:bg-rose-100"
+            >
+              ปฏิเสธ
+            </button>
+          </div>
+        )}
 
       <AnimatePresence>
         {expanded && (
@@ -154,13 +365,13 @@ function LeaveCard({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
+            transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
             className="overflow-hidden"
           >
-            <div className="mt-6 pt-6 border-t border-slate-100 space-y-6">
+            <div className="mt-2.5 space-y-4 border-t border-slate-100 pt-2.5">
               <div className="space-y-2.5">
                 <label className={modalLabelCls}>เหตุผลการลา</label>
-                <p className="text-sm font-bold text-slate-600 leading-relaxed bg-slate-50/50 p-5 rounded-[1.5rem] border border-slate-100">
+                <p className="text-sm font-bold text-slate-600 leading-relaxed bg-slate-50/50 p-4 rounded-xl border border-slate-100">
                   {req.reason || '—'}
                 </p>
               </div>
@@ -192,7 +403,7 @@ function LeaveCard({
                     target="_blank"
                     rel="noreferrer"
                     onClick={e => e.stopPropagation()}
-                    className="flex items-center gap-2.5 h-11 px-5 rounded-2xl bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-600 hover:text-white transition-all text-xs font-black shadow-sm"
+                    className="flex items-center gap-2.5 h-11 px-5 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-600 hover:text-white transition-all text-xs font-black shadow-sm"
                   >
                     <FileText size={16} /> ดูเอกสารแนบ
                   </a>
@@ -202,13 +413,9 @@ function LeaveCard({
           </motion.div>
         )}
       </AnimatePresence>
+      </div>
     </motion.div>
   );
-}
-
-function IconForType({ type }: { type: LeaveType }) {
-  if (type === 'sick') return <Clock size={20} />;
-  return <User size={20} />;
 }
 
 // ── Submit Modal ─────────────────────────────────────────────────────────────
@@ -219,19 +426,28 @@ function SubmitModal({
   onClose: () => void;
   onSubmit: (data: { leaveType: LeaveType; startDate: string; endDate: string; reason: string }) => Promise<void>;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const earliestStartDate = getEarliestLeaveStartDate();
   const [leaveType, setLeaveType] = useState<LeaveType>('sick');
-  const [startDate, setStartDate] = useState(today);
-  const [endDate, setEndDate] = useState(today);
+  const [startDate, setStartDate] = useState(earliestStartDate);
+  const [endDate, setEndDate] = useState(earliestStartDate);
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
     if (!reason.trim()) return;
+    const validationError = validateLeaveSubmissionDates(startDate, endDate);
+    if (validationError) {
+      setSubmitError(validationError);
+      return;
+    }
+    setSubmitError(null);
     setSaving(true);
     try {
       await onSubmit({ leaveType, startDate, endDate, reason: reason.trim() });
       onClose();
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'ไม่สามารถส่งคำขอได้ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setSaving(false);
     }
@@ -244,10 +460,22 @@ function SubmitModal({
       title="ยื่นคำขอลาใหม่"
       onSubmit={handleSubmit}
       submitLabel={saving ? 'กำลังส่ง...' : 'ยืนยันยื่นคำขอ'}
-      submitDisabled={saving || !reason.trim()}
+      submitDisabled={saving || !reason.trim() || !!validateLeaveSubmissionDates(startDate, endDate)}
       maxWidth="md"
     >
       <div className="space-y-6 py-2">
+        {isSameDayLeaveCutoffPassed() && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+            {LEAVE_SAME_DAY_CUTOFF_MESSAGE}
+          </div>
+        )}
+
+        {submitError && (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-bold text-rose-600">
+            {submitError}
+          </div>
+        )}
+
         {/* Leave type */}
         <div className="space-y-3">
           <label className={modalLabelCls}>ประเภทการลา <span className="text-rose-500">*</span></label>
@@ -276,8 +504,9 @@ function SubmitModal({
             <input
               type="date"
               value={startDate}
-              min={today}
+              min={earliestStartDate}
               onChange={e => {
+                setSubmitError(null);
                 setStartDate(e.target.value);
                 if (e.target.value > endDate) setEndDate(e.target.value);
               }}
@@ -290,7 +519,10 @@ function SubmitModal({
               type="date"
               value={endDate}
               min={startDate}
-              onChange={e => setEndDate(e.target.value)}
+              onChange={e => {
+                setSubmitError(null);
+                setEndDate(e.target.value);
+              }}
               className={modalInputCls}
             />
           </div>
@@ -363,8 +595,7 @@ function RejectModal({
   );
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────────────
-
+// ── Type Definitions ─────────────────────────────────────────────────────────
 type LeaveQuotaSettings = {
   staffSickDays: number;
   staffPersonalDays: number;
@@ -408,6 +639,14 @@ const formatAcademicDate = (date: string): string => {
   return dt.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
+function getLeaveRequestSortTime(req: LeaveRequest): number {
+  return parseLeaveTimestamp(req.createdAt)?.getTime() ?? new Date(req.startDate).getTime();
+}
+
+function sortLeaveRequestsByNewest(requests: LeaveRequest[]): LeaveRequest[] {
+  return [...requests].sort((a, b) => getLeaveRequestSortTime(b) - getLeaveRequestSortTime(a));
+}
+
 // ── Main Page ────────────────────────────────────────────────────────────────
 export default function LeaveManagementPage() {
   const { user, userData, role } = useAuth();
@@ -418,38 +657,391 @@ export default function LeaveManagementPage() {
 
   const isTeacher = role === 'teacher';
   const isAdmin = role === 'admin' || role === 'sysadmin';
-
   const requesterType = (role === 'student') ? 'student' : 'staff';
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const currentView = searchParams.get('view');
-  const action = searchParams.get('action');
-
-  const [tab, setTab] = useState<Tab>(
-    isAdmin ? 'staff' : (isTeacher ? 'students' : 'my')
-  );
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
-
-  useEffect(() => {
-    if (currentView === 'settings' && isAdmin) {
-      setTab('settings');
-    } else if (tab === 'settings' && currentView !== 'settings') {
-      setTab(isTeacher ? 'students' : (isAdmin ? 'approve' : 'my'));
-    }
-  }, [currentView, isAdmin, isTeacher, tab]);
-
+  const action = new URLSearchParams(window.location.search).get('action');
+  const [pageTab, setPageTab] = useState<LeavePageTab>(isAdmin || isTeacher ? 'team' : 'my');
   const [showSubmit, setShowSubmit] = useState(false);
 
   useEffect(() => {
-    if (action === 'new') {
-      setShowSubmit(true);
-      // Clear the param so it doesn't reopen on refresh or tab switch if not intended
-      const newParams = new URLSearchParams(searchParams);
-      newParams.delete('action');
-      setSearchParams(newParams, { replace: true });
-    }
-  }, [action, searchParams, setSearchParams]);
+    if (action === 'new') setShowSubmit(true);
+  }, [action]);
+
+  const tabs: { key: LeavePageTab; label: string }[] = isAdmin
+    ? [
+        { key: 'my', label: 'คำขอของฉัน' },
+        { key: 'team', label: 'ภาพรวมทีม' },
+        { key: 'report', label: 'รายงาน' },
+        { key: 'settings', label: 'ตั้งค่า' },
+      ]
+    : [
+        { key: 'my', label: 'คำขอของฉัน' },
+        { key: 'team', label: isTeacher ? 'การลานักเรียน' : 'ทีมงาน' },
+      ];
+
+  return (
+    <div className="flex flex-1 flex-col min-h-0 gap-5 pb-28">
+      <LeavePageTabMenu tabs={tabs} pageTab={pageTab} onTabChange={setPageTab} />
+
+      <AnimatePresence mode="wait">
+        {pageTab === 'my' && (
+          <motion.div key="my" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}>
+            <MyLeavePanel displayName={displayName} photoUrl={photoUrl} uid={uid} requesterType={requesterType} userData={userData} showSubmit={showSubmit} setShowSubmit={setShowSubmit} />
+          </motion.div>
+        )}
+        {pageTab === 'team' && (
+          <motion.div key="team" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
+            <TeamLeavePanel isTeacher={isTeacher} />
+          </motion.div>
+        )}
+        {pageTab === 'report' && isAdmin && (
+          <motion.div key="report" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+            <ReportPanel />
+          </motion.div>
+        )}
+        {pageTab === 'settings' && isAdmin && (
+          <motion.div key="settings" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+            <SettingsPanel activeAcademicYear={activeAcademicYear} activeYear={activeYear} uid={uid} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── My Leave Panel ───────────────────────────────────────────────────────────
+function MyLeavePanel({ displayName, photoUrl, uid, requesterType, userData, showSubmit, setShowSubmit }: {
+  displayName: string;
+  photoUrl: string | null;
+  uid: string;
+  requesterType: 'student' | 'staff';
+  userData: any;
+  showSubmit: boolean;
+  setShowSubmit: (v: boolean) => void;
+}) {
+  const { year } = useActiveAcademicYear();
+  const myHook = useMyLeaveRequests(uid, requesterType);
+  const requesterClassMap = useLeaveRequesterClassMap(
+    year,
+    requesterType === 'student' ? [uid] : [],
+  );
+  const activeRequests = useMemo(
+    () => sortLeaveRequestsByNewest(myHook.requests),
+    [myHook.requests],
+  );
+  const [page, setPage] = useState(1);
+
+  const totalPages = Math.max(1, Math.ceil(activeRequests.length / LEAVE_REQUESTS_PER_PAGE));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+
+  const paginatedRequests = useMemo(() => {
+    const start = (page - 1) * LEAVE_REQUESTS_PER_PAGE;
+    return activeRequests.slice(start, start + LEAVE_REQUESTS_PER_PAGE);
+  }, [activeRequests, page]);
+
+  const rangeStart = activeRequests.length === 0 ? 0 : (page - 1) * LEAVE_REQUESTS_PER_PAGE + 1;
+  const rangeEnd = Math.min(page * LEAVE_REQUESTS_PER_PAGE, activeRequests.length);
+
+  const [headerActionsPortalEl, setHeaderActionsPortalEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setHeaderActionsPortalEl(document.getElementById('header-portal-right-actions'));
+  }, []);
+
+  const handleSubmit = async (data: {
+    leaveType: LeaveType;
+    startDate: string;
+    endDate: string;
+    reason: string;
+  }) => {
+    const requesterStudentCode = typeof userData?.studentCode === 'string' ? userData.studentCode : null;
+    await myHook.submit(data, displayName, photoUrl, requesterStudentCode, '', '');
+  };
+
+  return (
+    <div className="flex flex-col gap-5">
+      {headerActionsPortalEl && createPortal(
+        <motion.button
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          onClick={() => setShowSubmit(true)}
+          className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700 transition-all active:scale-95"
+          title="ยื่นคำขอลาใหม่"
+        >
+          <Plus size={18} />
+        </motion.button>,
+        headerActionsPortalEl
+      )}
+
+      <div className="flex-1 w-full space-y-4 bg-white/90 backdrop-blur-xl rounded-[2.5rem] p-6 border-2 border-slate-100 min-h-0 overflow-y-auto">
+        <p className="text-sm font-black text-slate-800 uppercase tracking-tight mb-4">
+          {myHook.requests.length > 0 ? `คำขอของฉัน (${activeRequests.length})` : 'ไม่พบคำขอ'}
+        </p>
+        {myHook.loading ? (
+          <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
+            <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
+            <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
+          </div>
+        ) : activeRequests.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
+            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+              <ClipboardList size={32} className="text-slate-300" />
+            </div>
+            <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
+            <p className="text-xs font-bold text-slate-400 mt-1">
+              เมื่อมีการยื่นคำขอใหม่ รายการจะปรากฏขึ้นที่นี่
+            </p>
+          </div>
+        ) : (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-2.5">
+              {paginatedRequests.map(req => (
+                <LeaveCard
+                  key={req.id}
+                  req={req}
+                  showApprover={true}
+                  requesterProfile={requesterType === 'student' ? (requesterClassMap.get(uid) ?? null) : null}
+                />
+              ))}
+            </motion.div>
+            <LeaveListPagination
+              page={page}
+              totalPages={totalPages}
+              totalItems={activeRequests.length}
+              rangeStart={rangeStart}
+              rangeEnd={rangeEnd}
+              itemLabel="คำขอ"
+              onPageChange={setPage}
+            />
+          </>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {showSubmit && (
+          <SubmitModal
+            onClose={() => setShowSubmit(false)}
+            onSubmit={handleSubmit}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Team Leave Panel ─────────────────────────────────────────────────────────
+function TeamLeavePanelContent({
+  isTeacher,
+  requests,
+  loading,
+  updateStatus,
+}: {
+  isTeacher: boolean;
+  requests: LeaveRequest[];
+  loading: boolean;
+  updateStatus: (id: string, status: LeaveStatus, note?: string) => Promise<void>;
+}) {
+  const { year } = useActiveAcademicYear();
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(isTeacher ? 'pending' : 'all');
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+
+  const activeRequests = useMemo(() => {
+    const filtered = requests.filter((r) => {
+      if (statusFilter === 'all') return true;
+      return r.status === statusFilter;
+    });
+    return sortLeaveRequestsByNewest(filtered);
+  }, [requests, statusFilter]);
+
+  const requesterIds = useMemo(
+    () => activeRequests.map((r) => r.requesterId).filter(Boolean),
+    [activeRequests],
+  );
+  const requesterClassMap = useLeaveRequesterClassMap(year, requesterIds);
+
+  const totalPages = Math.max(1, Math.ceil(activeRequests.length / LEAVE_REQUESTS_PER_PAGE));
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+
+  const paginatedRequests = useMemo(() => {
+    const start = (page - 1) * LEAVE_REQUESTS_PER_PAGE;
+    return activeRequests.slice(start, start + LEAVE_REQUESTS_PER_PAGE);
+  }, [activeRequests, page]);
+
+  const rangeStart = activeRequests.length === 0 ? 0 : (page - 1) * LEAVE_REQUESTS_PER_PAGE + 1;
+  const rangeEnd = Math.min(page * LEAVE_REQUESTS_PER_PAGE, activeRequests.length);
+
+  const totalCount = requests.length;
+  const approvedCount = requests.filter(r => r.status === 'approved').length;
+  const pendingCount = requests.filter(r => r.status === 'pending').length;
+  const rejectedCount = requests.filter(r => r.status === 'rejected').length;
+
+  const handleApprove = async (id: string) => {
+    await updateStatus(id, 'approved');
+  };
+
+  const handleRejectConfirm = async (id: string, note: string) => {
+    await updateStatus(id, 'rejected', note);
+  };
+
+  return (
+    <div className="flex flex-col gap-5">
+      {/* Stat Cards */}
+      <div className="grid grid-cols-4 gap-2 md:gap-3">
+        {[
+          { label: 'คำขอทั้งหมด', value: totalCount, icon: ClipboardList, color: 'text-slate-600', status: 'all' as StatusFilter },
+          { label: 'อนุมัติ', value: approvedCount, icon: CheckCircle2, color: 'text-emerald-600', status: 'approved' as StatusFilter },
+          { label: 'รอพิจารณา', value: pendingCount, icon: Clock, color: 'text-amber-600', status: 'pending' as StatusFilter },
+          { label: 'ไม่อนุมัติ', value: rejectedCount, icon: XCircle, color: 'text-rose-600', status: 'rejected' as StatusFilter },
+        ].map((item) => {
+          const isActive = statusFilter === item.status;
+          return (
+            <button
+              key={item.label}
+              onClick={() => setStatusFilter(item.status)}
+              className={cn(
+                'group relative flex min-w-0 flex-col items-center rounded-xl border-2 p-2.5 text-center transition-all sm:rounded-2xl sm:p-5',
+                isActive
+                  ? 'border-blue-200 bg-white shadow-lg shadow-blue-500/5 ring-2 ring-blue-50/50 sm:ring-4'
+                  : 'border-slate-50 bg-white/50 hover:border-slate-200 hover:bg-white',
+              )}
+            >
+              <div
+                className={cn(
+                  'mb-1.5 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white shadow-sm ring-1 transition-transform group-hover:scale-110 sm:mb-3 sm:h-10 sm:w-10 sm:rounded-2xl',
+                  isActive ? 'ring-blue-100' : 'ring-slate-100',
+                  item.color,
+                )}
+              >
+                <item.icon className="h-4 w-4 sm:h-[18px] sm:w-[18px]" strokeWidth={2.5} />
+              </div>
+              <p className="truncate text-[8px] font-black uppercase tracking-wide text-slate-400 sm:text-[10px] sm:tracking-widest">
+                {item.label}
+              </p>
+              <p className={cn('mt-0.5 text-lg font-black tabular-nums sm:mt-1 sm:text-2xl', item.color)}>
+                {item.value}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex w-full flex-col gap-3 min-h-0">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
+            <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
+            <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
+          </div>
+        ) : activeRequests.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
+            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+              <ClipboardList size={32} className="text-slate-300" />
+            </div>
+            <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
+            <p className="text-xs font-bold text-slate-400 mt-1">
+              {isTeacher ? 'ยังไม่มีนักเรียนคนใดยื่นคำขอลา' : 'ยังไม่มีคำขอลาใด ๆ'}
+            </p>
+          </div>
+        ) : (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-2.5">
+              {paginatedRequests.map(req => (
+                <LeaveCard
+                  key={req.id}
+                  req={req}
+                  showRequester={true}
+                  requesterProfile={requesterClassMap.get(req.requesterId) ?? null}
+                  onApprove={handleApprove}
+                  onReject={id => setRejectTarget(id)}
+                />
+              ))}
+            </motion.div>
+            <LeaveListPagination
+              page={page}
+              totalPages={totalPages}
+              totalItems={activeRequests.length}
+              rangeStart={rangeStart}
+              rangeEnd={rangeEnd}
+              itemLabel="คำขอ"
+              onPageChange={setPage}
+            />
+          </>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {rejectTarget && (
+          <RejectModal
+            requestId={rejectTarget}
+            onClose={() => setRejectTarget(null)}
+            onConfirm={handleRejectConfirm}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function TeacherTeamLeavePanel() {
+  const { activeYear } = useActiveAcademicYear();
+  const sinceDate = activeYear?.startDate || defaultAcademicYearStart();
+  const { requests, loading, updateStatus } = useStudentLeaveRequests(sinceDate);
+  return (
+    <TeamLeavePanelContent
+      isTeacher
+      requests={requests}
+      loading={loading}
+      updateStatus={updateStatus}
+    />
+  );
+}
+
+function AdminTeamLeavePanel() {
+  const { activeYear } = useActiveAcademicYear();
+  const sinceDate = activeYear?.startDate || defaultAcademicYearStart();
+  const { requests, loading, updateStatus } = useLeaveRequestsSince(sinceDate);
+  return (
+    <TeamLeavePanelContent
+      isTeacher={false}
+      requests={requests}
+      loading={loading}
+      updateStatus={updateStatus}
+    />
+  );
+}
+
+function TeamLeavePanel({ isTeacher }: { isTeacher: boolean }) {
+  return isTeacher ? <TeacherTeamLeavePanel /> : <AdminTeamLeavePanel />;
+}
+
+// ── Report Panel ─────────────────────────────────────────────────────────────
+function ReportPanel() {
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex-1 w-full space-y-4 bg-white/90 backdrop-blur-xl rounded-[2.5rem] p-6 border-2 border-slate-100">
+        <p className="text-sm font-black text-slate-800 uppercase tracking-tight">รายงาน</p>
+        <p className="text-slate-500">ฟีเจอร์รายงานเร็ว ๆ นี้</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Settings Panel ───────────────────────────────────────────────────────────
+function SettingsPanel({ activeAcademicYear, activeYear, uid }: {
+  activeAcademicYear: string | number;
+  activeYear?: any;
+  uid: string;
+}) {
   const [quota, setQuota] = useState<LeaveQuotaSettings>(DEFAULT_LEAVE_QUOTA);
   const [quotaLoading, setQuotaLoading] = useState(true);
   const [quotaSaving, setQuotaSaving] = useState(false);
@@ -461,11 +1053,6 @@ export default function LeaveManagementPage() {
   const academicPeriodLabel = hasAcademicPeriod
     ? `${formatAcademicDate(academicYearStartDate)} – ${formatAcademicDate(academicYearEndDate)}`
     : 'ยังไม่กำหนดช่วงวันเริ่มต้น/สิ้นสุดปีการศึกษา';
-
-  const myHook = useMyLeaveRequests(uid, requesterType);
-  const approverHook = useApproverLeaveRequests(uid);
-  const adminHook = useAllLeaveRequests();
-  const studentHook = useStudentLeaveRequests();
 
   useEffect(() => {
     let mounted = true;
@@ -492,73 +1079,6 @@ export default function LeaveManagementPage() {
     void loadQuota();
     return () => { mounted = false; };
   }, [activeAcademicYear]);
-
-  const handleSubmit = async (data: {
-    leaveType: LeaveType;
-    startDate: string;
-    endDate: string;
-    reason: string;
-  }) => {
-    const requesterStudentCode =
-      typeof userData?.studentCode === 'string'
-        ? userData.studentCode
-        : null;
-    await myHook.submit(data, displayName, photoUrl, requesterStudentCode, '', '');
-  };
-
-  const handleApprove = async (id: string) => {
-    if (tab === 'students') await studentHook.updateStatus(id, 'approved');
-    else if (tab === 'approve') await approverHook.updateStatus(id, 'approved');
-    else await adminHook.updateStatus(id, 'approved');
-  };
-
-  const handleRejectConfirm = async (id: string, note: string) => {
-    if (tab === 'students') await studentHook.updateStatus(id, 'rejected', note);
-    else if (tab === 'approve') await approverHook.updateStatus(id, 'rejected', note);
-    else await adminHook.updateStatus(id, 'rejected', note);
-  };
-
-  // Stats
-  const myPending = myHook.requests.filter(r => r.status === 'pending').length;
-  const appPending = approverHook.requests.filter(r => r.status === 'pending').length;
-  const studentPending = studentHook.requests.filter(r => r.status === 'pending').length;
-
-  const tabs: { key: Tab; label: string; badge?: number; show: boolean }[] = [
-    { key: 'students', label: 'การลานักเรียน', badge: studentPending > 0 ? studentPending : undefined, show: isTeacher || isAdmin },
-    { key: 'staff', label: 'การลาพนักงาน', show: isAdmin },
-    { key: 'my', label: 'คำขอของฉัน', badge: myPending > 0 ? myPending : undefined, show: true },
-    { key: 'approve', label: 'รออนุมัติ', badge: appPending > 0 ? appPending : undefined, show: isAdmin && appPending > 0 },
-  ];
-  const visibleTabs = tabs.filter(t => t.show);
-
-  const allActiveRequests = useMemo(() => {
-    if (tab === 'students') return studentHook.requests;
-    if (tab === 'my') return myHook.requests;
-    if (tab === 'staff') return adminHook.requests.filter(r => r.requesterType !== 'student');
-    if (tab === 'approve') return approverHook.requests;
-    return adminHook.requests;
-  }, [tab, studentHook.requests, myHook.requests, adminHook.requests, approverHook.requests]);
-
-  const summary = useMemo(() => ({
-    total: allActiveRequests.length,
-    approved: allActiveRequests.filter(r => r.status === 'approved').length,
-    pending: allActiveRequests.filter(r => r.status === 'pending').length,
-    rejected: allActiveRequests.filter(r => r.status === 'rejected').length,
-  }), [allActiveRequests]);
-
-  const activeRequests = allActiveRequests.filter(r => {
-    if (statusFilter === 'all') return true;
-    return r.status === statusFilter;
-  });
-
-  const activeLoading =
-    tab === 'students' ? studentHook.loading :
-      tab === 'my' ? myHook.loading :
-        tab === 'approve' ? approverHook.loading :
-          adminHook.loading;
-
-  const canApprove = tab !== 'my';
-  const isSettingsTab = tab === 'settings';
 
   const handleQuotaChange = (key: keyof LeaveQuotaSettings, value: string) => {
     const parsed = Number(value);
@@ -595,290 +1115,98 @@ export default function LeaveManagementPage() {
     }
   };
 
-  const headerActionsPortal = useMemo(() => {
-    const el = document.getElementById('header-portal-right-actions');
-    if (!el) return null;
-    
-    if (isSettingsTab) {
-      return createPortal(<div className="w-9 h-9" />, el);
-    }
-
-    return createPortal(
-      <div className="flex items-center gap-2">
-        {!isTeacher && (
-          <motion.button
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            onClick={() => setShowSubmit(true)}
-            className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700 transition-all active:scale-95"
-            title="ยื่นคำขอลาใหม่"
-          >
-            <Plus size={18} />
-          </motion.button>
-        )}
-      </div>,
-      el
-    );
-  }, [isTeacher, isSettingsTab]);
-
-  const headerCenterPortal = useMemo(() => {
-    const el = document.getElementById('header-portal-center');
-    if (!el) return null;
-    return createPortal(<LeaveHeaderTabs />, el);
-  }, []);
-
   return (
-    <div className="flex h-full min-h-0 w-full max-w-[1200px] mx-auto flex-col gap-4 pb-6">
-      {/* Header action portal */}
-      {headerCenterPortal}
-      {headerActionsPortal}
-
-      <div className="flex-1 flex min-h-0 flex-col items-stretch gap-6">
-
-        {!isSettingsTab && (
-          <>
-            {/* Stat Cards */}
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              {[
-                { label: 'คำขอทั้งหมด', value: summary.total, icon: ClipboardList, color: 'text-slate-600', status: 'all' as StatusFilter },
-                { label: 'อนุมัติ', value: summary.approved, icon: CheckCircle2, color: 'text-emerald-600', status: 'approved' as StatusFilter },
-                { label: 'รอพิจารณา', value: summary.pending, icon: Clock, color: 'text-amber-600', status: 'pending' as StatusFilter },
-                { label: 'ไม่อนุมัติ', value: summary.rejected, icon: XCircle, color: 'text-rose-600', status: 'rejected' as StatusFilter },
-              ].map((item) => {
-                const isActive = statusFilter === item.status;
-                return (
-                  <button
-                    key={item.label}
-                    onClick={() => setStatusFilter(item.status)}
-                    className={cn(
-                      "group relative rounded-[2rem] border-2 p-5 flex flex-col items-center text-center transition-all",
-                      isActive 
-                        ? "bg-white border-blue-200 shadow-lg shadow-blue-500/5 ring-4 ring-blue-50/50" 
-                        : "bg-white/50 border-slate-50 hover:border-slate-200 hover:bg-white"
-                    )}
-                  >
-                    <div className={cn(
-                      "mb-3 inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 transition-transform group-hover:scale-110",
-                      isActive ? "ring-blue-100" : "ring-slate-100",
-                      item.color
-                    )}>
-                      <item.icon size={18} strokeWidth={2.5} />
-                    </div>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{item.label}</p>
-                    <p className={cn("mt-1 text-2xl font-black tabular-nums", item.color)}>{item.value}</p>
-                    
-                    {isActive && (
-                      <motion.div
-                        layoutId="activeStatCapsule"
-                        className="absolute inset-0 rounded-[2rem] border-2 border-blue-500/20 pointer-events-none"
-                      />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Sub Tabs (My/Approve/All) */}
-            <div className="flex items-center">
-              <div className="flex items-center h-10 border border-black/[0.05] p-1 rounded-full bg-slate-50/50">
-                {visibleTabs.map(t => {
-                  const isActive = tab === t.key;
-                  return (
-                    <button
-                      key={t.key}
-                      onClick={() => setTab(t.key)}
-                      className={cn(
-                        "relative flex items-center justify-center h-full px-6 rounded-full text-[11px] font-black transition-colors z-10",
-                        isActive ? "text-white" : "text-slate-400 hover:text-slate-600"
-                      )}
-                    >
-                      {isActive && (
-                        <motion.div
-                          layoutId="activeSubTabCapsule"
-                          className="absolute inset-0 bg-blue-600 rounded-full shadow-sm"
-                          transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
-                        />
-                      )}
-                      <span className="relative z-20 flex items-center">
-                        {t.label}
-                        {t.badge && (
-                          <span className={cn(
-                            "ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[9px] font-black transition-colors",
-                            isActive ? "bg-white/20 text-white" : "bg-rose-500 text-white"
-                          )}>
-                            {t.badge}
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </>
-        )}
-
-        <div className="flex-1 w-full min-w-0 space-y-4 bg-white/90 backdrop-blur-xl rounded-[2.5rem] p-6 border-2 border-slate-100 min-h-0 overflow-y-auto">
-
-
-
-          <div className="flex items-center justify-between px-2 mb-2">
-            <h2 className="text-sm font-black text-slate-800 uppercase tracking-tight">
-              {isSettingsTab
-                ? 'ตั้งค่าจำนวนการลา'
-                : `${tabs.find(t => t.key === tab)?.label} (${activeRequests.length})`}
-            </h2>
+    <div className="flex flex-col gap-5">
+      <div className="rounded-3xl border border-slate-100 bg-white p-5">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 text-blue-600 flex items-center justify-center">
+            <SlidersHorizontal size={18} />
           </div>
+          <div>
+            <p className="text-sm font-black text-slate-800">กำหนดวันลาสูงสุดต่อปีการศึกษา</p>
+            <p className="text-xs font-semibold text-slate-400">
+              ปีการศึกษา {activeAcademicYear} • {academicPeriodLabel}
+            </p>
+          </div>
+        </div>
 
-          {isSettingsTab ? (
-            <div className="space-y-5">
-              <div className="rounded-3xl border border-slate-100 bg-white p-5">
-                <div className="flex items-center gap-3 mb-5">
-                  <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 text-blue-600 flex items-center justify-center">
-                    <SlidersHorizontal size={18} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-black text-slate-800">กำหนดวันลาสูงสุดต่อปีการศึกษา</p>
-                    <p className="text-xs font-semibold text-slate-400">
-                      ปีการศึกษา {activeAcademicYear} • {academicPeriodLabel}
-                    </p>
-                  </div>
-                </div>
-
-                {quotaLoading ? (
-                  <div className="flex items-center justify-center py-10">
-                    <div className="w-7 h-7 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
-                  </div>
-                ) : (
-                  <div className="space-y-5">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className={modalLabelCls}>ครู/บุคลากร • ลาป่วย (วัน/ปี)</label>
-                        <input
-                          type="number"
-                          min={0}
-                          value={quota.staffSickDays}
-                          onChange={(e) => handleQuotaChange('staffSickDays', e.target.value)}
-                          className={modalInputCls}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className={modalLabelCls}>ครู/บุคลากร • ลากิจ (วัน/ปี)</label>
-                        <input
-                          type="number"
-                          min={0}
-                          value={quota.staffPersonalDays}
-                          onChange={(e) => handleQuotaChange('staffPersonalDays', e.target.value)}
-                          className={modalInputCls}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className={modalLabelCls}>นักเรียน • ลาป่วย (วัน/ปี)</label>
-                        <input
-                          type="number"
-                          min={0}
-                          value={quota.studentSickDays}
-                          onChange={(e) => handleQuotaChange('studentSickDays', e.target.value)}
-                          className={modalInputCls}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className={modalLabelCls}>นักเรียน • ลากิจ (วัน/ปี)</label>
-                        <input
-                          type="number"
-                          min={0}
-                          value={quota.studentPersonalDays}
-                          onChange={(e) => handleQuotaChange('studentPersonalDays', e.target.value)}
-                          className={modalInputCls}
-                        />
-                      </div>
-                    </div>
-
-                    {quotaError && (
-                      <div className="flex items-start gap-2 rounded-xl bg-rose-50 border border-rose-100 p-3 text-xs text-rose-600 font-bold">
-                        <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                        {quotaError}
-                      </div>
-                    )}
-
-                    <div className="flex justify-end pt-2">
-                      <button
-                        onClick={handleSaveQuota}
-                        disabled={quotaSaving || !hasAcademicPeriod}
-                        className={cn(
-                          "h-11 px-6 rounded-2xl text-sm font-black transition-all shadow-sm border flex items-center gap-2",
-                          quotaSaving || !hasAcademicPeriod
-                            ? "bg-slate-100 text-slate-400 border-slate-200"
-                            : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
-                        )}
-                      >
-                        <Save size={15} />
-                        {quotaSaving ? 'กำลังบันทึก...' : 'บันทึกจำนวนวันลา'}
-                      </button>
-                    </div>
-                  </div>
-                )}
+        {quotaLoading ? (
+          <div className="flex items-center justify-center py-10">
+            <div className="w-7 h-7 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className={modalLabelCls}>ครู/บุคลากร • ลาป่วย (วัน/ปี)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={quota.staffSickDays}
+                  onChange={(e) => handleQuotaChange('staffSickDays', e.target.value)}
+                  className={modalInputCls}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className={modalLabelCls}>ครู/บุคลากร • ลากิจ (วัน/ปี)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={quota.staffPersonalDays}
+                  onChange={(e) => handleQuotaChange('staffPersonalDays', e.target.value)}
+                  className={modalInputCls}
+                />
               </div>
             </div>
-          ) : (
-            <div className="space-y-3">
-              {activeLoading ? (
-                <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
-                  <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
-                  <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
-                </div>
-              ) : activeRequests.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
-                  <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-                    <ClipboardList size={32} className="text-slate-300" />
-                  </div>
-                  <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
-                  <p className="text-xs font-bold text-slate-400 mt-1">
-                    เมื่อมีการยื่นคำขอใหม่ รายการจะปรากฏขึ้นที่นี่
-                  </p>
-                </div>
-              ) : (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="grid grid-cols-1 gap-3"
-                >
-                  {activeRequests.map(req => (
-                    <LeaveCard
-                      key={req.id}
-                      req={req}
-                      showRequester={tab !== 'my'}
-                      showApprover={tab === 'my'}
-                      onApprove={canApprove ? handleApprove : undefined}
-                      onReject={canApprove ? id => setRejectTarget(id) : undefined}
-                    />
-                  ))}
-                </motion.div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
 
-      {/* Modals */}
-      <AnimatePresence>
-        {showSubmit && (
-          <SubmitModal
-            onClose={() => setShowSubmit(false)}
-            onSubmit={handleSubmit}
-          />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className={modalLabelCls}>นักเรียน • ลาป่วย (วัน/ปี)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={quota.studentSickDays}
+                  onChange={(e) => handleQuotaChange('studentSickDays', e.target.value)}
+                  className={modalInputCls}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className={modalLabelCls}>นักเรียน • ลากิจ (วัน/ปี)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={quota.studentPersonalDays}
+                  onChange={(e) => handleQuotaChange('studentPersonalDays', e.target.value)}
+                  className={modalInputCls}
+                />
+              </div>
+            </div>
+
+            {quotaError && (
+              <div className="flex items-start gap-2 rounded-xl bg-rose-50 border border-rose-100 p-3 text-xs text-rose-600 font-bold">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                {quotaError}
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={handleSaveQuota}
+                disabled={quotaSaving || !hasAcademicPeriod}
+                className={cn(
+                  "h-11 px-6 rounded-2xl text-sm font-black transition-all shadow-sm border flex items-center gap-2",
+                  quotaSaving || !hasAcademicPeriod
+                    ? "bg-slate-100 text-slate-400 border-slate-200"
+                    : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+                )}
+              >
+                <Save size={15} />
+                {quotaSaving ? 'กำลังบันทึก...' : 'บันทึกจำนวนวันลา'}
+              </button>
+            </div>
+          </div>
         )}
-        {rejectTarget && (
-          <RejectModal
-            requestId={rejectTarget}
-            onClose={() => setRejectTarget(null)}
-            onConfirm={handleRejectConfirm}
-          />
-        )}
-      </AnimatePresence>
+      </div>
     </div>
   );
 }

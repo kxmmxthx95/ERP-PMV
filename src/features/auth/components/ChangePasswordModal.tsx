@@ -100,13 +100,13 @@ export default function ChangePasswordModal({ user, onSuccess, isOpen }: ChangeP
               </div>
               <h2 className="text-2xl font-bold text-slate-800">เปลี่ยนรหัสผ่านครั้งแรก</h2>
               <p className="text-sm text-slate-500 mt-2">
-                เพื่อความปลอดภัยกรุณาเปลี่ยนรหัสผ่านใหม่ก่อนเข้าใช้งานระบบ
+                กรอกรหัสผ่านชั่วคราวที่ได้รับจากผู้ดูแลระบบ แล้วตั้งรหัสผ่านใหม่ก่อนเข้าใช้งาน
               </p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-500 ml-3 uppercase tracking-wider">รหัสผ่านเดิม</label>
+                <label className="text-[11px] font-bold text-slate-500 ml-3 uppercase tracking-wider">รหัสผ่านชั่วคราว</label>
                 <div className="relative">
                   <Lock size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                   <Input
@@ -115,7 +115,7 @@ export default function ChangePasswordModal({ user, onSuccess, isOpen }: ChangeP
                     value={oldPassword}
                     onChange={(e) => setOldPassword(e.target.value)}
                     className="pl-11 pr-12 h-12 bg-white/50 border-white/60 rounded-2xl text-slate-800 focus:ring-2 focus:ring-pink-200 transition-all border shadow-sm"
-                    placeholder="Current password"
+                    placeholder="รหัสผ่านชั่วคราวจากผู้ดูแลระบบ"
                   />
                   <button
                     type="button"

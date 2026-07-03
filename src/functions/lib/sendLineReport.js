@@ -1,18 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.sendLineReport = void 0;
-const functions = require("firebase-functions/v1");
+const firestore_1 = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
-const firestore_1 = require("firebase-admin/firestore");
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-void functions; // imported for its side-effects on region/runWith
+const getAdminFirestore_1 = require("./getAdminFirestore");
+const reportMessage_1 = require("./reportMessage");
 const REGION = "asia-southeast1";
-const DATABASE_ID = (process.env.FIRESTORE_DATABASE_ID ?? "").trim();
-const db = DATABASE_ID && DATABASE_ID !== "(default)"
-    ? (0, firestore_1.getFirestore)(DATABASE_ID)
-    : (0, firestore_1.getFirestore)();
-function getLineToken() {
-    return process.env.LINE_CHANNEL_TOKEN || "";
+const db = (0, getAdminFirestore_1.getAdminFirestore)();
+function getLineChannelToken() {
+    return (process.env.LINE_CHANNEL_TOKEN || "").trim();
 }
 async function pushMessage(lineUid, text, token) {
     const https = await Promise.resolve().then(() => require("https"));
@@ -20,9 +16,8 @@ async function pushMessage(lineUid, text, token) {
         to: lineUid,
         messages: [{ type: "text", text }],
     });
-    console.log(`[pushMessage] sending to lineUid: ${lineUid}`);
+    console.log(`[pushMessage] sending to lineUid: ${lineUid.slice(0, 8)}...`);
     console.log(`[pushMessage] message text length: ${text.length}`);
-    console.log(`[pushMessage] token length: ${token.length}`);
     return new Promise((resolve) => {
         const req = https.request({
             hostname: "api.line.me",
@@ -30,22 +25,22 @@ async function pushMessage(lineUid, text, token) {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}`,
+                Authorization: `Bearer ${token}`,
                 "Content-Length": Buffer.byteLength(body),
             },
         }, (res) => {
-            console.log(`[pushMessage] response status: ${res.statusCode}`);
             let data = "";
-            res.on("data", (chunk) => { data += chunk; });
+            res.on("data", (chunk) => {
+                data += chunk;
+            });
             res.on("end", () => {
                 if (res.statusCode === 200) {
-                    console.log(`[pushMessage] success!`);
+                    console.log("[pushMessage] success");
                     resolve({ ok: true });
+                    return;
                 }
-                else {
-                    console.error(`[pushMessage] failed: HTTP ${res.statusCode}`, data);
-                    resolve({ ok: false, error: `HTTP ${res.statusCode}: ${data}` });
-                }
+                console.error(`[pushMessage] failed: HTTP ${res.statusCode}`, data);
+                resolve({ ok: false, error: `HTTP ${res.statusCode}: ${data}` });
             });
         });
         req.on("error", (err) => {
@@ -55,6 +50,12 @@ async function pushMessage(lineUid, text, token) {
         req.write(body);
         req.end();
     });
+}
+function resolveLineUid(userData, payloadToken) {
+    const fromUserToken = typeof userData?.lineToken === "string" ? userData.lineToken.trim() : "";
+    const fromUserUid = typeof userData?.lineUid === "string" ? userData.lineUid.trim() : "";
+    const fromPayload = typeof payloadToken === "string" ? payloadToken.trim() : "";
+    return fromUserToken || fromUserUid || fromPayload || undefined;
 }
 function formatThaiDate(dateStr) {
     try {
@@ -70,123 +71,116 @@ function formatThaiDate(dateStr) {
         return dateStr;
     }
 }
-function buildDailyMessage(date, staff, student, leave) {
-    const thaiDate = formatThaiDate(date);
-    const absentPercent = staff.total > 0 ? Math.round((staff.absent / staff.total) * 100) : 0;
+function buildWeeklyMessage(date, staff, student) {
     return [
-        `📊 รายงานประจำวัน`,
-        `${thaiDate}`,
-        ``,
-        `👨‍🏫 บุคลากร (${staff.total} คน)`,
-        `  ✅ มาปกติ: ${staff.present} คน`,
-        `  ⏰ มาสาย: ${staff.late} คน`,
-        `  ❌ ขาด: ${staff.absent} คน (${absentPercent}%)`,
-        `  📝 ลา: ${staff.leave} คน`,
-        ``,
-        `🎓 นักเรียน`,
-        `  📚 คาบเรียน: ${student.sessions} คาบ (${student.classes} ห้อง)`,
-        `  ✅ เข้าเรียน: ${student.present}`,
-        `  ⏰ มาสาย: ${student.late}`,
-        `  ❌ ขาด: ${student.absent}`,
-        `  📝 ลา: ${student.leave}`,
-        ``,
-        `📋 ใบลารอดำเนินการ`,
-        `  บุคลากร: ${leave.pendingStaff} ใบ`,
-        `  นักเรียน: ${leave.pendingStudents} ใบ`,
-        `  กำลังลา (วันนี้): ${leave.activeStaff} คน`,
-        ``,
-        `🔗 ระบบบริหารโรงเรียน PMV-ONE`,
-    ].join("\n");
-}
-function buildWeeklyMessage(date, staff, student, leave) {
-    return [
-        `📅 รายงานประจำสัปดาห์`,
+        "📅 รายงานประจำสัปดาห์",
         `สัปดาห์ที่ครอบคลุม ${formatThaiDate(date)}`,
-        ``,
-        `👨‍🏫 สรุปบุคลากร`,
+        "",
+        "👨‍🏫 สรุปบุคลากร",
         `  มา ${staff.present} / ${staff.total} คน | สาย ${staff.late} | ขาด ${staff.absent} | ลา ${staff.leave}`,
-        ``,
-        `🎓 สรุปนักเรียน`,
+        "",
+        "🎓 สรุปนักเรียน",
         `  เข้าเรียน ${student.present} | สาย ${student.late} | ขาด ${student.absent} | ลา ${student.leave}`,
-        ``,
-        `📋 ใบลาค้าง: บุคลากร ${leave.pendingStaff} | นักเรียน ${leave.pendingStudents}`,
-        ``,
-        `🔗 ระบบบริหารโรงเรียน PMV-ONE`,
+        "",
+        "🔗 ระบบบริหารโรงเรียน PMV-ONE",
     ].join("\n");
 }
 function buildAlertMessage(date, alertMessage) {
     const customAlert = typeof alertMessage === "string" ? alertMessage.trim() : "";
     return [
-        `🚨 แจ้งเตือนด่วน`,
+        "🚨 แจ้งเตือนด่วน",
         `${formatThaiDate(date)}`,
-        ``,
-        customAlert ? `${customAlert}` : `กรุณาตรวจสอบในระบบ`,
-        ``,
-        `🔗 ระบบบริหารโรงเรียน PMV-ONE`,
+        "",
+        customAlert ? `${customAlert}` : "กรุณาตรวจสอบในระบบ",
+        "",
+        "🔗 ระบบบริหารโรงเรียน PMV-ONE",
     ].join("\n");
 }
-const handleReportSend = async (snap, context) => {
+/**
+ * Gen2 trigger — ต้องระบุ database pmv1 (Gen1 trigger ฟังแค่ default DB)
+ */
+exports.sendLineReport = (0, firestore_1.onDocumentCreated)({
+    document: "report_sends/{sendId}",
+    region: REGION,
+    database: (0, getAdminFirestore_1.getFirestoreDatabaseId)(),
+    timeoutSeconds: 120,
+    memory: "256MiB",
+}, async (event) => {
+    const snap = event.data;
+    if (!snap)
+        return;
     const data = snap.data();
-    const sendId = context.params.sendId;
-    console.log(`[sendLineReport] triggered for ${sendId}`);
-    console.log(`[sendLineReport] data:`, JSON.stringify(data, null, 2));
+    const sendId = event.params.sendId;
+    console.log(`[sendLineReport] triggered for ${sendId} (db=${(0, getAdminFirestore_1.getFirestoreDatabaseId)()})`);
     if (data.processed) {
         console.log(`[sendLineReport] ${sendId} already processed, skipping`);
-        return null;
+        return;
     }
-    const token = getLineToken();
-    console.log(`[sendLineReport] token loaded: ${token ? "yes (length: " + token.length + ")" : "NO"}`);
+    const token = getLineChannelToken();
     if (!token) {
         console.error("[sendLineReport] LINE_CHANNEL_TOKEN not configured");
         await snap.ref.update({
             processed: true,
             processedAt: admin.firestore.FieldValue.serverTimestamp(),
             processError: "LINE_CHANNEL_TOKEN not configured",
+            successCount: 0,
+            failCount: data.recipients?.length ?? 0,
         });
-        return null;
+        return;
     }
     const reportType = data.reportType || "daily";
     const date = data.date || new Date().toISOString().slice(0, 10);
-    const staff = data.staffSummary || { total: 0, present: 0, late: 0, absent: 0, leave: 0 };
-    const student = data.studentSummary || { sessions: 0, classes: 0, present: 0, late: 0, absent: 0, leave: 0 };
-    const leave = data.leaveSummary || { pendingStaff: 0, pendingStudents: 0, activeStaff: 0 };
+    const staff = data.staffSummary ?? {
+        total: 0,
+        present: 0,
+        late: 0,
+        absent: 0,
+        leave: 0,
+        pending: 0,
+    };
+    const student = data.studentSummary ?? {
+        sessions: 0,
+        classes: 0,
+        present: 0,
+        late: 0,
+        absent: 0,
+        leave: 0,
+    };
     const alertMessage = typeof data.alertMessage === "string" ? data.alertMessage.trim() : "";
     const recipients = data.recipients || [];
     let messageText;
     if (reportType === "weekly") {
-        messageText = buildWeeklyMessage(date, staff, student, leave);
+        messageText = buildWeeklyMessage(date, staff, student);
     }
     else if (reportType === "alert") {
         messageText = buildAlertMessage(date, alertMessage);
     }
     else {
-        messageText = buildDailyMessage(date, staff, student, leave);
+        messageText = (0, reportMessage_1.buildDailyMessage)(date, staff, student);
     }
     const results = [];
     for (const r of recipients) {
-        if (!r.lineToken) {
-            results.push({ uid: r.uid, ok: false, error: "no lineToken" });
-            continue;
-        }
-        let lineToken = r.lineToken;
+        let lineUid;
         try {
             const userSnap = await db.collection("users").doc(r.uid).get();
-            const freshToken = userSnap.data()?.lineToken;
-            if (freshToken && freshToken.trim()) {
-                lineToken = freshToken.trim();
-            }
+            lineUid = resolveLineUid(userSnap.data(), r.lineToken);
         }
-        catch {
-            // ใช้ lineToken จาก payload แทน
+        catch (err) {
+            lineUid = resolveLineUid(undefined, r.lineToken);
+            console.warn(`[sendLineReport] user lookup failed uid=${r.uid}`, err);
         }
-        const result = await pushMessage(lineToken, messageText, token);
+        if (!lineUid) {
+            results.push({ uid: r.uid, ok: false, error: "no lineUid/lineToken" });
+            continue;
+        }
+        const result = await pushMessage(lineUid, messageText, token);
         results.push({ uid: r.uid, ...result });
         if (!result.ok) {
             console.error(`[sendLineReport] push failed for uid=${r.uid}:`, result.error);
         }
     }
-    const successCount = results.filter(r => r.ok).length;
-    const failCount = results.filter(r => !r.ok).length;
+    const successCount = results.filter((r) => r.ok).length;
+    const failCount = results.filter((r) => !r.ok).length;
     console.log(`[sendLineReport] ${sendId} done: ${successCount} sent, ${failCount} failed`);
     await snap.ref.update({
         processed: true,
@@ -195,11 +189,5 @@ const handleReportSend = async (snap, context) => {
         successCount,
         failCount,
     });
-    return null;
-};
-exports.sendLineReport = functions
-    .region(REGION)
-    .runWith({ timeoutSeconds: 120, memory: "256MB" })
-    .firestore.document("report_sends/{sendId}")
-    .onCreate(handleReportSend);
+});
 //# sourceMappingURL=sendLineReport.js.map

@@ -39,11 +39,11 @@ exports.processLineLinkRequest = functions
         return null;
     }
     try {
-        // อัพเดท users/{userId} ให้เก็บ lineToken
-        await db.collection("users").doc(userId).update({
+        await db.collection("users").doc(userId).set({
             lineToken: lineUid,
+            lineUid,
             lineLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        }, { merge: true });
         console.log(`[processLineLinkRequest] ${docId}: linked userId ${userId} with lineToken ${lineUid}`);
         // อัพเดท line_link_requests/{docId} สถานะเป็น linked
         await change.after.ref.update({

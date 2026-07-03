@@ -2,7 +2,7 @@ import { useEffect, useState, Fragment } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { BookPlus, Pencil } from 'lucide-react';
+import { HiBookOpen, HiPencil } from 'react-icons/hi2';
 import { Input } from '@/components/ui/input';
 import {
   Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
@@ -136,7 +136,7 @@ export default function AddCourseModal({
       onClose={onClose}
       title={isEdit ? 'แก้ไขรายวิชา' : 'เพิ่มรายวิชาใหม่'}
       subtitle={isEdit ? `แก้ไขรายละเอียดวิชา ${courseToEdit?.courseCode}` : 'กรอกข้อมูลพื้นฐานเพื่อเพิ่มวิชาในหลักสูตร'}
-      icon={isEdit ? <Pencil size={18} /> : <BookPlus size={18} />}
+      icon={isEdit ? <HiPencil size={18} /> : <HiBookOpen size={18} />}
       onSubmit={form.handleSubmit(handleSubmit)}
       submitLabel={isSubmitting ? 'กำลังบันทึก...' : (isEdit ? 'บันทึกการแก้ไข' : 'เพิ่มวิชา')}
       submitDisabled={isSubmitting}
@@ -157,7 +157,7 @@ export default function AddCourseModal({
                   type="number"
                   placeholder="เช่น 2568"
                   className="h-10 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                   value={field.value ?? ''}
                   onChange={e => field.onChange(e.target.value === '' ? '' : Number(e.target.value))}
                 />
@@ -176,7 +176,7 @@ export default function AddCourseModal({
                 <Input
                   placeholder="เช่น ท11101"
                   className="h-10 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none uppercase"
-                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                   {...field}
                 />
               </FormControl>
@@ -194,7 +194,7 @@ export default function AddCourseModal({
                 <Input
                   placeholder="เช่น ภาษาไทย"
                   className="h-10 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                  style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                   {...field}
                 />
               </FormControl>
@@ -213,7 +213,7 @@ export default function AddCourseModal({
                   <Input
                     type="number" step="0.5"
                     className="h-10 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                     value={field.value ?? ''}
                     onChange={e => field.onChange(e.target.value === '' ? undefined : Number(e.target.value))}
                   />
@@ -232,7 +232,7 @@ export default function AddCourseModal({
                     type="number"
                     placeholder="คาบ"
                     className="h-10 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                     value={field.value ?? ''}
                     onChange={e => field.onChange(e.target.value === '' ? '' : Number(e.target.value))}
                   />
@@ -251,7 +251,7 @@ export default function AddCourseModal({
                     type="number"
                     placeholder="ชม."
                     className="h-10 rounded-3xl text-xs font-medium font-sarabun focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                     value={field.value ?? ''}
                     onChange={e => field.onChange(e.target.value === '' ? '' : Number(e.target.value))}
                   />
@@ -271,7 +271,7 @@ export default function AddCourseModal({
                 <FormControl>
                   <SelectTrigger
                     className="w-full h-10 rounded-3xl text-xs font-sarabun border focus-visible:ring-2 focus-visible:ring-blue-500/20 shadow-none"
-                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(200,180,255,0.4)' }}
+                    style={{ background: 'rgba(255,255,255,0.6)', borderColor: 'rgba(147,197,253,0.4)' }}
                   >
                     <SelectValue placeholder="เลือกกลุ่มสาระ" />
                   </SelectTrigger>
@@ -306,7 +306,7 @@ export default function AddCourseModal({
                           // Reset grade level when department changes
                           form.setValue('gradeLevel', '');
                         }}
-                        className={`flex-1 h-8 text-[11px] font-bold rounded-xl font-sukhumvit ${field.value === d ? 'bg-slate-900 text-white shadow-md' : 'text-black/40'}`}
+                        className={`flex-1 h-8 text-[11px] font-bold rounded-xl font-sukhumvit ${field.value === d ? 'bg-blue-600 text-white shadow-md' : 'text-black/40'}`}
                       >
                         {DEPARTMENT_CONFIG[d].label}
                       </Button>
@@ -335,7 +335,7 @@ export default function AddCourseModal({
                       variant={!field.value ? 'default' : 'ghost'}
                       size="sm"
                       onClick={() => field.onChange('')}
-                      className={`px-3 h-8 text-[10px] font-bold rounded-xl font-sukhumvit ${!field.value ? 'bg-slate-700 text-white shadow-sm' : 'text-black/30'}`}
+                      className={`px-3 h-8 text-[10px] font-bold rounded-xl font-sukhumvit ${!field.value ? 'bg-blue-500 text-white shadow-sm' : 'text-black/30'}`}
                     >
                       ทั้งหมด
                     </Button>
@@ -346,7 +346,7 @@ export default function AddCourseModal({
                         variant={field.value === g ? 'default' : 'ghost'}
                         size="sm"
                         onClick={() => field.onChange(g)}
-                        className={`px-3 h-8 text-[10px] font-bold rounded-xl font-sukhumvit ${field.value === g ? 'bg-slate-900 text-white shadow-md' : 'text-black/40'}`}
+                        className={`px-3 h-8 text-[10px] font-bold rounded-xl font-sukhumvit ${field.value === g ? 'bg-blue-600 text-white shadow-md' : 'text-black/40'}`}
                       >
                         {g}
                       </Button>
@@ -374,7 +374,7 @@ export default function AddCourseModal({
                         variant={field.value === s ? 'default' : 'ghost'}
                         size="sm"
                         onClick={() => field.onChange(s)}
-                        className={`flex-1 h-8 text-[11px] font-bold rounded-xl font-sukhumvit ${field.value === s ? 'bg-slate-900 text-white shadow-md' : 'text-black/40'}`}
+                        className={`flex-1 h-8 text-[11px] font-bold rounded-xl font-sukhumvit ${field.value === s ? 'bg-blue-600 text-white shadow-md' : 'text-black/40'}`}
                       >
                         ภาคเรียนที่ {s}
                       </Button>
@@ -404,7 +404,7 @@ export default function AddCourseModal({
                           variant={field.value === cat ? 'default' : 'ghost'}
                           size="sm"
                           onClick={() => field.onChange(cat)}
-                          className={`flex-1 h-8 text-[11px] font-bold rounded-xl font-sukhumvit ${field.value === cat ? 'bg-slate-900 text-white shadow-md' : 'text-black/40'}`}
+                          className={`flex-1 h-8 text-[11px] font-bold rounded-xl font-sukhumvit ${field.value === cat ? 'bg-blue-600 text-white shadow-md' : 'text-black/40'}`}
                         >
                           {cfg.label}
                         </Button>

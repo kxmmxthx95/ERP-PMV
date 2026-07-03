@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Heart, User, CalendarDays } from 'lucide-react';
+import { Heart, User } from 'lucide-react';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
-import { WIDGET_GLASS } from '../widgetStyles';
+import { WIDGET_CARD, WIDGET_GLASS } from '../widgetStyles';
+import { WidgetSkeleton } from '../components/WidgetSkeleton';
 import { cn } from '@/lib/utils';
 import { countDays } from '@/hooks/useLeaveRequests';
 
@@ -67,15 +67,7 @@ export default function LeaveQuotaWidget() {
   }, [user?.uid, activeYear, isStudent]);
 
   if (loading) {
-    return (
-      <div style={WIDGET_GLASS} className="rounded-3xl p-5 flex flex-col gap-4 w-full h-full animate-pulse">
-        <div className="h-4 w-32 bg-slate-100 rounded-full" />
-        <div className="grid grid-cols-2 gap-3 h-24">
-          <div className="bg-slate-50 rounded-2xl" />
-          <div className="bg-slate-50 rounded-2xl" />
-        </div>
-      </div>
-    );
+    return <WidgetSkeleton />;
   }
 
   const items = [
@@ -86,7 +78,6 @@ export default function LeaveQuotaWidget() {
       color: 'text-rose-600', 
       bg: 'bg-rose-50/50', 
       icon: Heart,
-      accent: 'bg-rose-500'
     },
     { 
       label: 'ลากิจ', 
@@ -95,49 +86,34 @@ export default function LeaveQuotaWidget() {
       color: 'text-amber-600', 
       bg: 'bg-amber-50/50', 
       icon: User,
-      accent: 'bg-amber-500'
     },
   ];
 
   return (
-    <div style={WIDGET_GLASS} className="rounded-3xl p-5 flex flex-col gap-4 w-full h-full overflow-hidden">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-            <CalendarDays size={16} />
-          </div>
-          <div>
-            <p className="text-sm font-black text-slate-800">โควต้าการลา</p>
-            <p className="text-[10px] font-bold text-slate-400">ปีการศึกษา {activeYear}</p>
-          </div>
-        </div>
+    <div style={WIDGET_GLASS} className={WIDGET_CARD}>
+      <div className="shrink-0 min-w-0">
+        <p className="text-sm font-black text-slate-800 truncate">โควต้าการลา</p>
+        <p className="text-[9px] font-bold text-slate-400 truncate">ปีการศึกษา {activeYear}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">
         {items.map((item) => {
           const remaining = Math.max(0, item.total - item.used);
-          const percent = item.total > 0 ? Math.min(100, (item.used / item.total) * 100) : 0;
-          
+
           return (
-            <div key={item.label} className={cn("relative overflow-hidden rounded-2xl border border-slate-100 p-4 transition-all hover:shadow-md", item.bg)}>
-              <div className="relative z-10">
-                <div className="flex items-center justify-between mb-2">
-                  <item.icon size={14} className={item.color} strokeWidth={2.5} />
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{item.label}</span>
-                </div>
-                <div className="flex items-baseline gap-1">
-                  <span className={cn("text-2xl font-black tabular-nums", item.color)}>{item.used}</span>
-                  <span className="text-xs font-bold text-slate-400">/ {item.total} วัน</span>
-                </div>
-                <div className="mt-3 h-1.5 w-full bg-white/50 rounded-full overflow-hidden">
-                  <motion.div 
-                    initial={{ width: 0 }}
-                    animate={{ width: `${percent}%` }}
-                    className={cn("h-full rounded-full", item.accent)}
-                  />
-                </div>
-                <p className="mt-2 text-[9px] font-bold text-slate-400">คงเหลือ {remaining} วัน</p>
+            <div
+              key={item.label}
+              className={cn('rounded-xl border border-slate-100 p-2 min-w-0 flex flex-col justify-center', item.bg)}
+            >
+              <div className="flex items-center justify-between gap-1 mb-1">
+                <item.icon size={12} className={item.color} strokeWidth={2.5} />
+                <span className="text-[9px] font-black text-slate-400 truncate">{item.label}</span>
               </div>
+              <div className="flex items-baseline gap-0.5">
+                <span className={cn('text-base font-black tabular-nums leading-none', item.color)}>{item.used}</span>
+                <span className="text-[10px] font-bold text-slate-400">/ {item.total} วัน</span>
+              </div>
+              <p className="mt-1 text-[9px] font-bold text-slate-400 truncate">คงเหลือ {remaining} วัน</p>
             </div>
           );
         })}

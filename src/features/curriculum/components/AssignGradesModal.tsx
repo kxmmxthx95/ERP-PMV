@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Users, GraduationCap } from 'lucide-react';
+import { HiUsers, HiAcademicCap } from 'react-icons/hi2';
 import FormModal from '@/components/ui/FormModal';
 import { DEPARTMENT_CONFIG, type CurriculumVersion } from '@/types/curriculum';
 
@@ -63,7 +63,7 @@ export default function AssignGradesModal({
       onClose={onClose}
       title="กำหนดชั้นเรียน"
       subtitle={`เลือกชั้นเรียนที่จะใช้หลักสูตร "${version.name}" (${version.year})`}
-      icon={<Users size={18} />}
+      icon={<HiUsers size={18} />}
       onSubmit={handleSubmit}
       submitLabel={isSubmitting ? 'กำลังบันทึก...' : 'บันทึก'}
       submitDisabled={isSubmitting}
@@ -80,7 +80,7 @@ export default function AssignGradesModal({
                   className="w-5 h-5 rounded-lg flex items-center justify-center"
                   style={{ background: dept.color + '20' }}
                 >
-                  <GraduationCap size={11} style={{ color: dept.color }} />
+                  <HiAcademicCap size={11} style={{ color: dept.color }} />
                 </div>
                 <span className="text-[11px] font-black font-sukhumvit" style={{ color: dept.color }}>
                   {dept.label}
@@ -144,7 +144,7 @@ export default function AssignGradesModal({
           className="mt-2 px-4 py-3 rounded-2xl flex items-center gap-3"
           style={{ background: 'rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.07)' }}
         >
-          <Users size={14} className="text-black/40 shrink-0" />
+          <HiUsers size={14} className="text-black/40 shrink-0" />
           <p className="text-[11px] font-bold text-black/55 font-sukhumvit">
             {selected.length === 0
               ? 'ยังไม่ได้เลือกชั้นเรียน'

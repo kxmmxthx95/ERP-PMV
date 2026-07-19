@@ -1,8 +1,7 @@
 // src/lib/firestoreShared/teacherKpiSettingsStore.ts
-import { doc } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { createSharedStore } from './createSharedStore';
-import { listenDocWithGetDoc } from './listenDocWithGetDoc';
 import type { TeacherKpiSettings } from '@/types/teacherKpi';
 
 const stores = new Map<string, ReturnType<typeof createSharedStore<TeacherKpiSettings>>>();
@@ -21,14 +20,22 @@ export function getTeacherKpiSettingsStore(academicYearId: string, semester: 1 |
   if (!store) {
     const fallback = emptySettings(academicYearId, semester);
     store = createSharedStore<TeacherKpiSettings>(
-      (emit) =>
-        listenDocWithGetDoc(
-          doc(db, 'teacher_kpi_settings', key),
-          (raw) => (raw ? { ...fallback, ...raw } as TeacherKpiSettings : fallback),
-          emit,
-          fallback,
-          `teacherKpiSettingsStore:${key}`,
-        ),
+      (emit) => {
+        let cancelled = false;
+        void getDoc(doc(db, 'teacher_kpi_settings', key))
+          .then((snap) => {
+            if (cancelled) return;
+            const raw = snap.exists() ? snap.data() : undefined;
+            emit(raw ? { ...fallback, ...raw } as TeacherKpiSettings : fallback);
+          })
+          .catch((err) => {
+            console.warn(`[teacherKpiSettingsStore:${key}] getDoc failed:`, err);
+            if (!cancelled) emit(fallback);
+          });
+        return () => {
+          cancelled = true;
+        };
+      },
       fallback,
     );
     stores.set(key, store);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc,
+  collection, getDocs, addDoc, updateDoc, deleteDoc, doc,
   query, where, orderBy,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
@@ -20,6 +20,7 @@ export function useLessonPlan(teacherId: string, departmentId?: string) {
       return;
     }
 
+    let cancelled = false;
     const constraints = [
       where('academicYearId', '==', activeYear.year),
       where('semester', '==', activeSemester),
@@ -36,20 +37,23 @@ export function useLessonPlan(teacherId: string, departmentId?: string) {
       orderBy('weekNumber', 'asc'),
     );
 
-    const unsub = onSnapshot(
-      q,
-      snap => {
+    void getDocs(q)
+      .then(snap => {
+        if (cancelled) return;
         setPlans(snap.docs.map(d => ({ id: d.id, ...d.data() }) as LessonPlan));
         setLoading(false);
-      },
-      err => {
+      })
+      .catch(err => {
         console.error('useLessonPlan:', err);
-        setError(err.message);
-        setLoading(false);
-      },
-    );
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      });
 
-    return unsub;
+    return () => {
+      cancelled = true;
+    };
   }, [activeYear, activeSemester, teacherId, departmentId]);
 
   // ── CRUD ───────────────────────────────────────────────────────────────────

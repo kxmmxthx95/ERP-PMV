@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { sessionCache } from '@/lib/sessionCache';
 
@@ -125,15 +125,24 @@ export function useSyllabus() {
     () => sessionCache.get<CourseSyllabus[]>(CACHE_SYLLABI) ?? []
   );
 
-  // ── ดึงข้อมูล Real-time จาก Firebase (ข้ามถ้า cache ยังใช้ได้) ──────────────────
+  // ── ดึงข้อมูล จาก Firebase (one-shot getDocs) ──────────────────
   useEffect(() => {
     if (sessionCache.get(CACHE_SYLLABI)) return;
-    const unsub = onSnapshot(collection(db, 'syllabi'), (snap) => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as CourseSyllabus));
-      setSyllabi(data);
-      sessionCache.set(CACHE_SYLLABI, data);
-    });
-    return () => unsub();
+    let cancelled = false;
+    void getDocs(collection(db, 'syllabi'))
+      .then((snap) => {
+        if (cancelled) return;
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as CourseSyllabus));
+        setSyllabi(data);
+        sessionCache.set(CACHE_SYLLABI, data);
+      })
+      .catch((err) => {
+        console.warn('[useSyllabus] getDocs failed:', err);
+        if (!cancelled) setSyllabi([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ── CRUD ──────────────────────────────────────────────────────────────────────

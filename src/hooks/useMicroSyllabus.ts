@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, where,
+  collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
@@ -18,6 +18,7 @@ export function useMicroSyllabus(teacherId: string | null) {
       return;
     }
 
+    let cancelled = false;
     const q = query(
       collection(db, 'micro_syllabi'),
       where('academicYearId', '==', activeYear.year),
@@ -25,22 +26,23 @@ export function useMicroSyllabus(teacherId: string | null) {
       where('teacherId', '==', teacherId),
     );
 
-    const unsub = onSnapshot(
-      q,
-      snap => {
+    void getDocs(q)
+      .then(snap => {
+        if (cancelled) return;
         const docs = snap.docs
           .map(d => ({ id: d.id, ...d.data() }) as MicroSyllabus)
           .sort((a, b) => a.className.localeCompare(b.className, 'th'));
         setSyllabi(docs);
         setLoading(false);
-      },
-      err => {
+      })
+      .catch(err => {
         console.error('useMicroSyllabus:', err);
-        setLoading(false);
-      },
-    );
+        if (!cancelled) setLoading(false);
+      });
 
-    return unsub;
+    return () => {
+      cancelled = true;
+    };
   }, [activeYear, activeSemester, teacherId]);
 
   const createSyllabus = async (data: NewMicroSyllabus): Promise<string> => {
@@ -87,28 +89,30 @@ export function useMicroSyllabusAll(enabled = true) {
       return;
     }
 
+    let cancelled = false;
     const q = query(
       collection(db, 'micro_syllabi'),
       where('academicYearId', '==', activeYear.year),
       where('semester', '==', activeSemester),
     );
 
-    const unsub = onSnapshot(
-      q,
-      snap => {
+    void getDocs(q)
+      .then(snap => {
+        if (cancelled) return;
         const docs = snap.docs
           .map(d => ({ id: d.id, ...d.data() }) as MicroSyllabus)
           .sort((a, b) => a.gradeLevel.localeCompare(b.gradeLevel, 'th') || a.className.localeCompare(b.className, 'th'));
         setSyllabi(docs);
         setLoading(false);
-      },
-      err => {
+      })
+      .catch(err => {
         console.error('useMicroSyllabusAll:', err);
-        setLoading(false);
-      },
-    );
+        if (!cancelled) setLoading(false);
+      });
 
-    return unsub;
+    return () => {
+      cancelled = true;
+    };
   }, [enabled, activeYear, activeSemester]);
 
   return { syllabi, loading };

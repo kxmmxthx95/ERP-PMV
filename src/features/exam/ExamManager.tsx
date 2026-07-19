@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } fro
 import { useNavigate, useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import {
   ResponsiveContainer,
   BarChart,
@@ -159,9 +159,9 @@ function StudentScoreSummaryModal({
   room: ExamRoom;
   attempt: ExamAttempt;
 }) {
-  const score = attempt.score ?? 0;
-  const total = room.totalPoints ?? 1;
-  const percentage = Math.round((score / total) * 100);
+  const { score, maxPoints: total, percent: percentage } = resolveAttemptScoreDisplay(room, attempt);
+  const displayScore = score ?? 0;
+  const displayPercent = percentage ?? 0;
   
   return (
     <Dialog open={open} onOpenChange={(val) => !val && onClose()}>
@@ -193,7 +193,7 @@ function StudentScoreSummaryModal({
                 strokeWidth="10"
                 strokeDasharray={464.95}
                 initial={{ strokeDashoffset: 464.95 }}
-                animate={{ strokeDashoffset: 464.95 - (464.95 * percentage) / 100 }}
+                animate={{ strokeDashoffset: 464.95 - (464.95 * displayPercent) / 100 }}
                 transition={{ duration: 1.5, ease: "easeOut" }}
                 strokeLinecap="round"
               />
@@ -205,7 +205,7 @@ function StudentScoreSummaryModal({
               </defs>
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-[36px] font-black text-slate-800 font-sukhumvit leading-none">{score}</span>
+              <span className="text-[36px] font-black text-slate-800 font-sukhumvit leading-none">{displayScore}</span>
               <div className="h-[1px] w-10 bg-slate-200 my-1" />
               <span className="text-[14px] font-bold text-slate-400 font-sarabun">{total}</span>
             </div>
@@ -214,7 +214,7 @@ function StudentScoreSummaryModal({
           <div className="grid grid-cols-2 gap-3 w-full mb-8">
             <div className="p-4 rounded-[2rem] bg-indigo-50/50 border border-indigo-100 flex flex-col items-center gap-1">
               <Trophy size={20} className="text-indigo-500 mb-1" />
-              <span className="text-[18px] font-black text-indigo-600">{percentage}%</span>
+              <span className="text-[18px] font-black text-indigo-600">{displayPercent}%</span>
               <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">เปอร์เซ็นต์</span>
             </div>
             <div className="p-4 rounded-[2rem] bg-emerald-50/50 border border-emerald-100 flex flex-col items-center gap-1">
@@ -258,9 +258,11 @@ import { useAuth } from '@/hooks/useAuth';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
 import type { ExamRoom, ExamAttempt, GradeScoreType, GradeBookSubjectLink } from '@/types/exam';
 import { rawPointsToPercent } from '@/types/grades';
+import { resolveAttemptScoreDisplay } from '@/lib/exam/examRoomScoring';
 import { Button } from '@/components/ui/button';
+import { SubSubjectGroupBadge } from '@/components/school/SubSubjectGroupBadge';
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from '@/components/ui/dialog';
-import { DEPARTMENT_CONFIG, SUBJECT_GROUP_CONFIG, type Department, type SubjectGroupId } from '@/types/curriculum';
+import { DEPARTMENT_CONFIG, SUBJECT_GROUP_CONFIG, SUBJECT_SUBGROUP_CONFIG, type Department, type SubjectGroupId } from '@/types/curriculum';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
@@ -495,7 +497,6 @@ function RoomCardStatusPill({ room }: { room: ExamRoom }) {
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black uppercase font-sukhumvit shrink-0"
       style={{ color: cfg.color, background: cfg.bg }}
     >
-      {room.status === 'active' && <ExamRoomLiveIndicator />}
       <Icon className="w-2.5 h-2.5 shrink-0" />
       {cfg.label}
       {room.status === 'upcoming' && completedRounds > 0 && (
@@ -717,7 +718,7 @@ function GradeLevelBadge({
         border: `1px solid ${style.border}`,
       }}
     >
-      ห้อง {label}
+      {label}
     </span>
   );
 }
@@ -726,10 +727,12 @@ function CountdownTimer({
   startTime,
   durationMinutes,
   onExpire,
+  variant = 'badge',
 }: {
   startTime?: number;
   durationMinutes: number;
   onExpire?: () => void;
+  variant?: 'badge' | 'plain';
 }) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const hasExpiredRef = useRef(false);
@@ -765,6 +768,13 @@ function CountdownTimer({
   if (!startTime) return null;
   if (timeLeft === null) return null;
   if (timeLeft <= 0) {
+    if (variant === 'plain') {
+      return (
+        <span className="text-[10px] font-black font-mono tabular-nums text-rose-600 shrink-0">
+          หมดเวลา
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-black font-sukhumvit bg-red-600 text-white">
         หมดเวลา
@@ -774,6 +784,15 @@ function CountdownTimer({
 
   const m = Math.floor(timeLeft / 60000);
   const s = Math.floor((timeLeft % 60000) / 1000);
+  const timeLabel = `${m}:${s.toString().padStart(2, '0')}`;
+
+  if (variant === 'plain') {
+    return (
+      <span className="text-[10px] font-black font-mono tabular-nums text-rose-600 shrink-0">
+        {timeLabel}
+      </span>
+    );
+  }
 
   return (
     <motion.span
@@ -782,7 +801,7 @@ function CountdownTimer({
       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-black font-mono tabular-nums bg-red-600 text-white"
     >
       <HiClock className="w-2.5 h-2.5 shrink-0 text-white animate-pulse" />
-      {m}:{s.toString().padStart(2, '0')}
+      {timeLabel}
     </motion.span>
   );
 }
@@ -795,7 +814,7 @@ function AttemptCard({
   att: ExamAttempt;
   displayName?: string;
 }) {
-  const isSuspicious = att.suspiciousActivities >= 2;
+  const isSuspicious = att.suspiciousActivities >= 1;
   const statusColor = att.status === 'submitted' ? '#059669' : att.status === 'graded' ? '#6366f1' : '#f59e0b';
   const statusLabel = att.status === 'submitted' ? 'ส่งแล้ว' : att.status === 'graded' ? 'ตรวจแล้ว' : 'กำลังทำ';
   const name = displayName?.trim() || att.studentName || 'ไม่ทราบชื่อ';
@@ -861,9 +880,10 @@ function ProctoringModal({
   );
 
   const [isRecalculating, setIsRecalculating] = useState(false);
+  const canRecalculateScores = Boolean(onRecalculateScores && room.status !== 'active');
 
   const runRecalculate = useCallback(async () => {
-    if (!onRecalculateScores) return;
+    if (!onRecalculateScores || room.status === 'active') return;
     setIsRecalculating(true);
     try {
       const rounds = Array.from(new Set(
@@ -878,11 +898,11 @@ function ProctoringModal({
     } finally {
       setIsRecalculating(false);
     }
-  }, [attempts, onRecalculateScores, room.currentRound, room.id]);
+  }, [attempts, onRecalculateScores, room.currentRound, room.id, room.status]);
 
-  // Recalculate once when the proctor dashboard opens for this room
+  // คำนวณคะแนนหลังปิดห้องเท่านั้น — ไม่ตรวจขณะรอบยังเปิดอยู่
   useEffect(() => {
-    if (!onRecalculateScores) return;
+    if (!canRecalculateScores) return;
     let cancelled = false;
     void (async () => {
       setIsRecalculating(true);
@@ -894,19 +914,25 @@ function ProctoringModal({
           ? rounds
           : [normalizeExamRound(room.currentRound)];
         await Promise.all(
-          targetRounds.map((round) => onRecalculateScores(room.id, round)),
+          targetRounds.map((round) => onRecalculateScores?.(room.id, round)),
         );
       } finally {
         if (!cancelled) setIsRecalculating(false);
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per room open
-  }, [room.id, onRecalculateScores]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once when dashboard opens after close
+  }, [room.id, canRecalculateScores]);
 
-  const inProgress = attempts.filter(a => a.status === 'in_progress').length;
-  const submitted = attempts.filter(a => a.status === 'submitted' || a.status === 'graded').length;
-  const suspicious = attempts.filter(a => a.suspiciousActivities >= 2).length;
+  const proctorRound = normalizeExamRound(room.currentRound);
+  const roundAttempts = useMemo(
+    () => attempts.filter((a) => normalizeExamRound(a.round) === proctorRound),
+    [attempts, proctorRound],
+  );
+
+  const inProgress = roundAttempts.filter(a => a.status === 'in_progress').length;
+  const submitted = roundAttempts.filter(a => a.status === 'submitted' || a.status === 'graded').length;
+  const suspicious = roundAttempts.filter(a => a.suspiciousActivities >= 1).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -935,7 +961,7 @@ function ProctoringModal({
             <h2 className="text-[18px] font-black text-slate-800 font-sukhumvit mt-0.5">{room.title}</h2>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {onRecalculateScores && (
+            {canRecalculateScores && (
               <button
                 type="button"
                 onClick={() => void runRecalculate()}
@@ -969,12 +995,12 @@ function ProctoringModal({
 
         {/* Attempt list */}
         <div className="flex-1 overflow-y-auto min-h-0 scrollbar-hide flex flex-col gap-2">
-          {attempts.length === 0 ? (
+          {roundAttempts.length === 0 ? (
             <div className="text-center py-10 text-slate-400 font-sarabun text-[13px]">
-              ยังไม่มีนักเรียนเข้าห้องสอบ
+              ยังไม่มีนักเรียนเข้าห้องสอบในรอบนี้
             </div>
           ) : (
-            attempts.map((att) => (
+            roundAttempts.map((att) => (
               <div key={att.id}>
                 <AttemptCard
                   att={att}
@@ -1527,6 +1553,65 @@ function QuestionsPanel({
             };
           });
         }
+
+        // Repair stale question IDs: PDF sets regenerate question docs when the
+        // answer key is re-saved, so saved rooms can reference IDs that no longer
+        // exist. Swap them for the set's current questions.
+        const staleSetIds = new Set<string>();
+        missingIds.forEach(qid => {
+          if (mergedMap.has(qid) || questionCache.has(qid)) return;
+          const setId = draft.questionSetByQuestionId[qid] || draft.questionSetId;
+          if (setId && mergedSetMap.has(setId)) staleSetIds.add(setId);
+        });
+
+        if (staleSetIds.size > 0) {
+          setRoundDraft(prev => {
+            const round = prev[activeRound];
+            if (!round) return prev;
+            const nextIds = new Set(round.questionIds);
+            const nextMap = { ...round.questionSetByQuestionId };
+            const nextPts = { ...round.questionPoints };
+
+            staleSetIds.forEach(setId => {
+              const currentIds = mergedSetMap.get(setId);
+              if (!currentIds) return;
+              const fresh = Array.from(currentIds)
+                .map(id => mergedMap.get(id))
+                .filter((q): q is Question => !!q)
+                .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+              if (fresh.length === 0) return;
+
+              const oldIdsInOrder = Array.from(round.questionIds).filter(
+                qid => (round.questionSetByQuestionId[qid] || round.questionSetId) === setId,
+              );
+              const oldPts = oldIdsInOrder.map(qid => round.questionPoints[qid]);
+
+              oldIdsInOrder.forEach(qid => {
+                nextIds.delete(qid);
+                delete nextMap[qid];
+                delete nextPts[qid];
+              });
+
+              const canKeepPoints = fresh.length === oldIdsInOrder.length;
+              fresh.forEach((q, i) => {
+                nextIds.add(q.id);
+                nextMap[q.id] = setId;
+                const preserved = canKeepPoints ? oldPts[i] : undefined;
+                nextPts[q.id] = preserved ?? getDefaultQuestionPoints(q);
+              });
+            });
+
+            return {
+              ...prev,
+              [activeRound]: {
+                ...round,
+                questionIds: nextIds,
+                questionSetByQuestionId: nextMap,
+                questionPoints: nextPts,
+              },
+            };
+          });
+        }
       } finally {
         if (!cancelled) setIsHydratingSelected(false);
       }
@@ -1620,6 +1705,7 @@ function QuestionsPanel({
                         )}
                         <span className="text-[10px] text-slate-500 font-sarabun">
                           {stats.count} ข้อ · {stats.points} คะแนน
+                          {set?.createdByName ? ` · ${set.createdByName}` : ''}
                         </span>
                       </div>
                     </div>
@@ -1668,10 +1754,20 @@ function QuestionsPanel({
                     )}
                   >
                     {setQuestions.length === 0 ? (
-                      <div className="py-6 flex flex-col items-center justify-center gap-2 text-slate-400">
-                        <IndeterminateProgress />
-                        <p className="text-[10px] font-sarabun">กำลังโหลดข้อสอบ...</p>
-                      </div>
+                      isHydratingSelected ? (
+                        <div className="py-6 flex flex-col items-center justify-center gap-2 text-slate-400">
+                          <IndeterminateProgress />
+                          <p className="text-[10px] font-sarabun">กำลังโหลดข้อสอบ...</p>
+                        </div>
+                      ) : (
+                        <div className="py-6 flex flex-col items-center justify-center gap-2 text-slate-400">
+                          <p className="text-[11px] font-sarabun text-center leading-relaxed">
+                            ไม่พบข้อสอบในชุดนี้ — เฉลยอาจถูกแก้ไขหลังบันทึกห้องสอบ
+                            <br />
+                            ลองลบ part นี้แล้วเลือกชุดข้อสอบใหม่อีกครั้ง
+                          </p>
+                        </div>
+                      )
                     ) : (
                       setQuestions.map((q, qi) => {
                         const pts = resolveQuestionPoints(q.id, draft.questionPoints, q);
@@ -1844,6 +1940,11 @@ function QuestionsPanel({
                       {grpCfg?.name ?? set.subjectGroup}
                     </span>
                     <span className="text-[9px] text-slate-400 font-sarabun">{set.questionCount} ข้อ</span>
+                    {set.createdByName && (
+                      <span className="text-[9px] text-slate-400 font-sarabun truncate max-w-[120px]">
+                        · {set.createdByName}
+                      </span>
+                    )}
                   </div>
                 </div>
               </button>
@@ -2633,40 +2734,15 @@ function ScoreSettingsPanel({ room, onSave, onRegisterMobileSave }: {
   );
 }
 
-function RoomCreatorAvatar({
-  name,
-  photoURL,
-  className = 'w-5 h-5',
-}: {
-  name: string;
-  photoURL?: string;
-  className?: string;
-}) {
-  const initial = (name.trim().charAt(0) || '?').toUpperCase();
-  return (
-    <div
-      className={cn(
-        className,
-        'rounded-full overflow-hidden border border-slate-200 bg-slate-100 shrink-0 flex items-center justify-center',
-      )}
-    >
-      {photoURL ? (
-        <img src={photoURL} alt={name} className="w-full h-full object-cover" />
-      ) : (
-        <span className="text-[9px] font-black text-slate-500">{initial}</span>
-      )}
-    </div>
-  );
-}
-
 // ── Room Card ─────────────────────────────────────────────────────────────────
 function RoomCard({
-  room, onProctor, onChangeStatus, onDelete, onEdit, onOpenSettings, isStudent, onTakeExam,
-  canEdit, canDelete, myAttempt, onShowSummary, creatorPhotoURL,
+  room, onProctor, onChangeStatus, onFinish, onDelete, onEdit, onOpenSettings, isStudent, onTakeExam,
+  canEdit, canDelete, myAttempt, onShowSummary, alert,
 }: {
   room: ExamRoom;
   onProctor: () => void;
   onChangeStatus: (status: ExamRoom['status'], bypassConfirm?: boolean) => void;
+  onFinish?: () => void;
   onDelete: () => void;
   onEdit: () => void;
   onOpenSettings: (tab?: SettingsTab) => void;
@@ -2676,10 +2752,16 @@ function RoomCard({
   canDelete?: boolean;
   myAttempt?: ExamAttempt | null;
   onShowSummary: (room: ExamRoom, attempt: ExamAttempt) => void;
-  creatorPhotoURL?: string;
+  /** ตรวจพบนักเรียนสลับหน้าจอ — การ์ดจะเปลี่ยนหน้าแสดงชื่อชั่วคราว (ไม่ใช้กับมุมมองนักเรียน) */
+  alert?: { studentName: string; key: number } | null;
 }) {
   const [showActions, setShowActions] = useState(false);
   const needsQuestionSetup = Boolean(!isStudent && canEdit && !isExamRoomQuestionsConfigured(room));
+  // Unlimited-round rooms (maxAttempts === 0) cycle active <-> upcoming forever —
+  // they need an explicit way to reach a terminal 'closed' state.
+  const isUnlimitedRoom = (room.settings?.maxAttempts ?? 1) === 0;
+  const showFinishButton = Boolean(!isStudent && canEdit && isUnlimitedRoom && room.status !== 'closed');
+  const showClosedFinishDisabled = Boolean(!isStudent && canEdit && room.status === 'closed');
 
   const gradeLevel = getExamRoomGradeLevel(room);
   const roomNumber = getExamRoomNumber(room);
@@ -2693,7 +2775,11 @@ function RoomCard({
   const showStaffRoundControl = Boolean(
     !isStudent && canEdit && (room.status === 'upcoming' || room.status === 'active'),
   );
-  const showFooterActions = showStudentTakeExam || showStudentResults || showStaffRoundControl;
+  const showFooterActions = showStudentTakeExam
+    || showStudentResults
+    || showStaffRoundControl
+    || showFinishButton
+    || showClosedFinishDisabled;
 
   const hasScoreConnection = Boolean(
     (room.settings?.gradeBookSubjects && room.settings.gradeBookSubjects.length > 0) ||
@@ -2717,8 +2803,36 @@ function RoomCard({
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="rounded-2xl p-2.5 flex flex-col gap-2 transition-all duration-300 shadow-sm hover:shadow-md bg-white"
+      className="relative overflow-hidden rounded-2xl p-2.5 flex flex-col gap-2 h-full transition-all duration-300 shadow-sm hover:shadow-md bg-white"
+      style={{ perspective: 800 }}
     >
+      <AnimatePresence mode="wait" initial={false}>
+        {alert ? (
+          <motion.div
+            key={`suspicious-alert-${alert.key}`}
+            initial={{ opacity: 0, rotateX: -90 }}
+            animate={{ opacity: 1, rotateX: 0 }}
+            exit={{ opacity: 0, rotateX: 90 }}
+            transition={{ duration: 0.35 }}
+            className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 py-4 text-center"
+          >
+            <ShieldAlert className="w-7 h-7 text-rose-500" />
+            <p className="text-[10px] font-black uppercase tracking-wider text-rose-500 font-sukhumvit">
+              ตรวจพบสลับหน้าจอ
+            </p>
+            <p className="px-3 text-[15px] font-black text-slate-800 font-sukhumvit leading-snug line-clamp-2">
+              {alert.studentName}
+            </p>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="card-face"
+            initial={{ opacity: 0, rotateX: 90 }}
+            animate={{ opacity: 1, rotateX: 0 }}
+            exit={{ opacity: 0, rotateX: -90 }}
+            transition={{ duration: 0.35 }}
+            className="flex flex-1 flex-col gap-2 min-h-0"
+          >
       {/* Header */}
       <div className="flex items-start gap-2 min-w-0">
         <div className="flex-1 min-w-0 space-y-1">
@@ -2732,13 +2846,6 @@ function RoomCard({
                 <HiOutlineExclamationTriangle className="w-4 h-4 text-rose-500" aria-hidden />
                 <span className="sr-only">ยังไม่ได้ตั้งค่าข้อสอบ</span>
               </span>
-            )}
-            {room.status === 'active' && (
-              <CountdownTimer
-                startTime={room.startTime}
-                durationMinutes={room.durationMinutes}
-                onExpire={() => onChangeStatus('closed', true)}
-              />
             )}
           </div>
         </div>
@@ -2784,6 +2891,7 @@ function RoomCard({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.15 }}
+            className="flex-1"
           >
             <RoomCardActionsPanel
               canEdit={canEdit}
@@ -2802,35 +2910,25 @@ function RoomCard({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.15 }}
-            className="flex flex-col gap-2"
+            className="flex flex-col gap-2 flex-1 min-h-0"
           >
             <div className="space-y-1 min-w-0">
               <h3
-                className="text-[13px] font-black text-slate-800 font-sukhumvit leading-snug truncate"
+                className="text-[13px] font-black text-slate-800 font-sukhumvit leading-snug line-clamp-2 min-h-[calc(1.375em*2)]"
                 title={room.title}
               >
                 {room.title}
               </h3>
-              {room.teacherName && (
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <RoomCreatorAvatar
-                    name={room.teacherName}
-                    photoURL={creatorPhotoURL ?? room.teacherPhotoURL}
-                  />
-                  <span className="text-[10px] font-bold text-slate-600 font-sarabun truncate">
-                    {room.teacherName}
-                  </span>
-                </div>
-              )}
             </div>
 
-            {classBadgeLabel && (
-              <div className="flex flex-nowrap items-center gap-1 min-w-0 overflow-hidden">
+            <div className="flex flex-nowrap items-center gap-1 min-w-0 overflow-hidden min-h-[1.5rem]">
+              {classBadgeLabel ? (
+                <>
                 {gradeLevel ? (
                   <GradeLevelBadge gradeLevel={gradeLevel} roomNumber={roomNumber || undefined} />
                 ) : (
                   <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit text-slate-600 bg-slate-100 border border-slate-200 shrink-0">
-                    ห้อง {classBadgeLabel}
+                    {classBadgeLabel}
                   </span>
                 )}
                 {room.subjectName && (
@@ -2855,17 +2953,35 @@ function RoomCard({
                     </span>
                   </>
                 )}
-                {createdDateStr && (
-                  <span className="text-[10px] text-slate-400 font-sarabun shrink-0 ml-auto">
-                    {createdDateStr}
-                  </span>
+                {room.subSubjectGroup && (
+                  <>
+                    <span className="text-[10px] text-slate-300"> · </span>
+                    <SubSubjectGroupBadge
+                      label={room.subSubjectGroup}
+                      subjectGroupId={room.subjectGroupId}
+                      maxWidth="160px"
+                    />
+                  </>
                 )}
-              </div>
-            )}
+                </>
+              ) : null}
+            </div>
+
+            <div className="flex items-center gap-1.5 min-w-0 min-h-[1.25rem]">
+              {room.teacherName && (
+                <p className="text-[10px] font-bold text-slate-600 font-sarabun truncate min-w-0">
+                  {room.teacherName}
+                </p>
+              )}
+              {createdDateStr && (
+                <span className="text-[10px] text-slate-400 font-sarabun shrink-0 ml-auto">
+                  {createdDateStr}
+                </span>
+              )}
+            </div>
 
             {showFooterActions && (
-              <div className="flex items-center gap-1.5 pt-0.5">
-        {isStudent ? (
+              <div className="flex items-center gap-1.5 pt-0.5 mt-auto">        {isStudent ? (
           <>
             {showStudentTakeExam && (
               <motion.button
@@ -2886,9 +3002,12 @@ function RoomCard({
                 >
                   <HiDocumentText className="w-3 h-3 shrink-0" />
                   <span className="truncate">
-                    {myAttempt!.score !== null && myAttempt!.score !== undefined
-                      ? `${myAttempt!.score}/${room.totalPoints ?? '?'}`
-                      : 'ดูผล'}
+                    {(() => {
+                      const display = resolveAttemptScoreDisplay(room, myAttempt!);
+                      return display.score !== null
+                        ? `${display.score}/${display.maxPoints || '?'}`
+                        : 'ดูผล';
+                    })()}
                   </span>
                 </motion.button>
                 <motion.button
@@ -2908,7 +3027,7 @@ function RoomCard({
               <motion.button
                 whileTap={{ scale: 0.98 }}
                 onClick={() => onChangeStatus('active')}
-                className="flex items-center justify-center gap-1 h-7 px-2.5 rounded-lg text-[10px] font-bold w-full min-w-0 bg-emerald-100 text-emerald-700 hover:bg-emerald-200/80 transition-colors"
+                className="flex items-center justify-center gap-1 h-7 px-2.5 rounded-lg text-[10px] font-bold flex-1 min-w-0 bg-emerald-100 text-emerald-700 hover:bg-emerald-200/80 transition-colors"
               >
                 <HiPlay className="w-3 h-3 shrink-0" />
                 <span className="truncate">
@@ -2920,16 +3039,47 @@ function RoomCard({
               <motion.button
                 whileTap={{ scale: 0.98 }}
                 onClick={() => onChangeStatus('closed')}
-                className="flex items-center justify-center gap-1 h-7 px-2.5 rounded-lg text-[10px] font-bold w-full min-w-0 bg-rose-100 text-rose-600 hover:bg-rose-200/80 transition-colors"
+                className="flex items-center justify-center gap-1.5 h-7 px-2.5 rounded-lg text-[10px] font-bold flex-1 min-w-0 bg-rose-100 text-rose-600 hover:bg-rose-200/80 transition-colors"
               >
                 <HiStop className="w-3 h-3 shrink-0" />
                 <span className="truncate">ปิด รอบ {room.currentRound ?? 1}</span>
+                <CountdownTimer
+                  startTime={room.startTime}
+                  durationMinutes={room.durationMinutes}
+                  onExpire={() => onChangeStatus('closed', true)}
+                  variant="plain"
+                />
               </motion.button>
+            )}
+            {showFinishButton && (
+              <motion.button
+                whileTap={{ scale: 0.98 }}
+                onClick={onFinish}
+                title="จบห้องสอบถาวร — ห้องสอบนี้จะไม่สามารถเปิดได้อีก"
+                className="inline-flex items-center justify-center gap-1 h-7 px-2 rounded-lg text-[10px] font-bold shrink-0 bg-blue-100 text-blue-600 hover:bg-blue-200/80 transition-colors"
+              >
+                <HiCheckCircle className="w-3 h-3 shrink-0" />
+                <span className="truncate">เสร็จสิ้น</span>
+              </motion.button>
+            )}
+            {showClosedFinishDisabled && (
+              <button
+                type="button"
+                disabled
+                title="ห้องสอบนี้ปิดแล้ว"
+                className="flex w-full items-center justify-center gap-1 h-7 px-2 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-400 cursor-not-allowed"
+              >
+                <HiCheckCircle className="w-3 h-3 shrink-0" />
+                <span className="truncate">เสร็จสิ้น</span>
+              </button>
             )}
           </>
         )}
               </div>
             )}
+          </motion.div>
+        )}
+      </AnimatePresence>
           </motion.div>
         )}
       </AnimatePresence>
@@ -4673,44 +4823,55 @@ export default function ExamManager() {
   const { canEdit: canEditExam, canDelete: canDeleteExam } = useMyPermissions();
   const canEdit = canEditExam('exams');
   const canDelete = canDeleteExam('exams');
-  const { rooms, isLoading, createRoom, updateRoom, updateRoomStatus, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores } = useExamRoom();
+  const { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, finishRoom, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores } = useExamRoom();
+  // Roster lookup for resolving a student's real name (not their login email) on the
+  // suspicious-activity card alert below — same resolver ProctoringModal/RoomDetailView use.
+  const canViewAllSubjects = role === 'admin' || role === 'sysadmin';
+  const teachingMgr = useTeachingManager(user?.uid ?? '', canViewAllSubjects);
 
   const handleRecalculateScores = useCallback(async (roomId: string, round: number) => {
     await calculateRoomScores(roomId, round, { includeGraded: true });
   }, [calculateRoomScores]);
-  const [teacherPhotoById, setTeacherPhotoById] = useState<Record<string, string>>({});
+
+  // Suspicious-activity alert on the room card: flips the card to show the
+  // student's name + reads it aloud every time any attempt's suspiciousActivities
+  // counter goes up (tab-switch detected in StudentExamPage). Keyed per attempt so
+  // the first snapshot (existing counts) never fires — only later increments do.
+  const [cardAlerts, setCardAlerts] = useState<Record<string, { studentName: string; key: number }>>({});
+  const prevSuspiciousRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
-    const missingIds = [...new Set(
-      rooms
-        .filter((room) => room.teacherId && !room.teacherPhotoURL && !teacherPhotoById[room.teacherId])
-        .map((room) => room.teacherId),
-    )];
-    if (missingIds.length === 0) return;
+    attempts.forEach((att) => {
+      const prevCount = prevSuspiciousRef.current.get(att.id);
+      const currentCount = att.suspiciousActivities ?? 0;
+      if (prevCount !== undefined && currentCount > prevCount) {
+        const room = rooms.find((r) => r.id === att.roomId);
+        const classStudents = room?.classId ? teachingMgr.getStudentsForClass(room.classId) : [];
+        const roomAttempts = attempts.filter((a) => a.roomId === att.roomId);
+        const displayNameByKey = buildStudentDisplayNameByIdentityKey(classStudents, roomAttempts);
+        const studentName = resolveAttemptDisplayName(att, displayNameByKey);
+        const alertKey = Date.now();
+        setCardAlerts((prev) => ({ ...prev, [att.roomId]: { studentName, key: alertKey } }));
+        window.setTimeout(() => {
+          setCardAlerts((prev) => {
+            if (prev[att.roomId]?.key !== alertKey) return prev;
+            const next = { ...prev };
+            delete next[att.roomId];
+            return next;
+          });
+        }, 6000);
 
-    let cancelled = false;
-    void (async () => {
-      const next: Record<string, string> = {};
-      await Promise.all(missingIds.map(async (teacherId) => {
         try {
-          const snap = await getDoc(doc(db, 'users', teacherId));
-          if (!snap.exists()) return;
-          const photoURL = snap.data().photoURL;
-          if (typeof photoURL === 'string' && photoURL.trim()) {
-            next[teacherId] = photoURL.trim();
-          }
-        } catch {
-          /* ignore lookup errors */
+          const utterance = new SpeechSynthesisUtterance(`นักเรียน ${studentName} สลับหน้าจอ`);
+          utterance.lang = 'th-TH';
+          window.speechSynthesis?.speak(utterance);
+        } catch (err) {
+          console.warn('[ExamManager] speech synthesis failed:', err);
         }
-      }));
-      if (cancelled || Object.keys(next).length === 0) return;
-      setTeacherPhotoById((prev) => ({ ...prev, ...next }));
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [rooms, teacherPhotoById]);
+      }
+      prevSuspiciousRef.current.set(att.id, currentCount);
+    });
+  }, [attempts, rooms, teachingMgr]);
   const [showCreate, setShowCreate] = useState(false);
   const [createPrefill, setCreatePrefill] = useState<CreateRoomPrefill | null>(null);
   const [editingRoom, setEditingRoom] = useState<ExamRoom | null>(null);
@@ -4720,6 +4881,7 @@ export default function ExamManager() {
   const [filterGradeLevel, setFilterGradeLevel] = useState<string>('all');
   const [filterRoomNumber, setFilterRoomNumber] = useState<string>('all');
   const [filterSubjectGroup, setFilterSubjectGroup] = useState<SubjectGroupId | 'all'>('all');
+  const [filterSubSubjectGroup, setFilterSubSubjectGroup] = useState<string>('all');
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
   const [mobileStatusMenuOpen, setMobileStatusMenuOpen] = useState(false);
   const [roomSearchText, setRoomSearchText] = useState('');
@@ -4753,11 +4915,12 @@ export default function ExamManager() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [rooms, filterStatus, filterDepartment, filterGradeLevel, filterRoomNumber, filterSubjectGroup, roomSearchText]);
+  }, [rooms, filterStatus, filterDepartment, filterGradeLevel, filterRoomNumber, filterSubjectGroup, filterSubSubjectGroup, roomSearchText]);
 
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [roomToDelete, setRoomToDelete] = useState<ExamRoom | null>(null);
   const [closeRoomConfirm, setCloseRoomConfirm] = useState<ExamRoom | null>(null);
+  const [finishRoomConfirm, setFinishRoomConfirm] = useState<ExamRoom | null>(null);
   const [summaryData, setSummaryData] = useState<{ room: ExamRoom, attempt: ExamAttempt } | null>(null);
   // Reset exam state
   const [resetConfirm, setResetConfirm] = useState<{
@@ -4863,7 +5026,13 @@ export default function ExamManager() {
     || filterGradeLevel !== 'all'
     || filterRoomNumber !== 'all'
     || filterSubjectGroup !== 'all'
+    || filterSubSubjectGroup !== 'all'
     || roomSearchText.trim().length > 0;
+
+  const availableSubSubjectGroups = useMemo(() => {
+    if (filterSubjectGroup === 'all') return [] as string[];
+    return SUBJECT_SUBGROUP_CONFIG[filterSubjectGroup] ?? [];
+  }, [filterSubjectGroup]);
 
   const filtered = useMemo(() => {
     return rooms
@@ -4882,8 +5051,10 @@ export default function ExamManager() {
       const matchRoom = filterRoomNumber === 'all' || roomNumber === filterRoomNumber;
 
       const matchSubjectGroup = filterSubjectGroup === 'all' || room.subjectGroupId === filterSubjectGroup;
+      const matchSubSubjectGroup = filterSubSubjectGroup === 'all'
+        || (room.subSubjectGroup?.trim() || '') === filterSubSubjectGroup;
 
-      return matchStatus && matchSearch && matchDepartment && matchGrade && matchRoom && matchSubjectGroup;
+      return matchStatus && matchSearch && matchDepartment && matchGrade && matchRoom && matchSubjectGroup && matchSubSubjectGroup;
     })
       .sort((a, b) => {
         const timeA = a.createdAt ?? 0;
@@ -4891,7 +5062,7 @@ export default function ExamManager() {
         if (timeA !== timeB) return timeB - timeA;
         return a.title.localeCompare(b.title, 'th', { numeric: true });
       });
-  }, [rooms, filterStatus, filterDepartment, filterGradeLevel, filterRoomNumber, filterSubjectGroup, roomSearchText]);
+  }, [rooms, filterStatus, filterDepartment, filterGradeLevel, filterRoomNumber, filterSubjectGroup, filterSubSubjectGroup, roomSearchText]);
 
   const CARDS_PER_PAGE = 12;
   const totalPages = Math.max(1, Math.ceil(filtered.length / CARDS_PER_PAGE));
@@ -5024,6 +5195,7 @@ export default function ExamManager() {
     setFilterGradeLevel('all');
     setFilterRoomNumber('all');
     setFilterSubjectGroup('all');
+    setFilterSubSubjectGroup('all');
     setRoomSearchText('');
     setDetailRoom(null);
   };
@@ -5082,6 +5254,7 @@ export default function ExamManager() {
           value={filterSubjectGroup}
           onChange={(e) => {
             setFilterSubjectGroup(e.target.value as SubjectGroupId | 'all');
+            setFilterSubSubjectGroup('all');
             setDetailRoom(null);
           }}
           className={cn(
@@ -5095,20 +5268,39 @@ export default function ExamManager() {
             <option key={id} value={id}>{group.name}</option>
           ))}
         </select>
-      </div>
 
-      {hasStructureFilter && (
-        <button
-          type="button"
-          onClick={() => {
-            resetStructureFilters();
-            setMobileFilterOpen(false);
+        <select
+          value={filterSubSubjectGroup}
+          onChange={(e) => {
+            setFilterSubSubjectGroup(e.target.value);
+            setDetailRoom(null);
           }}
-          className="inline-flex h-9 items-center self-start rounded-xl border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-50 font-sukhumvit"
+          disabled={availableSubSubjectGroups.length === 0}
+          className={cn(
+            EXAM_FILTER_SELECT_CLASS,
+            'lg:flex-1',
+            (filterSubSubjectGroup === 'all' || availableSubSubjectGroups.length === 0) && 'text-slate-400',
+          )}
         >
-          ล้างตัวกรอง
-        </button>
-      )}
+          <option value="all">สาระย่อย</option>
+          {availableSubSubjectGroups.map((sub) => (
+            <option key={sub} value={sub}>{sub}</option>
+          ))}
+        </select>
+
+        {hasStructureFilter && (
+          <button
+            type="button"
+            onClick={() => {
+              resetStructureFilters();
+              setMobileFilterOpen(false);
+            }}
+            className="inline-flex h-9 shrink-0 items-center rounded-xl border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-50 font-sukhumvit"
+          >
+            ล้างตัวกรอง
+          </button>
+        )}
+      </div>
     </div>
   );
 
@@ -5144,6 +5336,16 @@ export default function ExamManager() {
       setCloseRoomConfirm(null);
     } catch (err) {
       console.error('Failed to close room:', err);
+    }
+  };
+
+  const handleConfirmFinishRoom = async () => {
+    if (!finishRoomConfirm) return;
+    try {
+      await finishRoom(finishRoomConfirm.id);
+      setFinishRoomConfirm(null);
+    } catch (err) {
+      console.error('Failed to finish room:', err);
     }
   };
 
@@ -5236,9 +5438,11 @@ export default function ExamManager() {
           filterGradeLevel={filterGradeLevel}
           filterRoomNumber={filterRoomNumber}
           filterSubjectGroup={filterSubjectGroup}
+          filterSubSubjectGroup={filterSubSubjectGroup}
           searchText={roomSearchText}
           availableGradeLevels={availableGradeLevels}
           availableRoomNumbers={availableRoomNumbers}
+          availableSubSubjectGroups={availableSubSubjectGroups}
           hasActiveFilters={hasStructureFilter}
           canCreate={canEdit && !isStudent}
           onDepartmentChange={handleDepartmentFilterChange}
@@ -5246,6 +5450,11 @@ export default function ExamManager() {
           onRoomChange={handleRoomFilterChange}
           onSubjectGroupChange={(group) => {
             setFilterSubjectGroup(group);
+            setFilterSubSubjectGroup('all');
+            setDetailRoom(null);
+          }}
+          onSubSubjectGroupChange={(sub) => {
+            setFilterSubSubjectGroup(sub);
             setDetailRoom(null);
           }}
           onSearchChange={setRoomSearchText}
@@ -5348,20 +5557,20 @@ export default function ExamManager() {
                       {paginatedRooms.map((room, i) => (
                         <motion.div
                           key={room.id}
-                          className="py-0.5"
+                          className="h-full py-0.5"
                           initial={{ opacity: 0, y: 8 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: i * 0.04 }}
                         >
                           <RoomCard
                             room={room}
-                            creatorPhotoURL={room.teacherPhotoURL || teacherPhotoById[room.teacherId]}
                             isStudent={isStudent}
                             myAttempt={isStudent && user?.uid ? getAttemptsForRoom(room.id).filter(a => String(a.studentId).trim() === user.uid).sort((a, b) => (b.round ?? 0) - (a.round ?? 0))[0] ?? null : null}
                             onTakeExam={() => navigate(`/exam/${room.id}`)}
                             onShowSummary={(r, a) => setSummaryData({ room: r, attempt: a })}
                             onProctor={() => setProctoringRoom(room)}
                             onChangeStatus={(status, bypass) => handleChangeStatus(room.id, status, bypass)}
+                            onFinish={() => setFinishRoomConfirm(room)}
                             onDelete={() => handleDelete(room)}
                             onEdit={() => { setEditingRoom(room); setShowCreate(true); }}
                             onOpenSettings={(tab) => {
@@ -5370,6 +5579,7 @@ export default function ExamManager() {
                             }}
                             canEdit={canEdit}
                             canDelete={canDelete}
+                            alert={!isStudent ? cardAlerts[room.id] ?? null : null}
                           />
                         </motion.div>
                       ))}
@@ -5538,6 +5748,61 @@ export default function ExamManager() {
                   className="flex-1 h-11 rounded-2xl bg-rose-500 text-white text-[13px] font-black font-sukhumvit flex items-center justify-center gap-2 hover:bg-rose-600 transition-all"
                 >
                   <HiStop size={14} /> ยืนยันปิดห้องสอบ
+                </motion.button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Finish Room (Unlimited Rounds) Confirmation Dialog ── */}
+      <AnimatePresence>
+        {finishRoomConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setFinishRoomConfirm(null)}
+              className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 16 }}
+              className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 flex flex-col gap-4"
+            >
+              {/* Icon */}
+              <div className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center mx-auto">
+                <HiCheckCircle size={26} className="text-slate-700" />
+              </div>
+
+              <div className="text-center">
+                <h3 className="text-[16px] font-black text-slate-800 font-sukhumvit">
+                  จบห้องสอบ 「{finishRoomConfirm.title}」?
+                </h3>
+                <p className="text-[13px] text-slate-500 font-sarabun mt-2">
+                  ห้องสอบนี้จะไม่สามารถเปิดได้อีก ถ้าต้องการทำสอบ ให้ทำการสร้างห้องสอบอีกและตั้งค่าให้ถูกต้อง
+                </p>
+                <p className="text-[11px] text-rose-500 font-bold font-sarabun mt-1">
+                  ⚠️ การกระทำนี้ไม่สามารถย้อนกลับได้
+                </p>
+              </div>
+
+              <div className="flex gap-3 mt-1">
+                <button
+                  type="button"
+                  onClick={() => setFinishRoomConfirm(null)}
+                  className="flex-1 h-11 rounded-2xl border border-slate-200 text-slate-600 text-[13px] font-black font-sukhumvit hover:bg-slate-50 transition-all"
+                >
+                  ยกเลิก
+                </button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.97 }}
+                  type="button"
+                  onClick={handleConfirmFinishRoom}
+                  className="flex-1 h-11 rounded-2xl bg-slate-800 text-white text-[13px] font-black font-sukhumvit flex items-center justify-center gap-2 hover:bg-slate-900 transition-all"
+                >
+                  <HiCheckCircle size={14} /> ยืนยันเสร็จสิ้น
                 </motion.button>
               </div>
             </motion.div>

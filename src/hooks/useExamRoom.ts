@@ -1,5 +1,5 @@
 3.// src/hooks/useExamRoom.ts
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   collection,
   query,
@@ -20,6 +20,7 @@ import { normalizeExamScore } from '@/lib/students/studentIdentity';
 import type { ExamRoom, ExamAttempt, ExamRoomStatus, ExamQuestionPublic } from '@/types/exam';
 import type { QuestionPayload, QuestionType } from '@/types/questionBank';
 import { resolveQuestionPoints } from '@/lib/exam/questionPoints';
+import { canSubmitExamManually } from '@/lib/exam/examSubmitPolicy';
 import {
   gradeAttemptAnswers,
   loadQuestionMapForSets,
@@ -39,6 +40,7 @@ import {
   getRoundQuestionConfig,
   roomHasSavedQuestions,
 } from '@/lib/exam/roundQuestions';
+import { seededShuffle } from '@/lib/exam/questionShuffle';
 import { useActiveAcademicYear } from './useActiveAcademicYear';
 import { useAuth } from './useAuth';
 import { requestExamAttemptGrading } from '@/features/exam/utils/examGradingApi';
@@ -166,6 +168,16 @@ export function useExamRoom() {
   const [attempts, setAttempts] = useState<ExamAttempt[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const recalcAttemptedRef = useRef(new Set<string>());
+  // Tracks roomId:round combos currently being auto-graded — prevents concurrent duplicate calls
+  const gradingInFlightRef = useRef(new Set<string>());
+  // Always-current rooms ref — lets callbacks read latest rooms without closing over the state value,
+  // so useCallback/useEffect deps don't need to list `rooms` and won't re-run on every snapshot
+  const roomsRef = useRef<ExamRoom[]>([]);
+  roomsRef.current = rooms;
+
+  // Stable string of sorted room IDs — changes only when the set of rooms actually changes,
+  // not on every onSnapshot that emits the same rooms with new object references
+  const roomIds = useMemo(() => rooms.map(r => r.id).sort().join(','), [rooms]);
 
   // Load exam rooms by role
   useEffect(() => {
@@ -420,47 +432,49 @@ export function useExamRoom() {
     };
   }, [user?.uid, role, academicYear, activeSemester, userData]);
 
-  // Load attempts — one sub-collection listener per room (no chunked where-in queries)
+  // Load attempts — polled per room (not realtime) to avoid read amplification:
+  // every student answer-save write used to fan out to every open teacher/admin
+  // dashboard via onSnapshot on the whole attempts subcollection.
+  // Depends on roomIds (stable string) not rooms (new array ref on every snapshot)
+  // so the poll loop only restarts when the actual set of room IDs changes.
   useEffect(() => {
-    if (rooms.length === 0) {
+    if (!roomIds) {
       setAttempts([]);
       return;
     }
 
-    const unsubscribes: (() => void)[] = [];
-    const attemptsMap = new Map<string, ExamAttempt>();
+    const ids = roomIds.split(',');
+    let cancelled = false;
 
-    rooms.forEach((room) => {
-      const q = collection(db, 'exam_rooms', room.id, 'attempts');
-
-      const unsub = onSnapshot(q, (snap) => {
-        snap.docChanges().forEach(change => {
-          if (change.type === 'removed') {
-            attemptsMap.delete(change.doc.id);
-          } else {
-            const raw = change.doc.data();
-            attemptsMap.set(change.doc.id, {
-              ...raw,
-              id: change.doc.id,
-              roomId: room.id,
-              score: normalizeExamScore(raw.score),
-              startedAt: normalizeTimestamp(raw.startedAt),
-              submittedAt: raw.submittedAt ? normalizeTimestamp(raw.submittedAt) : null,
-              lastSavedAt: normalizeTimestamp(raw.lastSavedAt),
-            } as ExamAttempt);
-          }
+    const fetchAttempts = async () => {
+      const attemptsMap = new Map<string, ExamAttempt>();
+      await Promise.all(ids.map(async (roomId: string) => {
+        const snap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
+        snap.docs.forEach((d) => {
+          const raw = d.data();
+          attemptsMap.set(d.id, {
+            ...raw,
+            id: d.id,
+            roomId,
+            score: normalizeExamScore(raw.score),
+            startedAt: normalizeTimestamp(raw.startedAt),
+            submittedAt: raw.submittedAt ? normalizeTimestamp(raw.submittedAt) : null,
+            lastSavedAt: normalizeTimestamp(raw.lastSavedAt),
+          } as ExamAttempt);
         });
-        setAttempts(Array.from(attemptsMap.values()));
-      }, (err) => {
-        console.error('Error loading exam attempts:', err);
-      });
-      unsubscribes.push(unsub);
-    });
+      }));
+      if (!cancelled) setAttempts(Array.from(attemptsMap.values()));
+    };
+
+    void fetchAttempts();
+    // ponytail: 20s poll cadence, tighten if teachers report stale scores during active exams
+    const interval = window.setInterval(fetchAttempts, 20000);
 
     return () => {
-      unsubscribes.forEach(unsub => unsub());
+      cancelled = true;
+      window.clearInterval(interval);
     };
-  }, [rooms]);
+  }, [roomIds]);
 
   const createRoom = useCallback(async (data: Omit<ExamRoom, 'id' | 'createdAt' | 'status' | 'currentRound' | 'completedRounds'>) => {
     try {
@@ -591,7 +605,7 @@ export function useExamRoom() {
 
   const updateRoomStatus = useCallback(async (roomId: string, status: ExamRoomStatus) => {
     try {
-      const room = rooms.find(r => r.id === roomId);
+      const room = roomsRef.current.find(r => r.id === roomId);
       if (!room) return;
 
       const maxAttempts = room.settings?.maxAttempts ?? 1;
@@ -646,10 +660,8 @@ export function useExamRoom() {
           completedRounds: completed,
         });
 
-        // Trigger score calculation for the round that just ended
-        if (currentRound > 0) {
-          void calculateRoomScores(roomId, currentRound);
-        }
+        // คะแนนทั้งรอบคำนวณโดย finalizeExamRoundOnClose (Cloud Function) เพียงจุดเดียว —
+        // ไม่เรียก calculateRoomScores() ซ้ำจาก client เพื่อกันคำนวณแข่งกัน 2 ทาง
       } else {
         await updateDoc(doc(db, 'exam_rooms', roomId), { status });
       }
@@ -657,7 +669,59 @@ export function useExamRoom() {
       console.error('Error updating exam room status:', err);
       throw err;
     }
-  }, [rooms, calculateRoomScores]);
+  }, []); // roomsRef is a ref — reading .current doesn't need to be a dep
+
+  // Permanently close a room configured for unlimited rounds (maxAttempts === 0).
+  // Unlike updateRoomStatus('closed'), this always lands on 'closed' — it never
+  // loops back to 'upcoming' — since unlimited rooms otherwise have no way to
+  // reach a terminal state on their own.
+  const finishRoom = useCallback(async (roomId: string) => {
+    try {
+      const room = roomsRef.current.find(r => r.id === roomId);
+      if (!room) return;
+
+      if (room.status !== 'active') {
+        await updateDoc(doc(db, 'exam_rooms', roomId), { status: 'closed' });
+        return;
+      }
+
+      const currentRound = room.currentRound;
+      const attemptsRef = collection(db, 'exam_rooms', roomId, 'attempts');
+      const attemptsSnap = await getDocs(attemptsRef);
+      const inProgressDocs = attemptsSnap.docs.filter((d) => {
+        const data = d.data() as Partial<ExamAttempt>;
+        const isInProgress = data.status === 'in_progress';
+        if (!currentRound || currentRound <= 0) return isInProgress;
+        return isInProgress && Number(data.round) === Number(currentRound);
+      });
+
+      if (inProgressDocs.length > 0) {
+        for (let i = 0; i < inProgressDocs.length; i += 450) {
+          const chunk = inProgressDocs.slice(i, i + 450);
+          const batch = writeBatch(db);
+          chunk.forEach((attemptDoc) => {
+            batch.update(attemptDoc.ref, {
+              status: 'submitted',
+              submittedAt: Timestamp.now(),
+              lastSavedAt: Timestamp.now(),
+            });
+          });
+          await batch.commit();
+        }
+      }
+
+      await updateDoc(doc(db, 'exam_rooms', roomId), {
+        status: 'closed',
+        completedRounds: (room.completedRounds ?? 0) + 1,
+      });
+
+      // คะแนนคำนวณโดย finalizeExamRoundOnClose (Cloud Function) เพียงจุดเดียว —
+      // ไม่เรียก calculateRoomScores() ซ้ำจาก client เพื่อกันคำนวณแข่งกัน 2 ทาง
+    } catch (err) {
+      console.error('Error finishing exam room:', err);
+      throw err;
+    }
+  }, []);
 
   const updateRoom = useCallback(async (roomId: string, data: Partial<ExamRoom>) => {
     try {
@@ -703,11 +767,14 @@ export function useExamRoom() {
       const batch = writeBatch(db);
       snap.docs.forEach(d => batch.delete(d.ref));
       await batch.commit();
-      // Also reset round counters
+      // Also reset round counters. Round numbers restart from 1 after this, so the
+      // finalizeExamRoundOnClose lock (finalizedRounds) must clear too, or the next
+      // "round 1" would be seen as already-finalized and never get graded.
       await updateDoc(doc(db, 'exam_rooms', roomId), {
         currentRound: 0,
         completedRounds: 0,
         status: 'upcoming',
+        finalizedRounds: [],
       });
     } catch (err) {
       console.error('Error resetting all attempts:', err);
@@ -720,30 +787,44 @@ export function useExamRoom() {
   }, [attempts]);
 
   // Auto-close expired active rooms (when teacher is viewing)
+  // Uses roomsRef so the interval callback always sees fresh room data without
+  // needing rooms/updateRoomStatus in deps (both are now stable across snapshots)
   useEffect(() => {
-    if (role !== 'teacher' || isLoading || rooms.length === 0) return;
+    if (role !== 'teacher' || isLoading) return;
 
     const interval = setInterval(() => {
       const now = Date.now();
-      rooms.forEach(room => {
-        // If room is active and past its endTime, close it automatically.
-        if (room.status === 'active' && room.endTime && now > room.endTime + 2000) { // 2s buffer
+      roomsRef.current.forEach(room => {
+        if (room.status === 'active' && room.endTime && now > room.endTime + 2000) {
           console.log(`[useExamRoom] Auto-closing expired room: ${room.id}`);
           void updateRoomStatus(room.id, 'closed');
         }
       });
-    }, 15000); // Check every 15 seconds
+    }, 15000);
 
     return () => clearInterval(interval);
-  }, [rooms, role, isLoading, updateRoomStatus]);
+  }, [role, isLoading, updateRoomStatus]);
 
-  // Auto-calculate scores for ungraded / mis-graded attempts (teacher + admin)
+  // One-time repair for attempts wrongly scored 0 by a legacy Cloud Function bug.
+  // Plain "submitted, score still null" attempts are NOT recalculated here anymore —
+  // that's now finalizeExamRoundOnClose's (Cloud Function) job alone, so this effect
+  // running in every open teacher/admin tab doesn't race it right after a room closes.
   useEffect(() => {
     const canAutoGrade = role === 'teacher' || role === 'admin' || role === 'sysadmin';
     if (!canAutoGrade || isLoading || attempts.length === 0) return;
 
+    const regradeZeroTasks = new Set<string>();
+
     const uncalculated = attempts.filter((a) => {
-      if (a.status === 'submitted' && normalizeExamScore(a.score) === null) return true;
+      const room = roomsRef.current.find((r) => r.id === a.roomId);
+      // รอบที่ยังเปิดอยู่ — รอครูปิดแล้วค่อยคำนวณทั้งรอบทีเดียว
+      if (
+        room?.status === 'active'
+        && Number(a.round) === Number(room.currentRound)
+      ) {
+        return false;
+      }
+
       // One-time re-grade for attempts wrongly scored 0 (legacy Cloud Function bug)
       if (a.status === 'graded' && normalizeExamScore(a.score) === 0) {
         const answerCount = a.answers ? Object.keys(a.answers).length : 0;
@@ -756,6 +837,7 @@ export function useExamRoom() {
         const taskKey = `${a.roomId}:${a.round}:regrade-zero`;
         if (recalcAttemptedRef.current.has(taskKey)) return false;
         recalcAttemptedRef.current.add(taskKey);
+        regradeZeroTasks.add(`${a.roomId}:${a.round}`);
         return true;
       }
       return false;
@@ -770,13 +852,20 @@ export function useExamRoom() {
 
     tasks.forEach((rounds, rId) => {
       rounds.forEach((round) => {
+        const flightKey = `${rId}:${round}`;
+        // Skip if a calculateRoomScores call is already in-flight for this room/round —
+        // prevents concurrent duplicate writes that would each trigger another snapshot cycle
+        if (gradingInFlightRef.current.has(flightKey)) return;
+        gradingInFlightRef.current.add(flightKey);
+        const needsIncludeGraded = regradeZeroTasks.has(flightKey);
         console.log(`[useExamRoom] Auto-calculating scores for room ${rId} round ${round}`);
-        void calculateRoomScores(rId, round, { includeGraded: true });
+        void calculateRoomScores(rId, round, needsIncludeGraded ? { includeGraded: true } : undefined)
+          .finally(() => gradingInFlightRef.current.delete(flightKey));
       });
     });
   }, [attempts, role, isLoading, calculateRoomScores]);
 
-  return { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores };
+  return { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, finishRoom, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores };
 }
 
 // ── Hook: useExamAttempt (student side) ───────────────────────────────────────
@@ -945,11 +1034,13 @@ export function useExamAttempt(roomId: string) {
     return () => unsub();
   }, [roomId, attempt?.id]);
 
-  // Recover stuck grading (submitted but score still null) — e.g. before Gen2 trigger fix
+  // Recover stuck grading after round close (submitted but score still null)
   useEffect(() => {
-    if (!roomId || !attempt?.id) return;
+    if (!roomId || !attempt?.id || !room) return;
     if (attempt.status !== 'submitted') return;
     if (typeof attempt.score === 'number') return;
+    // ระหว่างรอบยังเปิด — รอครูปิดห้องก่อนจึงคำนวณคะแนนทั้งรอบ
+    if (room.status === 'active') return;
 
     let cancelled = false;
     const timer = window.setTimeout(() => {
@@ -963,10 +1054,10 @@ export function useExamAttempt(roomId: string) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [roomId, attempt?.id, attempt?.status, attempt?.score]);
+  }, [roomId, room?.status, attempt?.id, attempt?.status, attempt?.score]);
 
 
-  const fetchQuestions = useCallback(async (roomData: ExamRoom): Promise<ExamQuestionPublic[]> => {
+  const fetchQuestions = useCallback(async (roomData: ExamRoom, studentId?: string): Promise<ExamQuestionPublic[]> => {
     setIsLoadingQuestions(true);
     try {
       const { roundConfig } = getRoundQuestionConfig(roomData);
@@ -1059,6 +1150,35 @@ export function useExamAttempt(roomId: string) {
           .map((q, index) => ({ ...q, order: index + 1 }));
       }
 
+      // สลับลำดับข้อสำหรับนักเรียนแต่ละคน (ถ้าเปิดใช้) — เฉพาะข้อที่ไม่ใช่ชุด PDF
+      // (PDF ผูกกับหน้ากระดาษคำตอบตายตัว สลับไม่ได้) ใช้ seed คงที่ต่อคน/ห้อง/รอบ/ชุด
+      // เพื่อให้ลำดับเดิมทุกครั้งที่โหลดซ้ำ (resume/refresh)
+      if (roomData.settings?.shuffleQuestions && studentId) {
+        const roundNum = Number(roomData.currentRound ?? 1) || 1;
+        const indicesBySetId = new Map<string, number[]>();
+
+        orderedQuestions.forEach((q, idx) => {
+          const setId = setByQuestionId[q.id] || fallbackSetId || '';
+          const isPdfSet = typeof metaById.get(setId)?.examPdfUrl === 'string'
+            && !!(metaById.get(setId)?.examPdfUrl as string).trim();
+          if (isPdfSet) return;
+          const arr = indicesBySetId.get(setId) ?? [];
+          arr.push(idx);
+          indicesBySetId.set(setId, arr);
+        });
+
+        const shuffled = [...orderedQuestions];
+        indicesBySetId.forEach((indices, setId) => {
+          if (indices.length < 2) return;
+          const values = indices.map((i) => orderedQuestions[i]);
+          const shuffledValues = seededShuffle(values, `${studentId}_${roomData.id}_${roundNum}_${setId}`);
+          indices.forEach((originalIdx, k) => {
+            shuffled[originalIdx] = shuffledValues[k];
+          });
+        });
+        orderedQuestions = shuffled;
+      }
+
       setQuestions(orderedQuestions);
       setAnswerSheetGroups(
         buildAnswerSheetGroups(
@@ -1123,7 +1243,7 @@ export function useExamAttempt(roomId: string) {
         return false;
       }
 
-      const loadedQuestions = await fetchQuestions(found);
+      const loadedQuestions = await fetchQuestions(found, studentId);
       if (loadedQuestions.length === 0) {
         setError(prev => prev ?? describeMissingQuestionsError(found));
         setIsJoining(false);
@@ -1168,6 +1288,30 @@ export function useExamAttempt(roomId: string) {
         setRoom(found);
         setIsJoining(false);
         return true;
+      }
+
+      // ตรวจสอบว่านักเรียนอยู่ห้องเรียนตรงกับที่ห้องสอบนี้กำหนดไว้ก่อนสร้าง attempt ใหม่
+      // (เฉพาะตอนเข้าครั้งแรก — ไม่บล็อกการ resume attempt ที่มีอยู่แล้ว)
+      // ถ้าห้องสอบไม่ได้ผูกกับห้องเรียนใดห้องหนึ่ง (classId ว่าง) หรือหา classId ของนักเรียนไม่เจอ จะไม่บล็อก
+      if (found.classId) {
+        let studentClassId: string | undefined;
+        const studentSnap = await getDoc(doc(db, 'students', studentId));
+        studentClassId = studentSnap.exists() ? (studentSnap.data() as { classId?: string })?.classId : undefined;
+
+        if (!studentClassId) {
+          const byAuthUid = await getDocs(query(collection(db, 'students'), where('authUid', '==', studentId)));
+          studentClassId = byAuthUid.docs[0]?.data()?.classId;
+        }
+        if (!studentClassId) {
+          const byUserId = await getDocs(query(collection(db, 'students'), where('userId', '==', studentId)));
+          studentClassId = byUserId.docs[0]?.data()?.classId;
+        }
+
+        if (studentClassId && studentClassId !== found.classId) {
+          setError(`ห้องสอบนี้จัดไว้สำหรับห้อง ${found.className || ''} — คุณไม่ได้อยู่ห้องนี้ กรุณาตรวจสอบห้องสอบกับครูผู้สอนก่อนเข้าใหม่`);
+          setIsJoining(false);
+          return false;
+        }
       }
 
       // Create new attempt
@@ -1254,8 +1398,11 @@ export function useExamAttempt(roomId: string) {
     }
   }, [attempt]);
 
-  const submitAttempt = useCallback(async () => {
+  const submitAttempt = useCallback(async (options?: { force?: boolean }) => {
     if (!attempt || !room) return;
+    if (!options?.force && !canSubmitExamManually(attempt.startedAt)) {
+      return;
+    }
     try {
       const updated = { ...attempt, status: 'submitted' as const, submittedAt: Date.now() };
 
@@ -1269,10 +1416,13 @@ export function useExamAttempt(roomId: string) {
       setAttempt(updated);
       localStorage.removeItem(`exam_attempt_${roomId}_${attempt.studentId}`);
 
-      try {
-        await requestExamAttemptGrading(roomId, attempt.id);
-      } catch (gradeErr) {
-        console.warn('Exam grading callable failed, waiting for trigger:', gradeErr);
+      // คะแนนทั้งรอบคำนวณทีเดียวตอนครูปิดห้อง — ไม่ตรวจรายคนตอนส่ง
+      if (room.status !== 'active') {
+        try {
+          await requestExamAttemptGrading(roomId, attempt.id);
+        } catch (gradeErr) {
+          console.warn('Exam grading callable failed, waiting for trigger:', gradeErr);
+        }
       }
     } catch (err) {
       console.error('Error submitting attempt:', err);

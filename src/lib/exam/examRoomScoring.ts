@@ -4,18 +4,60 @@ import {
   buildStudentIdentityLookup,
   enrichStudentIdentityLookupFromAttempts,
   normalizeExamRound,
+  normalizeExamScore,
   resolveCanonicalStudentId,
   type StudentIdentityFields,
 } from '@/lib/students/studentIdentity';
 import { getExamRoomRoundTotalPoints } from '@/lib/exam/roundQuestions';
 import { resolveAttemptTotalScore } from '@/lib/exam/manualEssayGrading';
 
-export function attemptScorePercent(room: ExamRoom, attempt: ExamAttempt): number | null {
+export type AttemptScoreDisplay = {
+  score: number | null;
+  maxPoints: number;
+  percent: number | null;
+};
+
+function toDisplayPercent(score: number, maxPoints: number): number | null {
+  if (maxPoints <= 0) return null;
+  return Math.round(rawPointsToPercent(score, maxPoints));
+}
+
+export function resolveAttemptScoreDisplay(
+  room: ExamRoom,
+  attempt: ExamAttempt,
+): AttemptScoreDisplay {
+  const maxPoints = getExamRoomRoundTotalPoints(room, normalizeExamRound(attempt.round));
   const score = resolveAttemptTotalScore(attempt);
-  if (score === null) return null;
-  const total = getExamRoomRoundTotalPoints(room, normalizeExamRound(attempt.round));
-  if (total <= 0) return null;
-  return Math.round(rawPointsToPercent(score, total) * 10) / 10;
+  if (score === null) {
+    return { score: null, maxPoints, percent: null };
+  }
+  return {
+    score,
+    maxPoints,
+    percent: toDisplayPercent(score, maxPoints),
+  };
+}
+
+/** คะแนนปรนัยระหว่างรอตรวจข้ออัตนัย — ใช้ objectiveMaxPoints เป็นตัวหาร */
+export function resolveAttemptObjectiveScoreDisplay(
+  attempt: ExamAttempt,
+  objectiveMaxPoints?: number | null,
+): AttemptScoreDisplay {
+  const score = normalizeExamScore(attempt.score);
+  const maxPoints = objectiveMaxPoints ?? attempt.objectiveMaxPoints ?? 0;
+  if (score === null) {
+    return { score: null, maxPoints, percent: null };
+  }
+  return {
+    score,
+    maxPoints,
+    percent: toDisplayPercent(score, maxPoints),
+  };
+}
+
+export function attemptScorePercent(room: ExamRoom, attempt: ExamAttempt): number | null {
+  const display = resolveAttemptScoreDisplay(room, attempt);
+  return display.percent;
 }
 
 /** Best score % per student across all rounds (canonical student doc id). */

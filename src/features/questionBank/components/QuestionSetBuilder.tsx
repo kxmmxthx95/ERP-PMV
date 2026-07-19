@@ -18,6 +18,7 @@ import {
 } from '@/types/curriculum';
 import { TYPE_CONFIG, type NewQuestionSet, type QuestionSet } from '@/types/questionBank';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useAuth } from '@/hooks/useAuth';
 import { previewQuestionSetCode } from '@/features/questionBank/utils/questionSetCode';
 import { safeStorageFilename, imageUploadContentType } from '@/lib/safeStorageFilename';
 
@@ -68,6 +69,7 @@ const getInitialState = (initial?: QuestionSet | null): BuilderState => {
 
 export default function QuestionSetBuilder({ open, onClose, initial, prefill, existingSets = [], onSubmit }: Props) {
   const { year } = useActiveAcademicYear();
+  const { user, userData } = useAuth();
   const isEdit = Boolean(initial);
   const init = {
     ...getInitialState(initial),
@@ -86,6 +88,11 @@ export default function QuestionSetBuilder({ open, onClose, initial, prefill, ex
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canSubmit = useMemo(() => title.trim().length > 0, [title]);
+
+  const creatorDisplayName = useMemo(() => {
+    if (isEdit) return initial?.createdByName?.trim() || 'ไม่ระบุ';
+    return userData?.displayName?.trim() || user?.displayName?.trim() || user?.email?.trim() || 'ไม่ระบุ';
+  }, [isEdit, initial?.createdByName, user, userData?.displayName]);
 
   const previewSetCode = useMemo(() => {
     if (isEdit && initial?.setCode) return initial.setCode;
@@ -217,6 +224,12 @@ export default function QuestionSetBuilder({ open, onClose, initial, prefill, ex
           <p className="px-1 font-mono text-sm font-black tracking-wide text-blue-600">
             {previewSetCode}
           </p>
+
+          <Field label="ครูผู้สร้าง">
+            <div className="flex h-9 items-center rounded-xl bg-slate-100 px-4 text-xs font-bold text-slate-600">
+              {creatorDisplayName}
+            </div>
+          </Field>
 
           {/* Row 1: ชื่อชุด + กลุ่มสาระ */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

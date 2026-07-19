@@ -14,13 +14,8 @@ import {
 } from '@/hooks/useMorningRollCall';
 import { useMorningRollCallClassStudents } from '@/hooks/useMorningRollCallClassStudents';
 import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
-import {
-  buildLeaveNote,
-  findApprovedLeaveForStudentOnDate,
-} from '@/lib/attendance/leaveRequestStudentMatch';
+import { applyApprovedLeaveToMorningRollCallRows } from '@/lib/attendance/leaveRequestStudentMatch';
 import type { RollCallStatus, StudentRollCall, MorningRollCallSession } from '@/types/morningRollCall';
-import type { LeaveRequest } from '@/types/leave';
-import type { Student } from '@/types/student';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
@@ -35,36 +30,6 @@ const SOLID_CLASS_CARD_COLOR = colors.palette.royalBlue;
 
 function stripThaiPrefix(name: string) {
   return name.replace(/^(นาย|นางสาว|นาง|ดร\.?|ผศ\.?)/i, '').trim();
-}
-
-function applyApprovedLeaveToRows(
-  rows: StudentRowData[],
-  classStudents: Student[],
-  leaveRequests: LeaveRequest[],
-  date: string,
-): StudentRowData[] {
-  if (leaveRequests.length === 0) return rows;
-
-  const studentById = new Map(classStudents.map((student) => [student.id, student]));
-
-  return rows.map((row) => {
-    if (row.status !== 'unmarked') return row;
-
-    const student = studentById.get(row.studentId);
-    const approvedLeave = findApprovedLeaveForStudentOnDate(
-      leaveRequests,
-      student ?? { id: row.studentId, studentCode: row.studentCode },
-      date,
-      row.studentName,
-    );
-    if (!approvedLeave) return row;
-
-    return {
-      ...row,
-      status: 'leave' as RollCallStatus,
-      note: buildLeaveNote(approvedLeave),
-    };
-  });
 }
 
 export default function MorningRollCallPage() {
@@ -199,7 +164,7 @@ export default function MorningRollCallPage() {
   }, [selectedClass, year, classStudents]);
 
   const studentsWithLeave = useMemo(
-    () => applyApprovedLeaveToRows(students, classStudents, leaveRequests, today),
+    () => applyApprovedLeaveToMorningRollCallRows(students, classStudents, leaveRequests, today),
     [students, classStudents, leaveRequests, today],
   );
 
@@ -232,7 +197,7 @@ export default function MorningRollCallPage() {
     if (!selectedClassId || existingSession || editMode) return;
     setStudentRows((prev) => {
       if (prev.length === 0) return studentsWithLeave;
-      return applyApprovedLeaveToRows(prev, classStudents, leaveRequests, today);
+      return applyApprovedLeaveToMorningRollCallRows(prev, classStudents, leaveRequests, today);
     });
   }, [leaveRequests, today, classStudents, selectedClassId, existingSession, editMode, studentsWithLeave]);
 
@@ -256,7 +221,7 @@ export default function MorningRollCallPage() {
       rows = studentRows.filter(row => Boolean((row.studentName || '').trim() || (row.studentCode || '').trim()));
     }
 
-    return applyApprovedLeaveToRows(rows, classStudents, leaveRequests, today);
+    return applyApprovedLeaveToMorningRollCallRows(rows, classStudents, leaveRequests, today);
   }, [studentRows, students, studentsWithLeave, classStudents, leaveRequests, today, existingSession, editMode]);
 
   const summary = useMemo(() => {

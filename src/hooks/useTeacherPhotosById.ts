@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { collection, documentId, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { sessionCache } from '@/lib/sessionCache';
+
+const CACHE_PREFIX = 'teacher_photo:';
+const CHUNK_SIZE = 30;
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
 
 export function useTeacherPhotosById(teacherIds: string[]) {
   const [photosById, setPhotosById] = useState<Record<string, string>>({});
@@ -19,36 +29,50 @@ export function useTeacherPhotosById(teacherIds: string[]) {
       return;
     }
 
-    const unsubs = ids.map((teacherId) =>
-      onSnapshot(
-        doc(db, 'users', teacherId),
-        (snap) => {
-          const photoURL = snap.exists() ? snap.data().photoURL : undefined;
-          const nextPhoto =
-            typeof photoURL === 'string' && photoURL.trim() ? photoURL.trim() : undefined;
+    let cancelled = false;
 
-          setPhotosById((prev) => {
-            if (prev[teacherId] === nextPhoto) return prev;
-            if (!nextPhoto) {
-              const { [teacherId]: _removed, ...rest } = prev;
-              return rest;
-            }
-            return { ...prev, [teacherId]: nextPhoto };
-          });
-        },
-        () => {
-          setPhotosById((prev) => {
-            if (!(teacherId in prev)) return prev;
-            const { [teacherId]: _removed, ...rest } = prev;
-            return rest;
-          });
-        },
-      ),
-    );
+    async function fetchPhotos() {
+      const result: Record<string, string> = {};
+      const missing: string[] = [];
 
-    return () => {
-      unsubs.forEach((unsub) => unsub());
-    };
+      // Serve from cache first; collect what needs fetching
+      for (const id of ids) {
+        const hit = sessionCache.get<string>(CACHE_PREFIX + id);
+        if (hit !== null) {
+          if (hit) result[id] = hit; // empty string = "no photo" sentinel
+        } else {
+          missing.push(id);
+        }
+      }
+
+      if (!cancelled && Object.keys(result).length > 0) setPhotosById(result);
+      if (missing.length === 0) return;
+
+      // One getDocs call per chunk of 30 — no realtime connections
+      for (const chunk of chunkArray(missing, CHUNK_SIZE)) {
+        if (cancelled) return;
+        const snap = await getDocs(
+          query(collection(db, 'users'), where(documentId(), 'in', chunk)),
+        );
+        const found = new Set<string>();
+        for (const docSnap of snap.docs) {
+          found.add(docSnap.id);
+          const raw = docSnap.data().photoURL;
+          const photo = typeof raw === 'string' && raw.trim() ? raw.trim() : '';
+          sessionCache.set(CACHE_PREFIX + docSnap.id, photo); // cache URL or "" sentinel
+          if (photo) result[docSnap.id] = photo;
+        }
+        // Cache missing docs so we don't re-fetch them next render
+        for (const id of chunk) {
+          if (!found.has(id)) sessionCache.set(CACHE_PREFIX + id, '');
+        }
+      }
+
+      if (!cancelled) setPhotosById({ ...result });
+    }
+
+    fetchPhotos();
+    return () => { cancelled = true; };
   }, [idsKey]);
 
   return photosById;

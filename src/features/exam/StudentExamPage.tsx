@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShieldAlert, CheckCircle, ChevronLeft, ChevronRight,
   Send, Lock, AlertTriangle, Eye, EyeOff,
-  Maximize2, LayoutGrid, Info, HelpCircle, ClipboardList, FileText, Loader2
+  Maximize2, LayoutGrid, Info, HelpCircle, ClipboardList, FileText
 } from 'lucide-react';
 
 import { IndeterminateProgress } from '@/components/ui/progress';
@@ -15,9 +15,19 @@ import { PdfAnswerSheet, PdfPagePagination, PdfPageViewer } from '@/features/exa
 import ExamQuestionContent from '@/features/questionBank/components/ExamQuestionContent';
 import EssayAnswerPanel from '@/features/exam/components/EssayAnswerPanel';
 import { isExamAnswerFilled } from '@/lib/exam/examAnswerFormat';
+import {
+  canSubmitExamManually,
+  formatExamSubmitWait,
+  getExamSubmitWaitSeconds,
+} from '@/lib/exam/examSubmitPolicy';
 import { getVisiblePdfPages, snapToVisiblePdfPage } from '@/features/questionBank/utils/pdfExamPages';
 import { getPartBadgeTheme } from '@/features/exam/utils/partBadgeTheme';
 import { colors } from '@/lib/designTokens';
+import {
+  resolveAttemptObjectiveScoreDisplay,
+  resolveAttemptScoreDisplay,
+} from '@/lib/exam/examRoomScoring';
+import type { ExamAttempt, ExamRoom } from '@/types/exam';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -209,16 +219,16 @@ import type { ExamQuestionPublic } from '@/types/exam';
 
 // ── Result summary ────────────────────────────────────────────────────────────
 function resolveResultSummary({
-  score,
-  total,
+  room,
+  attempt,
   status,
   pendingManualGrading,
   objectiveMaxPoints,
   manualEssayCount,
   questions,
 }: {
-  score: number | null;
-  total: number;
+  room: ExamRoom;
+  attempt: ExamAttempt;
   status: string;
   pendingManualGrading?: boolean;
   objectiveMaxPoints?: number | null;
@@ -235,42 +245,41 @@ function resolveResultSummary({
     .reduce((sum, q) => sum + (q.points || 0), 0);
 
   if (pending && manualCount > 0) {
-    const displayMax = objectiveMaxPoints ?? objectiveMaxFromQuestions;
-    const displayScore = score;
-    const pct = displayScore !== null && displayMax > 0
-      ? Math.round((displayScore / displayMax) * 100)
-      : null;
+    const display = resolveAttemptObjectiveScoreDisplay(
+      attempt,
+      objectiveMaxPoints ?? objectiveMaxFromQuestions,
+    );
     return {
       pendingManual: true,
       manualCount,
-      displayScore,
-      displayMax,
-      pct,
+      displayScore: display.score,
+      displayMax: display.maxPoints,
+      pct: display.percent,
     };
   }
 
-  const pct = score !== null && total > 0 ? Math.round((score / total) * 100) : null;
+  const display = resolveAttemptScoreDisplay(room, attempt);
   return {
     pendingManual: false,
     manualCount: 0,
-    displayScore: score,
-    displayMax: total,
-    pct,
+    displayScore: display.score,
+    displayMax: display.maxPoints,
+    pct: display.percent,
   };
 }
 
 // ── Result Screen ─────────────────────────────────────────────────────────────
 function ResultScreen({
-  score,
-  total,
+  room,
+  attempt,
   status,
   pendingManualGrading,
   objectiveMaxPoints,
   manualEssayCount,
   questions,
 }: {
-  score: number | null;
-  total: number;
+  room: ExamRoom;
+  attempt: ExamAttempt;
   status: string;
   pendingManualGrading?: boolean;
   objectiveMaxPoints?: number | null;
@@ -279,8 +288,8 @@ function ResultScreen({
 }) {
   const navigate = useNavigate();
   const summary = resolveResultSummary({
-    score,
-    total,
+    room,
+    attempt,
     status,
     pendingManualGrading,
     objectiveMaxPoints,
@@ -331,13 +340,13 @@ function ResultScreen({
                 <span className="text-[16px] text-slate-400 ml-0.5">%</span>
               </p>
             </div>
-          ) : status === 'submitted' && score === null ? (
+          ) : status === 'submitted' && summary.displayScore === null ? (
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-500 shrink-0">
-                <Loader2 size={16} className="animate-spin" />
+              <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-600 shrink-0">
+                <Info size={16} />
               </div>
               <p className="text-[12px] text-slate-600 leading-snug text-left">
-                กำลังคำนวณคะแนน...
+                ส่งคำตอบแล้ว — รอครูปิดห้องสอบเพื่อสรุปคะแนนทั้งรอบ
               </p>
             </div>
           ) : (
@@ -380,7 +389,7 @@ function ResultScreen({
 
 // ── Exam Interface ────────────────────────────────────────────────────────────
 function ExamInterface({
-  room, roomId, attemptId, questions, answers, suspiciousActivities, endTime, examPdfParts, answerSheetGroups,
+  room, roomId, attemptId, questions, answers, suspiciousActivities, endTime, startedAt, examPdfParts, answerSheetGroups,
   onAnswer, onSubmit, onRecordSuspicious, isLoadingQuestions, readOnly = false, onExitReview,
 }: {
   room: any;
@@ -390,10 +399,11 @@ function ExamInterface({
   answers: Record<string, string>;
   suspiciousActivities: number;
   endTime: number;
+  startedAt: number;
   examPdfParts: ExamPdfPart[];
   answerSheetGroups: ExamAnswerSheetGroup[];
   onAnswer: (qId: string, value: string) => void;
-  onSubmit: () => void;
+  onSubmit: (options?: { force?: boolean }) => void;
   onRecordSuspicious: () => void;
   isLoadingQuestions?: boolean;
   readOnly?: boolean;
@@ -442,6 +452,23 @@ function ExamInterface({
 
   const hasAutoSubmittedRef = useRef(false);
   const { mm, ss, isUrgent, isExpired } = useCountdown(endTime);
+  const [submitWaitSeconds, setSubmitWaitSeconds] = useState(() => getExamSubmitWaitSeconds(startedAt));
+  const canSubmitManually = canSubmitExamManually(startedAt);
+
+  useEffect(() => {
+    const tick = () => setSubmitWaitSeconds(getExamSubmitWaitSeconds(startedAt));
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt]);
+
+  const requestManualSubmit = useCallback(() => {
+    if (!canSubmitExamManually(startedAt)) {
+      toast.error(`ยังไม่สามารถส่งข้อสอบได้ กรุณารออีก ${formatExamSubmitWait(submitWaitSeconds)}`);
+      return;
+    }
+    setShowSubmitConfirm(true);
+  }, [startedAt, submitWaitSeconds]);
 
   const handleCameraSessionChange = useCallback((active: boolean) => {
     if (active) {
@@ -473,7 +500,7 @@ function ExamInterface({
           setShowWarning(true);
           setTimeout(() => {
             setShowWarning(false);
-            onSubmit();
+            onSubmit({ force: true });
           }, 1500);
           return;
         }
@@ -499,7 +526,7 @@ function ExamInterface({
   }, []);
 
   useEffect(() => {
-    if (isExpired && !readOnly) onSubmit();
+    if (isExpired && !readOnly) onSubmit({ force: true });
   }, [isExpired, onSubmit, readOnly]);
 
   const handlePdfLoadState = useCallback(
@@ -866,12 +893,24 @@ function ExamInterface({
                     </button>
                   ) : (
                     answeredCount === questions.length && (
-                      <button
-                        onClick={() => setShowSubmitConfirm(true)}
-                        className="h-10 px-6 rounded-xl bg-blue-600 text-white font-black text-[13px] border border-blue-500 hover:bg-blue-700 transition-all flex items-center gap-2 font-sukhumvit"
-                      >
-                        <Send size={14} className="-rotate-12" /> ส่งข้อสอบ
-                      </button>
+                      canSubmitManually ? (
+                        <button
+                          onClick={requestManualSubmit}
+                          className="h-10 px-6 rounded-xl bg-blue-600 text-white font-black text-[13px] border border-blue-500 hover:bg-blue-700 transition-all flex items-center gap-2 font-sukhumvit"
+                        >
+                          <Send size={14} className="-rotate-12" /> ส่งข้อสอบ
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          className="h-10 px-5 rounded-xl bg-slate-200 text-slate-500 font-black text-[12px] border border-slate-300 cursor-not-allowed flex items-center gap-2 font-sukhumvit"
+                          title={`ส่งได้ในอีก ${formatExamSubmitWait(submitWaitSeconds)}`}
+                        >
+                          <Send size={14} className="-rotate-12 opacity-50" />
+                          ส่งได้ในอีก {formatExamSubmitWait(submitWaitSeconds)}
+                        </button>
+                      )
                     )
                   )}
                 </div>
@@ -897,12 +936,24 @@ function ExamInterface({
                 </button>
               ) : (
                 answeredCount === questions.length && (
-                  <button 
-                    onClick={() => setShowSubmitConfirm(true)}
-                    className="h-10 px-6 rounded-xl bg-blue-600 text-white font-black text-[13px] border border-blue-500 hover:bg-blue-700 transition-all flex items-center gap-2 font-sukhumvit"
-                  >
-                    <Send size={14} className="-rotate-12" /> ส่งข้อสอบ
-                  </button>
+                  canSubmitManually ? (
+                    <button
+                      onClick={requestManualSubmit}
+                      className="h-10 px-6 rounded-xl bg-blue-600 text-white font-black text-[13px] border border-blue-500 hover:bg-blue-700 transition-all flex items-center gap-2 font-sukhumvit"
+                    >
+                      <Send size={14} className="-rotate-12" /> ส่งข้อสอบ
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="h-10 px-5 rounded-xl bg-slate-200 text-slate-500 font-black text-[12px] border border-slate-300 cursor-not-allowed flex items-center gap-2 font-sukhumvit"
+                      title={`ส่งได้ในอีก ${formatExamSubmitWait(submitWaitSeconds)}`}
+                    >
+                      <Send size={14} className="-rotate-12 opacity-50" />
+                      ส่งได้ในอีก {formatExamSubmitWait(submitWaitSeconds)}
+                    </button>
+                  )
                 )
               )}
            </div>
@@ -1073,8 +1124,8 @@ export default function StudentExamPage() {
     }
   }, [authLoading, user, roomId, navigate]);
 
-  const handleSubmit = useCallback(() => {
-    submitAttempt();
+  const handleSubmit = useCallback((options?: { force?: boolean }) => {
+    submitAttempt(options);
   }, [submitAttempt]);
 
   if (authLoading || !user) {
@@ -1101,8 +1152,8 @@ export default function StudentExamPage() {
   if (isSubmitted || attempt.status === 'submitted' || attempt.status === 'graded') {
     return (
       <ResultScreen
-        score={attempt?.score ?? null}
-        total={room?.totalPoints ?? 0}
+        room={room}
+        attempt={attempt}
         status={attempt.status}
         pendingManualGrading={attempt.pendingManualGrading}
         objectiveMaxPoints={attempt.objectiveMaxPoints}
@@ -1121,6 +1172,7 @@ export default function StudentExamPage() {
       answers={attempt.answers}
       suspiciousActivities={attempt.suspiciousActivities}
       endTime={room.endTime}
+      startedAt={attempt.startedAt}
       examPdfParts={examPdfParts}
       answerSheetGroups={answerSheetGroups}
       onAnswer={saveAnswer}

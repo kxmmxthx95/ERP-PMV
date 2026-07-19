@@ -5,6 +5,7 @@ import { useSchedule } from '@/hooks/useSchedule';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
 import { useHomeroomClassesForUser } from '@/hooks/useYearClassesHomeroom';
 import { useTodayRollCallSessions } from '@/hooks/useMorningRollCall';
+import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import { getLocalDateString } from '@/lib/dateUtils';
 import { classSessionEntryKey } from '@/lib/classSessionDocId';
 import { getTodayClassSessionsStore } from '@/lib/firestoreShared/classSessionsStore';
@@ -91,6 +92,7 @@ export function useTeacherDailyTasks() {
     year ?? undefined,
   );
   const { syllabi, loading: loadingMicroSyllabi } = useMicroSyllabus(user?.uid ?? null);
+  const { events: calendarEvents } = useAcademicCalendar();
 
   const teacherProfile = useMemo(
     () => (user?.uid ? resolveTeacherFromAuth(user.uid, teachers) : null),
@@ -102,6 +104,13 @@ export function useTeacherDailyTasks() {
     const day = new Date(`${today}T12:00:00`).getDay();
     return day >= 1 && day <= 5 ? (day as SchoolDay) : null;
   }, [today]);
+
+  // วันสอบ/กิจกรรม — ไม่ต้องเช็คชื่อเข้าเรียนและไม่ต้องบันทึกหลังสอน (not_applicable)
+  const isExamOrActivityDay = useMemo(() => {
+    return calendarEvents.some(
+      (e) => (e.type === 'exam' || e.type === 'activity') && e.startDate <= today && e.endDate >= today,
+    );
+  }, [calendarEvents, today]);
 
   const completedClassSessionKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -159,10 +168,10 @@ export function useTeacherDailyTasks() {
         className: classes.find((c) => c.id === entry.classId)?.label ?? entry.classId,
         subjectName: entry.subjectName || entry.subjectCode || entry.subjectId,
         period: entry.period,
-        status: done ? 'done' : 'pending',
+        status: isExamOrActivityDay ? 'not_applicable' : done ? 'done' : 'pending',
       };
     });
-  }, [todaysScheduleEntries, completedClassSessionKeys, classes]);
+  }, [todaysScheduleEntries, completedClassSessionKeys, classes, isExamOrActivityDay]);
 
   const teachingReflectionTasks = useMemo((): TeacherTeachingReflectionTask[] => {
     const groups = new Map<string, TeacherTeachingReflectionTask>();
@@ -195,7 +204,7 @@ export function useTeacherDailyTasks() {
         className,
         subjectName,
         periods: [entry.period],
-        status: done ? 'done' : 'pending',
+        status: isExamOrActivityDay ? 'not_applicable' : done ? 'done' : 'pending',
         syllabusId: syllabus?.id,
       });
     });
@@ -205,7 +214,7 @@ export function useTeacherDailyTasks() {
       if (periodDiff !== 0) return periodDiff;
       return a.className.localeCompare(b.className, 'th');
     });
-  }, [todaysScheduleEntries, classes, syllabi, today]);
+  }, [todaysScheduleEntries, classes, syllabi, today, isExamOrActivityDay]);
 
   const rollCallStats = useMemo(() => {
     const total = rollCallTasks.length;
@@ -214,14 +223,17 @@ export function useTeacherDailyTasks() {
   }, [rollCallTasks]);
 
   const classStats = useMemo(() => {
-    const total = classAttendanceTasks.length;
-    const done = classAttendanceTasks.filter((t) => t.status === 'done').length;
+    // ตัดงานที่ not_applicable (วันสอบ/กิจกรรม) ออกจากทั้งตัวเศษและตัวหาร
+    const applicable = classAttendanceTasks.filter((t) => t.status !== 'not_applicable');
+    const total = applicable.length;
+    const done = applicable.filter((t) => t.status === 'done').length;
     return { done, total, pending: total - done };
   }, [classAttendanceTasks]);
 
   const reflectionStats = useMemo(() => {
-    const total = teachingReflectionTasks.length;
-    const done = teachingReflectionTasks.filter((task) => task.status === 'done').length;
+    const applicable = teachingReflectionTasks.filter((task) => task.status !== 'not_applicable');
+    const total = applicable.length;
+    const done = applicable.filter((task) => task.status === 'done').length;
     return { done, total, pending: total - done };
   }, [teachingReflectionTasks]);
 

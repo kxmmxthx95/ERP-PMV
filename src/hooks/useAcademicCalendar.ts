@@ -8,8 +8,9 @@ import type { CalendarEvent } from '@/types/calendar';
 export type NewCalendarEvent = Omit<CalendarEvent, 'id'>;
 
 const emptySubscribe = () => () => {};
+const EMPTY_EVENTS: CalendarEvent[] = [];
 
-export function useAcademicCalendar(userRole?: string, extraEvents: CalendarEvent[] = []) {
+export function useAcademicCalendar(userRole?: string, extraEvents: CalendarEvent[] = EMPTY_EVENTS) {
   const { activeYear } = useActiveAcademicYear();
   const yearId = activeYear?.year ?? '';
 

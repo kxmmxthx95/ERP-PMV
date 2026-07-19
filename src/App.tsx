@@ -32,6 +32,7 @@ const ExamManager = lazy(() => import('@/features/exam/ExamManager'));
 const StudentExamPage = lazy(() => import('@/features/exam/StudentExamPage'));
 const QuestionBankManager = lazy(() => import('@/features/questionBank/QuestionBankManager'));
 const StaffAttendancePage = lazy(() => import('@/features/attendance/StaffAttendancePage'));
+const TeacherKpiPage = lazy(() => import('@/features/teacherKpi/TeacherKpiPage'));
 const FingerprintDeviceManagerPage = lazy(() => import('@/features/fingerprintDevices/FingerprintDeviceManagerPage'));
 const AttendanceCenterPage = lazy(() => import('@/features/attendance/AttendanceCenterPage'));
 const ProfilePage = lazy(() => import('@/features/profile/ProfilePage'));
@@ -54,6 +55,12 @@ const FuturePlanPage = lazy(() => import('@/features/futurePlan/FuturePlanPage')
 const WordGamePage = lazy(() => import('@/features/wordGame/WordGamePage'));
 const AiAgentCommandPage = lazy(() => import('@/features/aiAgents/AiAgentCommandPage'));
 const TasksPage = lazy(() => import('@/features/tasks/TasksPage'));
+const AdminTuitionView = lazy(() => import('@/features/tuition/AdminTuitionView'));
+const TuitionLayout = lazy(() => import('@/features/tuition/TuitionLayout'));
+const TuitionDashboardPage = lazy(() => import('@/features/tuition/TuitionDashboardPage'));
+const TuitionCampaignsPage = lazy(() => import('@/features/tuition/TuitionCampaignsPage'));
+const CoursesPage = lazy(() => import('@/features/courses/CoursesPage'));
+const CoursePlayerPage = lazy(() => import('@/features/courses/CoursePlayerPage'));
 
 
 /** แสดง component การเข้าเรียน (ของนักเรียน) */
@@ -224,6 +231,11 @@ export default function App() {
                 <FingerprintDeviceManagerPage />
               </PermissionGate>
             } />
+            <Route path="teacher-kpi" element={
+              <PermissionGate featureKey="teacherKpi">
+                <TeacherKpiPage />
+              </PermissionGate>
+            } />
             <Route path="morning-rollcall" element={
               <PermissionGate featureKey="morningRollCall">
                 <MorningRollCallLayout />
@@ -271,6 +283,25 @@ export default function App() {
             <Route path="future-plan" element={
               <PermissionGate featureKey="futurePlan">
                 <FuturePlanPage />
+              </PermissionGate>
+            } />
+            <Route path="tuition" element={
+              <PermissionGate featureKey="tuition">
+                <TuitionLayout />
+              </PermissionGate>
+            }>
+              <Route index element={<TuitionDashboardPage />} />
+              <Route path="campaigns" element={<TuitionCampaignsPage />} />
+              <Route path="campaigns/:campaignId" element={<AdminTuitionView />} />
+            </Route>
+            <Route path="courses" element={
+              <PermissionGate featureKey="courseOnDemand">
+                <CoursesPage />
+              </PermissionGate>
+            } />
+            <Route path="courses/:courseId" element={
+              <PermissionGate featureKey="courseOnDemand">
+                <CoursePlayerPage />
               </PermissionGate>
             } />
             <Route path="word-game" element={

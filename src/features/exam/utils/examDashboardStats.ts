@@ -54,6 +54,7 @@ export interface ExamDashboardStats {
     teacherName: string;
     teacherPhotoURL?: string;
     count: number;
+    openedCount: number;
     active: number;
     upcoming: number;
     closed: number;
@@ -111,6 +112,10 @@ function gradeLevelSortKey(gradeLevel: string): number {
   return deptOrder + (gradeIndex >= 0 ? gradeIndex : 50);
 }
 
+function hasOpenedExamAtLeastOnce(room: ExamRoom): boolean {
+  return (room.completedRounds ?? 0) >= 1 || (room.currentRound ?? 0) >= 1;
+}
+
 export function buildExamDashboardStats(
   rooms: ExamRoom[],
   attempts: ExamAttempt[],
@@ -134,7 +139,7 @@ export function buildExamDashboardStats(
       (att) => att.status === 'submitted' && resolveAttemptTotalScore(att) === null,
     ).length,
     pendingManual: attempts.filter((att) => att.pendingManualGrading === true).length,
-    suspicious: attempts.filter((att) => (att.suspiciousActivities ?? 0) >= 2).length,
+    suspicious: attempts.filter((att) => (att.suspiciousActivities ?? 0) >= 1).length,
   };
 
   const gradeBookLinked = rooms.filter(
@@ -173,7 +178,7 @@ export function buildExamDashboardStats(
         submitted: roomAttempts.filter(
           (att) => att.status === 'submitted' || att.status === 'graded',
         ).length,
-        suspicious: roomAttempts.filter((att) => (att.suspiciousActivities ?? 0) >= 2).length,
+        suspicious: roomAttempts.filter((att) => (att.suspiciousActivities ?? 0) >= 1).length,
       };
     })
     .sort((a, b) => b.inProgress - a.inProgress || b.suspicious - a.suspicious);
@@ -266,6 +271,7 @@ export function buildExamDashboardStats(
       teacherName: string;
       teacherPhotoURL?: string;
       count: number;
+      openedCount: number;
       active: number;
       upcoming: number;
       closed: number;
@@ -279,6 +285,7 @@ export function buildExamDashboardStats(
       teacherName,
       teacherPhotoURL: room.teacherPhotoURL?.trim() || undefined,
       count: 0,
+      openedCount: 0,
       active: 0,
       upcoming: 0,
       closed: 0,
@@ -287,6 +294,7 @@ export function buildExamDashboardStats(
       existing.teacherPhotoURL = room.teacherPhotoURL.trim();
     }
     existing.count += 1;
+    if (hasOpenedExamAtLeastOnce(room)) existing.openedCount += 1;
     if (room.status === 'active') existing.active += 1;
     else if (room.status === 'upcoming') existing.upcoming += 1;
     else existing.closed += 1;

@@ -5,7 +5,6 @@ import { motion } from 'framer-motion';
 import { ArrowLeft, FileSpreadsheet, FileText, Plus } from 'lucide-react';
 import { HiBars3 } from 'react-icons/hi2';
 import { useSetQuestions } from '@/hooks/useSetQuestions';
-import { useQuestionSetBank } from '@/hooks/useQuestionSetBank';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import type { Question, QuestionSet, NewQuestion } from '@/types/questionBank';
@@ -32,12 +31,12 @@ interface Props {
   set: QuestionSet;
   onBack: () => void;
   onSetUpdated: (updated: QuestionSet) => void;
+  updateQuestionSet: (id: string, patch: Partial<QuestionSet>) => Promise<void>;
 }
 
-export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated }: Props) {
+export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, updateQuestionSet }: Props) {
   const { user } = useAuth();
   const { year } = useActiveAcademicYear();
-  const { updateQuestionSet } = useQuestionSetBank();
   const {
     isLoading,
     questions,
@@ -336,6 +335,11 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated }
               {set.setCode && (
                 <p className="mt-0.5 font-mono text-[10px] font-black text-indigo-600">
                   {set.setCode}
+                </p>
+              )}
+              {set.createdByName && (
+                <p className="mt-0.5 text-[10px] font-semibold text-slate-400 font-sarabun truncate">
+                  สร้างโดย {set.createdByName}
                 </p>
               )}
               <div className="flex items-center gap-3 mt-1">

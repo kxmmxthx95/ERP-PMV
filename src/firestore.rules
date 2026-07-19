@@ -54,6 +54,17 @@ service cloud.firestore {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(adminKeys);
     }
 
+    // กันนักเรียนเข้าห้องสอบผิดห้อง — ถ้าห้องสอบผูก classId ไว้ และหา classId ของนักเรียนได้
+    // (จาก students/{uid} เท่านั้น — เคส doc id ไม่ตรง auth uid จะไม่ถูกเช็คตรงนี้ ผ่านไปได้)
+    // ต้องตรงกัน ไม่งั้นห้ามสร้าง attempt
+    function canJoinExamRoomClass(roomId) {
+      let roomPath = /databases/$(database)/documents/exam_rooms/$(roomId);
+      let studentPath = /databases/$(database)/documents/students/$(request.auth.uid);
+      let roomClassId = exists(roomPath) && 'classId' in get(roomPath).data ? get(roomPath).data.classId : null;
+      let studentClassId = exists(studentPath) && 'classId' in get(studentPath).data ? get(studentPath).data.classId : null;
+      return roomClassId == null || roomClassId == '' || studentClassId == null || studentClassId == roomClassId;
+    }
+
     // ── Global Rule ──────────────────────────────────────────────────────────
     match /{document=**} {
       allow read: if isAuth();
@@ -168,12 +179,13 @@ service cloud.firestore {
       allow read: if isAuth() && (canManage() || resource.data.studentId == request.auth.uid);
       allow list: if isAuth() && (canManage() || request.query.limit <= 100); // query จะถูกกรองด้วย where studentId ต่อไป
 
-      // นักเรียนสร้าง attempt ของตัวเองได้
+      // นักเรียนสร้าง attempt ของตัวเองได้ — ต้องอยู่ห้องเรียนตรงกับที่ห้องสอบกำหนดไว้ (ถ้ามี)
       allow create: if isAuth()
         && request.resource.data.studentId == request.auth.uid
         && request.resource.data.status == 'in_progress'
         && request.resource.data.score == null
-        && request.resource.data.submittedAt == null;
+        && request.resource.data.submittedAt == null
+        && canJoinExamRoomClass(roomId);
 
       // นักเรียนอัปเดตได้เฉพาะ attempt ของตัวเอง (autosave + submit)
       // ห้ามแก้ score/round/startedAt/studentId — เฉพาะ answers, suspiciousActivities, status, submittedAt, lastSavedAt
@@ -201,6 +213,29 @@ service cloud.firestore {
     match /logs/{logId} {
       allow create: if isAuth();
       allow update, delete: if hasRole('admin') || isSuperAdmin();
+    }
+
+    // ── Tuition: นักเรียนอัปโหลดสลิปชำระเงินของตัวเองได้ (สถานะเริ่มต้นต้องเป็น "รอตรวจสอบ" เท่านั้น) ──
+    match /payment_transactions/{txId} {
+      allow create: if isAuth() && (
+        canManage()
+        || (
+          request.resource.data.studentId == request.auth.uid
+          && request.resource.data.status == 'pending_verification'
+        )
+      );
+      allow update, delete: if canManage();
+    }
+
+    // นักเรียนแก้ไขได้เฉพาะ installments/status ของตัวเอง ตอนอัปโหลดสลิป (ห้ามแตะ feeItems/scholarships/netPayable)
+    match /student_fees/{feeId} {
+      allow update: if isAuth() && (
+        canManage()
+        || (
+          resource.data.studentId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['installments', 'status', 'updatedAt'])
+        )
+      );
     }
   }
 }

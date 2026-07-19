@@ -1,5 +1,6 @@
 import type { UserData } from '@/types/user';
 import { ROLE_LABELS } from '@/types/mockUsers';
+import { getGradeLevelBadgeStyle } from '@/lib/school/gradeLevelBadge';
 
 export interface UserDashboardSummary {
   total: number;
@@ -52,7 +53,7 @@ function parseCreatedAt(value: unknown): Date | null {
   return null;
 }
 
-function normalizeDepartmentId(dept?: string): string | null {
+export function normalizeDepartmentId(dept?: string): string | null {
   if (!dept?.trim()) return null;
   const v = dept.trim().toLowerCase();
   if (v === 'preschool' || v === 'early' || v === 'early-childhood' || v.includes('ปฐม')) return 'preschool';
@@ -149,4 +150,112 @@ export function formatSignupDate(value: unknown): string {
   const date = parseCreatedAt(value);
   if (!date) return '—';
   return date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
+}
+
+export type GradeLevelRef = {
+  id: string;
+  label: string;
+  shortLabel: string;
+  section: string;
+};
+
+export interface GradeLevelUserGroup {
+  gradeLevel: string;
+  color: string;
+  bg: string;
+  border: string;
+  users: UserData[];
+  count: number;
+}
+
+const DEPARTMENT_SECTION: Record<string, string> = {
+  preschool: 'early-childhood',
+  primary: 'primary',
+  secondary: 'secondary',
+};
+
+const UNASSIGNED_GRADE = 'ไม่ระบุระดับชั้น';
+
+export function getDepartmentLabel(departmentId: string): string {
+  return DEPARTMENT_CONFIG[departmentId]?.label || departmentId;
+}
+
+export function getDepartmentColor(departmentId: string): string {
+  return DEPARTMENT_CONFIG[departmentId]?.color || '#94a3b8';
+}
+
+export function resolveUserGradeLevelLabel(
+  user: UserData,
+  gradeLevels: GradeLevelRef[],
+): string {
+  const raw = String((user as { gradeLevel?: string }).gradeLevel ?? '').trim();
+  if (!raw) return UNASSIGNED_GRADE;
+
+  const byId = gradeLevels.find((grade) => grade.id === raw);
+  if (byId) return byId.shortLabel;
+
+  const byShort = gradeLevels.find((grade) => grade.shortLabel === raw);
+  if (byShort) return byShort.shortLabel;
+
+  const byLabel = gradeLevels.find((grade) => grade.label === raw);
+  if (byLabel) return byLabel.shortLabel;
+
+  if (/^(อ\.|ป\.|ม\.|เตรียม)/.test(raw)) return raw;
+
+  return raw;
+}
+
+function sortGradeGroups(
+  entries: [string, UserData[]][],
+  departmentId: string,
+  gradeLevels: GradeLevelRef[],
+): [string, UserData[]][] {
+  const section = DEPARTMENT_SECTION[departmentId];
+  const orderedGrades = section
+    ? gradeLevels.filter((grade) => grade.section === section).map((grade) => grade.shortLabel)
+    : [];
+
+  return [...entries].sort((a, b) => {
+    if (a[0] === UNASSIGNED_GRADE) return 1;
+    if (b[0] === UNASSIGNED_GRADE) return -1;
+
+    const indexA = orderedGrades.indexOf(a[0]);
+    const indexB = orderedGrades.indexOf(b[0]);
+    if (indexA === -1 && indexB === -1) return a[0].localeCompare(b[0], 'th');
+    if (indexA === -1) return 1;
+    if (indexB === -1) return -1;
+    return indexA - indexB;
+  });
+}
+
+export function computeDepartmentUsersByGradeLevel(
+  users: UserData[],
+  departmentId: string,
+  gradeLevels: GradeLevelRef[],
+): GradeLevelUserGroup[] {
+  const deptUsers = users.filter((user) => normalizeDepartmentId(user.department) === departmentId);
+  const groups = new Map<string, UserData[]>();
+
+  for (const user of deptUsers) {
+    const label = resolveUserGradeLevelLabel(user, gradeLevels);
+    const list = groups.get(label) ?? [];
+    list.push(user);
+    groups.set(label, list);
+  }
+
+  return sortGradeGroups([...groups.entries()], departmentId, gradeLevels).map(([gradeLevel, groupUsers]) => {
+    const badge = getGradeLevelBadgeStyle(gradeLevel === UNASSIGNED_GRADE ? '' : gradeLevel);
+    const sortedUsers = [...groupUsers].sort((a, b) => {
+      const nameA = `${a.prefix || ''}${a.firstName || ''} ${a.lastName || ''}`.trim();
+      const nameB = `${b.prefix || ''}${b.firstName || ''} ${b.lastName || ''}`.trim();
+      return nameA.localeCompare(nameB, 'th');
+    });
+
+    return {
+      gradeLevel,
+      ...badge,
+      users: sortedUsers,
+      count: sortedUsers.length,
+    };
+  });
 }

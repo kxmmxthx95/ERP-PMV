@@ -21,6 +21,8 @@ import {
   useTodayRollCallSessions,
 } from '@/hooks/useMorningRollCall';
 import { useMorningRollCallClassStudents } from '@/hooks/useMorningRollCallClassStudents';
+import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
+import { applyApprovedLeaveToMorningRollCallRows } from '@/lib/attendance/leaveRequestStudentMatch';
 import type { Student } from '@/types/student';
 import type { MorningRollCallSession, RollCallStatus, StudentRollCall } from '@/types/morningRollCall';
 import { WIDGET_CARD, WIDGET_GLASS, DAY_CANDY_SURFACE_CLASS, getDayCandyBoxShadow, getDayCandyStyle } from '../widgetStyles';
@@ -161,6 +163,7 @@ export default function MorningRollCallWidget() {
     isWeekend,
     holidayTitle,
   } = useIsSchoolDayToday('teacher', today);
+  const { requests: leaveRequests } = useStudentLeaveRequests(today);
   const { homeRoomClasses, loading: loadingHomeroomClasses } = useHomeroomClassesForUser(year ?? undefined, user?.uid);
   const sortedHomeroomClasses = useMemo(
     () =>
@@ -334,6 +337,11 @@ export default function MorningRollCallWidget() {
       .sort((a, b) => a.studentCode.localeCompare(b.studentCode, undefined, { numeric: true }));
   }, [selectedClass, year, classStudents]);
 
+  const studentsWithLeave = useMemo(
+    () => applyApprovedLeaveToMorningRollCallRows(baseStudents, classStudents, leaveRequests, today),
+    [baseStudents, classStudents, leaveRequests, today],
+  );
+
   useEffect(() => {
     if (!drawerOpen) {
       setSelectedClassId(null);
@@ -374,10 +382,33 @@ export default function MorningRollCallWidget() {
       return;
     }
 
-    setStudentRows(baseStudents);
-  }, [selectedClassId, existingSession, editMode, loadingSession, loadingClassStudents, baseStudents]);
+    setStudentRows((prev) => (prev.length === 0 ? studentsWithLeave : prev));
+  }, [selectedClassId, existingSession, editMode, loadingSession, loadingClassStudents, baseStudents, studentsWithLeave]);
 
-  const rowsToUse = studentRows.length > 0 ? studentRows : baseStudents;
+  useEffect(() => {
+    if (!selectedClassId || existingSession || editMode) return;
+    setStudentRows((prev) => {
+      if (prev.length === 0) return studentsWithLeave;
+      return applyApprovedLeaveToMorningRollCallRows(prev, classStudents, leaveRequests, today);
+    });
+  }, [leaveRequests, today, classStudents, selectedClassId, existingSession, editMode, studentsWithLeave]);
+
+  const rowsToUse = useMemo(() => {
+    let rows: StudentRow[];
+
+    if (existingSession && !editMode) {
+      rows = existingSession.attendance.map((a, idx) => ({
+        ...a,
+        enrollmentIndex: idx,
+      }));
+    } else if (studentRows.length === 0 && studentsWithLeave.length > 0) {
+      rows = studentsWithLeave;
+    } else {
+      rows = studentRows;
+    }
+
+    return applyApprovedLeaveToMorningRollCallRows(rows, classStudents, leaveRequests, today);
+  }, [studentRows, studentsWithLeave, classStudents, leaveRequests, today, existingSession, editMode]);
 
   const checkedClassCount = homeRoomClasses.filter((c: { id: string }) => sessionsByClassId[c.id]).length;
 
@@ -447,7 +478,11 @@ export default function MorningRollCallWidget() {
       return;
     }
     setAllPresentSnapshot(rowsToUse);
-    setStudentRows((prev) => prev.map((row) => ({ ...row, status: 'present' as RollCallStatus })));
+    setStudentRows((prev) =>
+      prev.map((row) =>
+        row.status === 'leave' ? row : { ...row, status: 'present' as RollCallStatus },
+      ),
+    );
   };
 
   const handleSave = () => {

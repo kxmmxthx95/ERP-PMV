@@ -82,6 +82,8 @@ export function buildStudentSubjectAttendanceHistory({
     const date = session.date ?? '';
     const period = session.period ?? 0;
     if (!date || !period) return;
+    if (effectiveStart && date < effectiveStart) return;
+    if (effectiveEnd && date > effectiveEnd) return;
 
     const entry = (session.attendance ?? []).find((item) => item.studentId === studentId);
     const key = `${date}|${period}`;

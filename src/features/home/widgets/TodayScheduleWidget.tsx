@@ -9,6 +9,9 @@ import { filterTeacherEntriesForSchoolDay } from '@/features/schedule/utils/sync
 import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
+import { applyApprovedLeaveToClassAttendanceRows } from '@/lib/attendance/leaveRequestStudentMatch';
+import { getLocalDateString } from '@/lib/calendar/schoolDay';
 import { DEFAULT_SETTINGS } from '@/hooks/useScheduleSettings';
 import type { SchoolDay, ScheduleEntry } from '@/types/schedule';
 import { db } from '@/lib/firebase';
@@ -89,6 +92,9 @@ export default function TodayScheduleWidget() {
     isWeekend,
     holidayTitle,
   } = useIsSchoolDayToday(role ?? 'teacher');
+
+  const [today] = useState(() => getLocalDateString());
+  const { requests: leaveRequests } = useStudentLeaveRequests(today);
 
   const [dayDrawerOpen, setDayDrawerOpen] = useState(false);
   const [selectedAttendanceEntry, setSelectedAttendanceEntry] = useState<ScheduleEntry | null>(null);
@@ -343,6 +349,17 @@ export default function TodayScheduleWidget() {
     }
   }, [dayDrawerOpen]);
 
+  useEffect(() => {
+    if (!selectedAttendanceEntry || isAttendanceLocked) return;
+    setAttendanceRows((prev) => {
+      if (prev.length === 0) return prev;
+      const studentDetails = new Map(
+        prev.map((row) => [row.id, { id: row.id, studentCode: row.code }]),
+      );
+      return applyApprovedLeaveToClassAttendanceRows(prev, studentDetails, leaveRequests, today);
+    });
+  }, [leaveRequests, today, selectedAttendanceEntry, isAttendanceLocked]);
+
   const openAttendanceEditor = async (entry: ScheduleEntry) => {
     setSelectedAttendanceEntry(entry);
 
@@ -391,8 +408,8 @@ export default function TodayScheduleWidget() {
         }
       }
 
-      const today = new Date().toISOString().slice(0, 10);
-      const sessionId = `${today}_${toDocId(entry.classId)}_${toDocId(entry.subjectId)}_${entry.period}`;
+      const todayDate = today;
+      const sessionId = `${todayDate}_${toDocId(entry.classId)}_${toDocId(entry.subjectId)}_${entry.period}`;
       const sessionSnap = await getDoc(doc(db, 'class_sessions', sessionId));
       const statusMap = new Map<string, AttendanceStatus>();
 
@@ -414,7 +431,26 @@ export default function TodayScheduleWidget() {
         }))
         .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
 
-      setAttendanceRows(rows);
+      const studentDetails = new Map(
+        [...studentMap.entries()].map(([id, data]) => [
+          id,
+          {
+            id,
+            studentCode: data.studentCode,
+            prefix: data.prefix,
+            firstName: data.firstName,
+            lastName: data.lastName,
+          },
+        ]),
+      );
+      const rowsWithLeave = applyApprovedLeaveToClassAttendanceRows(
+        rows,
+        studentDetails,
+        leaveRequests,
+        todayDate,
+      );
+
+      setAttendanceRows(rowsWithLeave);
       setAllPresentSnapshot(null);
       setIsAttendanceLocked(hasSavedSession);
     } catch {
@@ -446,7 +482,9 @@ export default function TodayScheduleWidget() {
       return;
     }
     setAllPresentSnapshot(attendanceRows);
-    setAttendanceRows((prev) => prev.map((row) => ({ ...row, status: 'present' })));
+    setAttendanceRows((prev) =>
+      prev.map((row) => (row.status === 'leave' ? row : { ...row, status: 'present' })),
+    );
   };
 
   const handleSaveAttendance = async () => {
@@ -465,9 +503,9 @@ export default function TodayScheduleWidget() {
         | (typeof classes[number] & { departmentId?: string; department?: string })
         | undefined;
       const departmentId = (currentClass?.departmentId || currentClass?.department || 'secondary') as string;
-      const today = new Date().toISOString().slice(0, 10);
+      const todayDate = today;
       const recordedAt = new Date().toISOString();
-      const sessionDocId = `${today}_${toDocId(selectedAttendanceEntry.classId)}_${toDocId(selectedAttendanceEntry.subjectId)}_${selectedAttendanceEntry.period}`;
+      const sessionDocId = `${todayDate}_${toDocId(selectedAttendanceEntry.classId)}_${toDocId(selectedAttendanceEntry.subjectId)}_${selectedAttendanceEntry.period}`;
 
       const presentStudentIds = attendanceRows.filter((r) => r.status === 'present').map((r) => r.id);
       const lateStudentIds = attendanceRows.filter((r) => r.status === 'late').map((r) => r.id);
@@ -491,7 +529,7 @@ export default function TodayScheduleWidget() {
           departmentId,
           academicYearId: String(activeYear || '2568'),
           semester: (activeSemester || 1) as 1 | 2,
-          date: today,
+          date: todayDate,
           period: selectedAttendanceEntry.period,
           topic: '',
           summary: {

@@ -7,6 +7,7 @@ import {
   type DailyStaffRow,
   type DailyStaffStatus,
 } from '@/hooks/useDailyAttendanceSummary';
+import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import {
   WIDGET_CARD,
   WIDGET_GLASS,
@@ -23,6 +24,13 @@ import {
 } from '@/components/ui/drawer';
 import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
 import { formatThaiDateLabelFromIso, getLocalDateString } from '@/lib/dateUtils';
+import {
+  getWidgetHolidayCardStyle,
+  WidgetHolidayBadge,
+  WidgetHolidayBody,
+  widgetHolidayDateClass,
+  widgetHolidayHeaderClass,
+} from '../components/WidgetHolidayContent';
 
 const DRAWER_CONTENT_CLASS = [
   'h-dvh flex flex-col p-0 rounded-none',
@@ -114,6 +122,7 @@ function StaffRow({ staff }: { staff: DailyStaffRow }) {
 export default function DailyAttendanceSummaryWidget() {
   const { today, todayStaff, loading, refresh } = useDailyAttendanceSummary(7);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const { isHoliday, isWeekend, holidayTitle } = useIsSchoolDayToday();
 
   const todayLabel = today?.date ? formatThaiDateLabelFromIso(today.date) : formatThaiDateLabelFromIso(getLocalDateString());
 
@@ -130,23 +139,30 @@ export default function DailyAttendanceSummaryWidget() {
 
   return (
     <>
-      <div style={WIDGET_GLASS} className={WIDGET_CARD}>
+      <div style={isHoliday ? getWidgetHolidayCardStyle(isWeekend) : WIDGET_GLASS} className={WIDGET_CARD}>
         <div className="flex items-center justify-between shrink-0">
           <div className="min-w-0">
-            <p className="font-bold text-sm text-slate-700 truncate">สรุปการเข้างานรายวัน</p>
-            <p className="text-[10px] text-slate-400 truncate">{todayLabel}</p>
+            <p className={widgetHolidayHeaderClass(isHoliday)}>สรุปการเข้างานรายวัน</p>
+            <p className={widgetHolidayDateClass(isHoliday)}>{todayLabel}</p>
           </div>
-          <button
-            onClick={refresh}
-            disabled={loading}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-40 shrink-0"
-            title="รีเฟรช"
-          >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {isHoliday ? <WidgetHolidayBadge /> : null}
+            {!isHoliday ? (
+              <button
+                onClick={refresh}
+                disabled={loading}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-40 shrink-0"
+                title="รีเฟรช"
+              >
+                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+              </button>
+            ) : null}
+          </div>
         </div>
 
-        {today ? (
+        {isHoliday ? (
+          <WidgetHolidayBody isWeekend={isWeekend} holidayTitle={holidayTitle} />
+        ) : today ? (
           <>
             <div className="grid grid-cols-3 gap-2 flex-1 min-h-0">
               <div className={WIDGET_STAT_CELL}>

@@ -1,7 +1,6 @@
-import { collection, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { createSharedStore } from './createSharedStore';
-import { listenQueryWithGetDocs } from './listenWithGetDocs';
 import type { CalendarEvent } from '@/types/calendar';
 
 const stores = new Map<string, ReturnType<typeof createSharedStore<CalendarEvent[]>>>();
@@ -12,20 +11,25 @@ export function getCalendarEventsStore(academicYearId: string) {
     let cached: CalendarEvent[] = [];
     store = createSharedStore<CalendarEvent[]>(
       (emit) => {
+        let cancelled = false;
         const q = query(
           collection(db, 'calendar_events'),
           where('academicYearId', '==', academicYearId),
         );
-        return listenQueryWithGetDocs(
-          q,
-          (rows) => rows as unknown as CalendarEvent[],
-          (items) => {
+        void getDocs(q)
+          .then((snap) => {
+            if (cancelled) return;
+            const items = snap.docs as unknown as CalendarEvent[];
             cached = items;
             emit(items);
-          },
-          cached,
-          `calendarEventsStore:${academicYearId}`,
-        );
+          })
+          .catch((err) => {
+            console.warn(`[calendarEventsStore:${academicYearId}] getDocs failed:`, err);
+            if (!cancelled) emit(cached);
+          });
+        return () => {
+          cancelled = true;
+        };
       },
       [],
     );

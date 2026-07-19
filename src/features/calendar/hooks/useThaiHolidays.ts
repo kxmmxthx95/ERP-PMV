@@ -67,7 +67,7 @@ function buildEventsUrl(year: number): URL {
 }
 
 /** โหลดวันหyุดปีเดียวกันแค่ครั้งเดียว — แชร์ cache + in-flight ระหว่าง hook instances */
-function loadThaiHolidaysForYear(year: number): Promise<CalendarEvent[]> {
+export function loadThaiHolidaysForYear(year: number): Promise<CalendarEvent[]> {
   const cached = cache.get(year);
   if (cached) return Promise.resolve(cached);
 

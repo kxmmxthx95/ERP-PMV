@@ -10,6 +10,7 @@ const db = getAdminFirestore();
 
 export { sendLineReport } from "./sendLineReport";
 export { reportDailyScheduled } from "./reportDailyScheduled";
+export { examRoomAutoClose } from "./examRoomAutoClose";
 export { processLineLinkRequest } from "./processLineLinkRequest";
 export { lineWebhook } from "./lineWebhook";
 export { lineWebhookV2 } from "./lineWebhookV2";
@@ -120,6 +121,7 @@ type ExamRoundConfig = {
 };
 
 type ExamRoomDoc = {
+  status?: string;
   questionSetId?: string;
   selectedQuestionIds?: string[];
   roundQuestions?: Record<string, ExamRoundConfig>;
@@ -343,6 +345,7 @@ async function autoGradeAttempt(
   let totalScore = 0;
   let autoGradableMaxPoints = 0;
   let manualEssayCount = 0;
+  const manualEssayQuestionIds: string[] = [];
 
   effectiveQuestionIds.forEach((questionId, questionIndex) => {
     const q = questionMap.get(questionId);
@@ -361,6 +364,7 @@ async function autoGradeAttempt(
         return;
       }
       manualEssayCount += 1;
+      manualEssayQuestionIds.push(questionId);
       return;
     }
 
@@ -377,6 +381,31 @@ async function autoGradeAttempt(
   });
 
   if (manualEssayCount > 0) {
+    // Preserve any essay scores a teacher already graded by hand — this function is now
+    // the single authority for round-close grading, so it must merge instead of overwriting
+    // (previously only the client's calculateRoomScores() did this merge).
+    const existingManualScores = (attemptData as { manualScores?: Record<string, number> }).manualScores;
+    if (existingManualScores && Object.keys(existingManualScores).length > 0) {
+      const manualTotal = manualEssayQuestionIds.reduce((sum, qid) => {
+        const value = existingManualScores[qid];
+        return sum + (typeof value === "number" && Number.isFinite(value) ? value : 0);
+      }, 0);
+      const allManualGraded = manualEssayQuestionIds.every((qid) => {
+        const value = existingManualScores[qid];
+        return typeof value === "number" && Number.isFinite(value);
+      });
+      await attemptRef.update({
+        score: totalScore + manualTotal,
+        status: allManualGraded ? "graded" : "submitted",
+        objectiveScore: totalScore,
+        objectiveMaxPoints: autoGradableMaxPoints,
+        pendingManualGrading: !allManualGraded,
+        manualEssayCount,
+        ...(allManualGraded ? { gradedAt: admin.firestore.FieldValue.serverTimestamp() } : {}),
+      });
+      return allManualGraded ? "graded" : "partial_graded";
+    }
+
     console.info("[autoGradeAttempt] partial grading — manual essay pending", {
       attemptId,
       roomId,
@@ -408,50 +437,13 @@ async function autoGradeAttempt(
 }
 
 /**
- * Trigger: auto-grade attempt when student submits.
- * Gen2 + database pmv1 — Gen1 triggers only listen to (default) DB.
- */
-export const gradeSubmittedExamAttempt = onDocumentUpdated(
-  {
-    document: "exam_rooms/{roomId}/attempts/{attemptId}",
-    region: CALLABLE_REGION,
-    database: getFirestoreDatabaseId(),
-    timeoutSeconds: 120,
-    memory: "512MiB",
-  },
-  async (event) => {
-    const change = event.data;
-    if (!change) return;
-
-    const before = change.before.data() as ExamAttemptDoc;
-    const after = change.after.data() as ExamAttemptDoc;
-
-    const beforeStatus = String(before?.status || "");
-    const afterStatus = String(after?.status || "");
-    const justSubmitted =
-      beforeStatus !== "submitted"
-      && beforeStatus !== "graded"
-      && afterStatus === "submitted";
-
-    if (!justSubmitted || typeof after?.score === "number") {
-      return;
-    }
-
-    const roomId = String(event.params.roomId);
-    const attemptId = String(event.params.attemptId);
-    const roomSnap = await db.collection("exam_rooms").doc(roomId).get();
-    if (!roomSnap.exists) {
-      console.warn("[gradeSubmittedExamAttempt] room not found", { attemptId, roomId });
-      return;
-    }
-
-    const roomData = roomSnap.data() as ExamRoomDoc;
-    await autoGradeAttempt(db, change.after.ref, after, roomData, attemptId);
-  },
-);
-
-/**
  * Callable fallback — client invokes after submit (also recovers stuck attempts).
+ *
+ * This is the only per-attempt grading entry point outside of finalizeExamRoundOnClose.
+ * A previous Firestore trigger (gradeSubmittedExamAttempt) also graded attempts on
+ * submit, racing with finalizeExamRoundOnClose the moment a round closed — removed
+ * in favor of this single explicit path, which the client already calls directly
+ * from submitAttempt() for late/out-of-round submissions.
  */
 export const requestExamAttemptGrading = onCall(
   {
@@ -497,11 +489,17 @@ export const requestExamAttemptGrading = onCall(
       throw new HttpsError("not-found", "Exam room not found");
     }
 
+    const roomData = roomSnap.data() as ExamRoomDoc;
+    // คะแนนรอบคำนวณทีเดียวตอนครูปิดห้อง — ระหว่างเปิดอยู่ยังไม่ตรวจรายคน
+    if (String(roomData.status || "") === "active") {
+      return { status: "deferred_until_round_close" };
+    }
+
     const result = await autoGradeAttempt(
       db,
       attemptRef,
       attemptData,
-      roomSnap.data() as ExamRoomDoc,
+      roomData,
       attemptId,
     );
     const refreshed = await attemptRef.get();
@@ -546,6 +544,28 @@ export const finalizeExamRoundOnClose = onDocumentUpdated(
 
     const closedRound = normalizeRound(before?.currentRound);
     const roomId = String(event.params.roomId);
+    const roomRef = db.collection("exam_rooms").doc(roomId);
+
+    // Firestore triggers are delivered at-least-once, so the same room-close event
+    // can fire this function more than once. This is now the single authority for
+    // round-close grading (see requestExamAttemptGrading comment above), so claim an
+    // exclusive lock per round before doing any grading work — a redelivered event
+    // (or an overlapping invocation) sees the round already claimed and exits.
+    const claimed = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(roomRef);
+      const finalizedRounds = (snap.data()?.finalizedRounds as number[] | undefined) ?? [];
+      if (finalizedRounds.includes(closedRound)) return false;
+      tx.update(roomRef, {
+        finalizedRounds: admin.firestore.FieldValue.arrayUnion(closedRound),
+      });
+      return true;
+    });
+
+    if (!claimed) {
+      console.log(`[finalizeExamRoundOnClose] round ${closedRound} of room ${roomId} already finalized, skip`);
+      return;
+    }
+
     const attemptsSnap = await db
       .collection("exam_rooms").doc(roomId)
       .collection("attempts")

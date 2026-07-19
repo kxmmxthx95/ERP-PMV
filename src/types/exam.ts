@@ -63,6 +63,7 @@ export interface ExamRoom {
   departmentId: string;
   gradeLevel?: string;
   subjectGroupId?: string;
+  subSubjectGroup?: string;
   semester: 1 | 2;
   startTime: number; // timestamp ms
   endTime: number;

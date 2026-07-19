@@ -177,6 +177,39 @@ export function useBehaviorTotals(academicYearId: string | null | undefined) {
   return { totals, loading, refresh };
 }
 
+export function useStudentBehaviorTotal(
+  academicYearId: string | null | undefined,
+  studentId: string | null | undefined,
+) {
+  const [total, setTotal] = useState<BehaviorTotal | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!academicYearId || !studentId) {
+      setTotal(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const unsub = onSnapshot(
+      doc(db, TOTALS_COL, totalDocId(academicYearId, studentId)),
+      (snap) => {
+        setTotal(snap.exists() ? (snap.data() as BehaviorTotal) : null);
+        setLoading(false);
+      },
+      () => {
+        setTotal(null);
+        setLoading(false);
+      },
+    );
+
+    return unsub;
+  }, [academicYearId, studentId]);
+
+  return { total, loading };
+}
+
 // ── Records (for reports) ────────────────────────────────────────────────────
 
 export function useBehaviorRecords(

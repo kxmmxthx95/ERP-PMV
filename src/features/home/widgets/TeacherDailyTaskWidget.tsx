@@ -42,8 +42,15 @@ function taskStatIconColor(applicable: boolean, pending: number): string {
   return pending > 0 ? 'text-rose-600' : 'text-emerald-600';
 }
 
-function TaskBadge({ done }: { done: boolean }) {
-  return done ? (
+function TaskBadge({ status }: { status: 'done' | 'pending' | 'not_applicable' }) {
+  if (status === 'not_applicable') {
+    return (
+      <span className="text-[10px] font-black px-2 py-0.5 rounded-lg bg-slate-100 text-slate-400 shrink-0">
+        ไม่ต้องทำ
+      </span>
+    );
+  }
+  return status === 'done' ? (
     <span className="text-[10px] font-black px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-700 shrink-0">
       เสร็จแล้ว
     </span>
@@ -93,7 +100,9 @@ function ClassAttendanceTaskList({
               className={`rounded-2xl border p-3 ${
                 task.status === 'done'
                   ? 'bg-emerald-50/90 border-emerald-200'
-                  : 'bg-white border-slate-200'
+                  : task.status === 'not_applicable'
+                    ? 'bg-slate-50 border-slate-200'
+                    : 'bg-white border-slate-200'
               }`}
             >
               <div className="flex items-start justify-between gap-2">
@@ -105,7 +114,7 @@ function ClassAttendanceTaskList({
                     {task.className}
                   </p>
                 </div>
-                <TaskBadge done={task.status === 'done'} />
+                <TaskBadge status={task.status} />
               </div>
             </div>
           ))}
@@ -154,7 +163,9 @@ function TeachingReflectionTaskList({
               className={`rounded-2xl border p-3 ${
                 task.status === 'done'
                   ? 'bg-emerald-50/90 border-emerald-200'
-                  : 'bg-white border-slate-200'
+                  : task.status === 'not_applicable'
+                    ? 'bg-slate-50 border-slate-200'
+                    : 'bg-white border-slate-200'
               }`}
             >
               <div className="flex items-start justify-between gap-2">
@@ -167,7 +178,7 @@ function TeachingReflectionTaskList({
                     {task.periods.length > 0 ? ` · คาบ ${task.periods.join(', ')}` : ''}
                   </p>
                 </div>
-                <TaskBadge done={task.status === 'done'} />
+                <TaskBadge status={task.status} />
               </div>
             </div>
           ))}
@@ -376,7 +387,7 @@ export default function TeacherDailyTaskWidget() {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-[13px] font-black text-slate-800 truncate">{task.className}</p>
-                        <TaskBadge done={task.status === 'done'} />
+                        <TaskBadge status={task.status} />
                       </div>
                       {task.session && (
                         <p className="text-[10px] font-bold text-slate-500 mt-1">

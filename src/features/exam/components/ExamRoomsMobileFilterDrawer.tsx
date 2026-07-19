@@ -19,15 +19,18 @@ type Props = {
   filterGradeLevel: string;
   filterRoomNumber: string;
   filterSubjectGroup: SubjectGroupId | 'all';
+  filterSubSubjectGroup: string;
   searchText: string;
   availableGradeLevels: string[];
   availableRoomNumbers: string[];
+  availableSubSubjectGroups: string[];
   hasActiveFilters: boolean;
   canCreate: boolean;
   onDepartmentChange: (dept: Department | 'all') => void;
   onGradeChange: (grade: string) => void;
   onRoomChange: (roomNumber: string) => void;
   onSubjectGroupChange: (group: SubjectGroupId | 'all') => void;
+  onSubSubjectGroupChange: (sub: string) => void;
   onSearchChange: (value: string) => void;
   onClearFilters: () => void;
   onCreateRoom: () => void;
@@ -40,15 +43,18 @@ export default function ExamRoomsMobileFilterDrawer({
   filterGradeLevel,
   filterRoomNumber,
   filterSubjectGroup,
+  filterSubSubjectGroup,
   searchText,
   availableGradeLevels,
   availableRoomNumbers,
+  availableSubSubjectGroups,
   hasActiveFilters,
   canCreate,
   onDepartmentChange,
   onGradeChange,
   onRoomChange,
   onSubjectGroupChange,
+  onSubSubjectGroupChange,
   onSearchChange,
   onClearFilters,
   onCreateRoom,
@@ -210,6 +216,29 @@ export default function ExamRoomsMobileFilterDrawer({
           ))}
         </select>
       </div>
+
+      {availableSubSubjectGroups.length > 0 && (
+        <div>
+          <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">
+            สาระย่อย
+          </label>
+          <select
+            value={filterSubSubjectGroup}
+            onChange={(e) => onSubSubjectGroupChange(e.target.value)}
+            className={cn(
+              'h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none transition-all focus:border-blue-200 focus:ring-4 focus:ring-blue-50/50',
+              filterSubSubjectGroup === 'all' && 'text-slate-400',
+            )}
+          >
+            <option value="all">ทุกสาระย่อย</option>
+            {availableSubSubjectGroups.map((sub) => (
+              <option key={sub} value={sub}>
+                {sub}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div>
         <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">

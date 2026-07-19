@@ -1,6 +1,24 @@
 {
   "indexes": [
     {
+      "collectionGroup": "lesson_comments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "courseId",  "order": "ASCENDING" },
+        { "fieldPath": "lessonId",  "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lesson_submissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "courseId",   "order": "ASCENDING" },
+        { "fieldPath": "lessonId",   "order": "ASCENDING" },
+        { "fieldPath": "studentId",  "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "leave_requests",
       "queryScope": "COLLECTION",
       "fields": [
@@ -297,6 +315,34 @@
         {
           "fieldPath": "dueDate",
           "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "student_fees",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "academicYearId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "studentId",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "payment_transactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "studentFeeId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "submittedAt",
+          "order": "DESCENDING"
         }
       ]
     }

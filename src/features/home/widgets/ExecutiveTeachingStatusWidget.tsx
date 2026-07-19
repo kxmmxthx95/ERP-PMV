@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { HiOutlineEye, HiXMark } from 'react-icons/hi2';
 import { useSchedule } from '@/hooks/useSchedule';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
 import { useExecutiveClassSettings } from '@/hooks/useClassSettingsMap';
 import { DEFAULT_SETTINGS } from '@/hooks/useScheduleSettings';
@@ -15,9 +16,19 @@ import {
 } from '@/components/ui/drawer';
 import { subjectColorByName } from '@/features/schedule/constants/colors';
 import { formatThaiDateLabel } from '@/lib/dateUtils';
+import { cn } from '@/lib/utils';
 import { formatCountdown, getRemainingSeconds, useLocalNowSeconds } from '@/lib/localSecondsStore';
 import { resolveCanonicalTeacherId, teacherDisplayName } from '@/lib/teachers/teacherIdentity';
 import { WIDGET_CARD, WIDGET_GLASS, WIDGET_STAT_CELL, WIDGET_STAT_LABEL, WIDGET_STAT_VALUE } from '../widgetStyles';
+import {
+  getWidgetHolidayCardStyle,
+  getWidgetHolidayLabel,
+  WidgetHolidayBadge,
+  WidgetHolidayBody,
+  widgetHolidayDateClass,
+  widgetHolidayHeaderClass,
+  widgetHolidayIconButtonClass,
+} from '../components/WidgetHolidayContent';
 
 type TeacherLiveKind = 'teaching' | 'resting' | 'outside';
 
@@ -325,6 +336,8 @@ export default function ExecutiveTeachingStatusWidget() {
 
   const classSettings = useExecutiveClassSettings(classIdsForSettings);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const { isHoliday, isWeekend, holidayTitle } = useIsSchoolDayToday();
+  const todayLabel = formatThaiDateLabel();
 
   const classNameMap = useMemo(
     () => Object.fromEntries(classes.map((cls) => [cls.id, cls.className || cls.label || cls.id])),
@@ -343,8 +356,6 @@ export default function ExecutiveTeachingStatusWidget() {
     });
     return map;
   }, [teachers]);
-
-  const todayLabel = useMemo(() => formatThaiDateLabel(), []);
 
   const schoolWideSettings = classSettings.school_wide;
 
@@ -496,47 +507,56 @@ export default function ExecutiveTeachingStatusWidget() {
 
   return (
     <>
-      <div style={WIDGET_GLASS} className={WIDGET_CARD}>
+      <div style={isHoliday ? getWidgetHolidayCardStyle(isWeekend) : WIDGET_GLASS} className={WIDGET_CARD}>
         <div className="flex items-start justify-between gap-2 shrink-0">
           <div className="min-w-0 flex-1">
-            <p className="font-bold text-sm text-slate-700 leading-tight truncate">สถานะครูตามตารางสอน</p>
-            <p className="text-[10px] text-slate-400 truncate mt-0.5">{todayLabel}</p>
+            <p className={widgetHolidayHeaderClass(isHoliday)}>สถานะครูตามตารางสอน</p>
+            <p className={cn(widgetHolidayDateClass(isHoliday), 'mt-0.5')}>{todayLabel}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="p-1.5 rounded-lg hover:bg-slate-200/50 transition shrink-0 -mr-0.5 -mt-0.5"
-            aria-label="ดูรายชื่อครู"
-          >
-            <HiOutlineEye size={16} className="text-slate-600" />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-3 gap-1.5 flex-1 min-h-0 content-center">
-          <div className={`${WIDGET_STAT_CELL} bg-blue-50/70 border border-blue-100/80`}>
-            <span className={`${WIDGET_STAT_VALUE} text-blue-600`}>{status.teaching.length}</span>
-            <span className={WIDGET_STAT_LABEL}>กำลังสอน</span>
-          </div>
-          <div className={`${WIDGET_STAT_CELL} bg-slate-50/80 border border-slate-100`}>
-            <span className={`${WIDGET_STAT_VALUE} text-slate-600`}>{status.resting.length}</span>
-            <span className={WIDGET_STAT_LABEL}>พัก/ว่าง</span>
-          </div>
-          <div className={`${WIDGET_STAT_CELL} bg-violet-50/60 border border-violet-100/80`}>
-            <span className={`${WIDGET_STAT_VALUE} text-violet-700`}>{status.totalTodayTeachers}</span>
-            <span className={WIDGET_STAT_LABEL}>มีคาบวันนี้</span>
+          <div className="flex items-center gap-1 shrink-0 -mr-0.5 -mt-0.5">
+            {isHoliday ? <WidgetHolidayBadge /> : null}
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              className={widgetHolidayIconButtonClass(isHoliday)}
+              aria-label="ดูรายชื่อครู"
+            >
+              <HiOutlineEye size={16} />
+            </button>
           </div>
         </div>
 
-        {nearestUpcomingStartMin != null ? (
-          <NearestCountdownButton
-            nearestStartMin={nearestUpcomingStartMin}
-            onClick={() => setDrawerOpen(true)}
-          />
+        {isHoliday ? (
+          <WidgetHolidayBody isWeekend={isWeekend} holidayTitle={holidayTitle} />
         ) : (
-          <OpenTeacherListButton
-            totalTodayTeachers={status.totalTodayTeachers}
-            onClick={() => setDrawerOpen(true)}
-          />
+          <>
+            <div className="grid grid-cols-3 gap-1.5 flex-1 min-h-0 content-center">
+              <div className={`${WIDGET_STAT_CELL} bg-blue-50/70 border border-blue-100/80`}>
+                <span className={`${WIDGET_STAT_VALUE} text-blue-600`}>{status.teaching.length}</span>
+                <span className={WIDGET_STAT_LABEL}>กำลังสอน</span>
+              </div>
+              <div className={`${WIDGET_STAT_CELL} bg-slate-50/80 border border-slate-100`}>
+                <span className={`${WIDGET_STAT_VALUE} text-slate-600`}>{status.resting.length}</span>
+                <span className={WIDGET_STAT_LABEL}>พัก/ว่าง</span>
+              </div>
+              <div className={`${WIDGET_STAT_CELL} bg-violet-50/60 border border-violet-100/80`}>
+                <span className={`${WIDGET_STAT_VALUE} text-violet-700`}>{status.totalTodayTeachers}</span>
+                <span className={WIDGET_STAT_LABEL}>มีคาบวันนี้</span>
+              </div>
+            </div>
+
+            {nearestUpcomingStartMin != null ? (
+              <NearestCountdownButton
+                nearestStartMin={nearestUpcomingStartMin}
+                onClick={() => setDrawerOpen(true)}
+              />
+            ) : (
+              <OpenTeacherListButton
+                totalTodayTeachers={status.totalTodayTeachers}
+                onClick={() => setDrawerOpen(true)}
+              />
+            )}
+          </>
         )}
       </div>
 
@@ -562,10 +582,12 @@ export default function ExecutiveTeachingStatusWidget() {
           </DrawerHeader>
 
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pb-6">
-            {status.isWeekend ? (
+            {isHoliday ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
                 <p className="text-sm font-bold text-slate-600">วันนี้เป็นวันหยุด</p>
-                <p className="text-xs text-slate-400 mt-1">ไม่มีตารางสอนในวันหยุดสุดสัปดาห์</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  {getWidgetHolidayLabel(isWeekend, holidayTitle)}
+                </p>
               </div>
             ) : status.teachers.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">

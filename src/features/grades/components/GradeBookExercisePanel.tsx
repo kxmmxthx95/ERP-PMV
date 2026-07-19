@@ -103,6 +103,7 @@ export default function GradeBookExercisePanel({ context }: Props) {
         onSetUpdated={(updated) => {
           setSelectedSet(updated);
         }}
+        updateQuestionSet={updateQuestionSet}
       />
     );
   }

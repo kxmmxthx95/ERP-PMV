@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { HiBars3 } from 'react-icons/hi2';
+import { HiOutlineFunnel } from 'react-icons/hi2';
 import {
   Drawer,
   DrawerContent,
@@ -37,19 +37,20 @@ export function ExamMobileFilterTriggerButton({
       onClick={onClick}
       className={cn(
         'pointer-events-auto relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50',
-        hasActiveFilters && 'border-violet-200 bg-violet-50 text-violet-700',
         className,
       )}
       title={title}
       aria-label={title}
     >
-      <HiBars3 className="h-4 w-4" />
+      <HiOutlineFunnel className="h-4 w-4" />
       {hasActiveFilters && (
-        <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-violet-500" aria-hidden />
+        <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-rose-500" aria-hidden />
       )}
     </button>
   );
 }
+
+type DrawerDirection = 'bottom' | 'right' | 'left' | 'top';
 
 type DrawerProps = {
   open: boolean;
@@ -58,7 +59,22 @@ type DrawerProps = {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
+  direction?: DrawerDirection;
+  contentClassName?: string;
 };
+
+const SIDE_DRAWER_CONTENT_CLASS = cn(
+  'h-dvh max-h-none',
+  'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+  'data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none',
+  'data-[vaul-drawer-direction=left]:w-screen data-[vaul-drawer-direction=left]:max-w-none',
+  'data-[vaul-drawer-direction=left]:before:inset-0 data-[vaul-drawer-direction=left]:before:rounded-none',
+  'sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md',
+  'sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl',
+  'sm:data-[vaul-drawer-direction=left]:w-full sm:data-[vaul-drawer-direction=left]:max-w-md',
+  'sm:data-[vaul-drawer-direction=left]:before:inset-2 sm:data-[vaul-drawer-direction=left]:before:rounded-4xl',
+  'sm:p-2',
+);
 
 export function ExamMobileFilterDrawer({
   open,
@@ -67,17 +83,27 @@ export function ExamMobileFilterDrawer({
   description,
   children,
   footer,
+  direction = 'bottom',
+  contentClassName,
 }: DrawerProps) {
+  const isSide = direction === 'right' || direction === 'left';
+
   return (
-    <Drawer open={open} onOpenChange={onOpenChange} direction="bottom">
-      <DrawerContent className="font-sukhumvit pb-[max(1rem,env(safe-area-inset-bottom))]">
-        <DrawerHeader className="text-center">
+    <Drawer open={open} onOpenChange={onOpenChange} direction={direction}>
+      <DrawerContent
+        className={cn(
+          'font-sukhumvit pb-[max(1rem,env(safe-area-inset-bottom))]',
+          isSide && SIDE_DRAWER_CONTENT_CLASS,
+          contentClassName,
+        )}
+      >
+        <DrawerHeader className={isSide ? 'text-left' : 'text-center'}>
           <DrawerTitle className="text-base font-black text-slate-900">{title}</DrawerTitle>
           {description && (
             <DrawerDescription className="text-xs text-slate-500">{description}</DrawerDescription>
           )}
         </DrawerHeader>
-        <div className="space-y-5 px-4">{children}</div>
+        <div className={cn('space-y-5 px-4', isSide && 'flex-1 overflow-y-auto')}>{children}</div>
         {footer && <DrawerFooter className="flex-row gap-2">{footer}</DrawerFooter>}
       </DrawerContent>
     </Drawer>

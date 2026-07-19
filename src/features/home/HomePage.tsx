@@ -19,7 +19,10 @@ import {
   IoGameControllerOutline,
   IoChatbubbleOutline,
   IoRibbonOutline,
-  IoGridOutline
+  IoGridOutline,
+  IoWalletOutline,
+  IoPlayCircleOutline,
+  IoBarChartOutline,
 } from 'react-icons/io5';
 import type { IconType } from 'react-icons';
 import { useAuth } from '@/hooks/useAuth';
@@ -47,8 +50,11 @@ import StudentExamScoreWidget from './widgets/StudentExamScoreWidget';
 import ExecutiveTeachingStatusWidget from './widgets/ExecutiveTeachingStatusWidget';
 import FuturePlanWidget from './widgets/FuturePlanWidget';
 import BehaviorScoreWidget from './widgets/BehaviorScoreWidget';
+import StudentBehaviorScoreWidget from './widgets/StudentBehaviorScoreWidget';
 import HoroscopeWidget from './widgets/HoroscopeWidget';
 import WordGameWidget from './widgets/WordGameWidget';
+import StudentFeeWidget from './widgets/StudentFeeWidget';
+import TuitionStatusSummaryWidget from './widgets/TuitionStatusSummaryWidget';
 import { DashboardWidgetsSkeleton, MenuPageSkeleton } from './components/WidgetSkeleton';
 
 const MENU_GRID_COLUMNS = 4;
@@ -84,6 +90,7 @@ const ALL_MENUS: { title: string; subtitle: string; icon: IconType; path: string
   { title: 'เช็คชื่อเข้าแถว', subtitle: 'Morning Roll-Call', icon: IoCheckmarkDoneOutline, path: '/portal/morning-rollcall', featureKey: 'morningRollCall' },
   { title: 'ลงเวลาทำงาน', subtitle: 'Staff Attendance', icon: IoTimeOutline, path: '/portal/staff-attendance', featureKey: 'staffAttendance' },
   { title: 'เครื่องสแกน', subtitle: 'Fingerprint Terminals', icon: IoFingerPrintOutline, path: '/portal/fingerprint-devices', featureKey: 'fingerprintDevices' },
+  { title: 'ประเมิน KPI ครู', subtitle: 'Teacher KPI Evaluation', icon: IoBarChartOutline, path: '/portal/teacher-kpi', featureKey: 'teacherKpi' },
   { title: 'การลา', subtitle: 'Leave Requests', icon: IoClipboardOutline, path: '/portal/leave', featureKey: 'leave' },
   { title: 'ครูเวร', subtitle: 'Duty Teacher Schedule', icon: IoShieldCheckmarkOutline, path: '/portal/duty-schedule', featureKey: 'dutySchedule' },
   { title: 'Report Control Center', subtitle: 'ส่งรายงานผ่าน LINE OA', icon: IoChatbubbleOutline, path: '/portal/report-control', featureKey: 'reports' },
@@ -99,6 +106,8 @@ const ALL_MENUS: { title: string; subtitle: string; icon: IconType; path: string
   { title: 'มอบหมายงาน', subtitle: 'Task Delegation', icon: IoCheckmarkDoneOutline, path: '/portal/tasks', featureKey: 'tasks' },
   { title: 'การตั้งค่า', subtitle: 'ระบบและปีการศึกษา', icon: IoSettingsOutline, path: '/portal/settings', featureKey: 'settings' },
   { title: 'แผนการสอน', subtitle: 'Weekly Teaching Plan', icon: IoGridOutline, path: '/portal/micro-syllabus', featureKey: 'microSyllabus' },
+  { title: 'จัดการค่าเทอม', subtitle: 'Tuition Fee Management', icon: IoWalletOutline, path: '/portal/tuition', featureKey: 'tuition' },
+  { title: 'คอร์สออนไลน์', subtitle: 'Course on Demand / VOD', icon: IoPlayCircleOutline, path: '/portal/courses', featureKey: 'courseOnDemand' },
 ];
 
 const ALL_MENUS_INDEX_MAP = new Map(ALL_MENUS.map((m, idx) => [m.featureKey, idx]));
@@ -107,12 +116,12 @@ const MENU_CATEGORIES = [
   {
     id: 'system_admin',
     name: 'ระบบบริหารจัดการ (System & Admin)',
-    featureKeys: ['users', 'teachers', 'students', 'roles', 'staffAttendance', 'fingerprintDevices', 'leave', 'settings', 'logs'],
+    featureKeys: ['users', 'teachers', 'students', 'roles', 'staffAttendance', 'fingerprintDevices', 'teacherKpi', 'leave', 'settings', 'logs', 'tuition'],
   },
   {
     id: 'academic_teaching',
     name: 'งานวิชาการและการสอน (Academic & Teaching)',
-    featureKeys: ['curriculum', 'schedule', 'calendar', 'classes', 'microSyllabus'],
+    featureKeys: ['curriculum', 'schedule', 'calendar', 'classes', 'microSyllabus', 'courseOnDemand'],
   },
   {
     id: 'assessment_testing',
@@ -301,6 +310,15 @@ function DashboardWidgets({
     }
     if (isEnabled('widget_behaviorScore') && hasRole('teacher', 'staff', 'admin', 'sysadmin')) {
       pushItem('widget_behaviorScore', 'widget_behaviorScore', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><BehaviorScoreWidget /></motion.div>);
+    }
+    if ((isEnabled('widget_studentBehaviorScore') || isEnabled('widget_behaviorScore')) && hasRole('student')) {
+      pushItem('widget_studentBehaviorScore', 'widget_studentBehaviorScore', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentBehaviorScoreWidget /></motion.div>);
+    }
+    if (isEnabled('widget_tuitionFee') && hasRole('student')) {
+      pushItem('widget_tuitionFee', 'widget_tuitionFee', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentFeeWidget /></motion.div>);
+    }
+    if (isEnabled('widget_tuitionStatus') && hasRole('admin', 'sysadmin')) {
+      pushItem('widget_tuitionStatus', 'widget_tuitionStatus', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><TuitionStatusSummaryWidget /></motion.div>);
     }
 
     return items.sort((a, b) => a.order - b.order);

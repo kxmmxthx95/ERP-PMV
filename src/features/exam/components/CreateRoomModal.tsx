@@ -10,6 +10,7 @@ import type { ExamRoom } from '@/types/exam';
 import {
   DEPARTMENT_CONFIG,
   SUBJECT_GROUP_CONFIG,
+  SUBJECT_SUBGROUP_CONFIG,
   type Department,
   type SubjectGroupId,
 } from '@/types/curriculum';
@@ -55,6 +56,7 @@ export function CreateRoomModal({
     gradeLevel: editRoom?.gradeLevel || prefill?.gradeLevel || '',
     classId: editRoom?.classId || prefill?.classId || '',
     subjectGroupId: (editRoom?.subjectGroupId as SubjectGroupId) || ('' as SubjectGroupId | ''),
+    subSubjectGroup: editRoom?.subSubjectGroup || '',
     subjectId: editRoom?.subjectId || prefill?.subjectId || '',
     password: editRoom?.password || '',
     durationMinutes: editRoom?.durationMinutes || 60,
@@ -71,6 +73,7 @@ export function CreateRoomModal({
       gradeLevel: editRoom?.gradeLevel || prefill?.gradeLevel || '',
       classId: editRoom?.classId || prefill?.classId || '',
       subjectGroupId: (editRoom?.subjectGroupId as SubjectGroupId) || ('' as SubjectGroupId | ''),
+      subSubjectGroup: editRoom?.subSubjectGroup || '',
       subjectId: editRoom?.subjectId || prefill?.subjectId || '',
       password: editRoom?.password || '',
       durationMinutes: editRoom?.durationMinutes || 60,
@@ -89,6 +92,9 @@ export function CreateRoomModal({
   }).sort((a, b) => Number(a.roomNumber) - Number(b.roomNumber));
 
   const subjectGroupOptions = Object.entries(SUBJECT_GROUP_CONFIG).sort(([, a], [, b]) => a.order - b.order);
+  const subSubjectOptions = form.subjectGroupId
+    ? SUBJECT_SUBGROUP_CONFIG[form.subjectGroupId as SubjectGroupId] ?? []
+    : [];
 
   const handleSubmit = async () => {
     if (!form.title || !form.password || !user?.uid || !academicYear || !activeSemester) return;
@@ -113,6 +119,7 @@ export function CreateRoomModal({
         departmentId: form.departmentId || 'secondary',
         gradeLevel: form.gradeLevel,
         subjectGroupId: form.subjectGroupId,
+        subSubjectGroup: form.subSubjectGroup || undefined,
         semester: activeSemester as 1 | 2,
         settings: {
           shuffleQuestions: form.shuffleQuestions,
@@ -233,18 +240,40 @@ export function CreateRoomModal({
             </div>
           </div>
 
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">กลุ่มสาระ</label>
-            <select
-              value={form.subjectGroupId}
-              onChange={(e) => setForm((p) => ({ ...p, subjectGroupId: e.target.value as SubjectGroupId }))}
-              className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none"
-            >
-              <option value="">เลือกกลุ่มสาระ</option>
-              {subjectGroupOptions.map(([id, cfg]) => (
-                <option key={id} value={id}>{cfg.name}</option>
-              ))}
-            </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">กลุ่มสาระ</label>
+              <select
+                value={form.subjectGroupId}
+                onChange={(e) => setForm((p) => ({
+                  ...p,
+                  subjectGroupId: e.target.value as SubjectGroupId,
+                  subSubjectGroup: '',
+                }))}
+                className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none"
+              >
+                <option value="">เลือกกลุ่มสาระ</option>
+                {subjectGroupOptions.map(([id, cfg]) => (
+                  <option key={id} value={id}>{cfg.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {subSubjectOptions.length > 0 && (
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">วิชา / สาระย่อย</label>
+                <select
+                  value={form.subSubjectGroup}
+                  onChange={(e) => setForm((p) => ({ ...p, subSubjectGroup: e.target.value }))}
+                  className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none"
+                >
+                  <option value="">เลือกสาระย่อย (ถ้ามี)</option>
+                  {subSubjectOptions.map((sub) => (
+                    <option key={sub} value={sub}>{sub}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -284,30 +313,6 @@ export function CreateRoomModal({
                 <option value={3}>3 ครั้ง</option>
               </select>
             </div>
-          </div>
-
-          <div className="space-y-2 rounded-xl bg-slate-50 p-3">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ตั้งค่าการสอบ</p>
-            {[
-              { key: 'shuffleQuestions', label: 'สับเปลี่ยนลำดับข้อ' },
-              { key: 'showResultImmediately', label: 'แสดงผลทันทีหลังส่ง' },
-            ].map((opt) => {
-              const isOn = Boolean(form[opt.key as keyof typeof form]);
-              return (
-                <label key={opt.key} className="flex items-center justify-between text-xs font-bold text-slate-600">
-                  <span>{opt.label}</span>
-                  <button
-                    type="button"
-                    onClick={() => setForm((p) => ({ ...p, [opt.key]: !p[opt.key as keyof typeof p] }))}
-                    className={`h-6 w-11 rounded-full p-0.5 transition-colors ${isOn ? 'bg-slate-900' : 'bg-slate-300'}`}
-                  >
-                    <span
-                      className={`block h-5 w-5 rounded-full bg-white transition-transform ${isOn ? 'translate-x-5' : 'translate-x-0'}`}
-                    />
-                  </button>
-                </label>
-              );
-            })}
           </div>
 
           <DialogFooter className="pt-4">

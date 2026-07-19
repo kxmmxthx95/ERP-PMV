@@ -1,8 +1,19 @@
 // src/features/grades/components/GradeTable.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
+import { collection, getDocs, query, where } from 'firebase/firestore';
+import { HiCalendarDays, HiChevronDown } from 'react-icons/hi2';
+import { db } from '@/lib/firebase';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import type { StudentScoreSummary, GradeWeightConfig } from '@/types/grades';
 import { gradeLetterToGpa, formatGpa, gpaStyle, isPassingGpa } from '@/types/grades';
+import type { AttendanceStatus } from '@/types/teaching';
+import {
+  buildStudentSubjectAttendanceHistory,
+  summarizeStudentSubjectAttendance,
+} from '@/features/grades/utils/studentSubjectAttendanceHistory';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { formatThaiDateRangeFromIso, getLocalDateString } from '@/lib/dateUtils';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -10,11 +21,53 @@ interface Props {
   config: GradeWeightConfig;
   editable?: boolean;
   showAsPercentage?: boolean;
+  /** 'scores' (default) แสดงตารางคะแนน, 'attendance' แสดงสถิติการเข้าเรียนแทน */
+  view?: 'scores' | 'attendance';
+  yearStartDate?: string;
+  yearEndDate?: string;
   onUpdateScore?: (
     studentId: string,
     field: 'classworkScore' | 'midtermScore' | 'finalScore' | 'note' | 'absent',
     value: number | string | boolean | null,
   ) => void;
+}
+
+type ClassSessionDoc = {
+  id: string;
+  date?: string;
+  period?: number;
+  attendance?: Array<{ studentId: string; status: AttendanceStatus; note?: string }>;
+};
+
+type ScheduleSlot = { day: number; period: number };
+
+type AttendanceBreakdown = {
+  pct: number | null;
+  total: number;
+  present: number;
+  late: number;
+  absent: number;
+  leave: number;
+};
+
+type AttendanceDatePreset = 'semester' | 'month' | 'custom';
+
+const ATTENDANCE_TABLE_COLUMNS = '2rem minmax(0, 2fr) repeat(4, minmax(0, 1fr)) minmax(0, 1fr) minmax(3.5rem, 0.9fr)';
+
+function monthRange(today = new Date()): { from: string; to: string } {
+  const from = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+  return { from, to: getLocalDateString(today) };
+}
+
+function clampRange(from: string, to: string, min?: string, max?: string): { from: string; to: string } {
+  let nextFrom = from;
+  let nextTo = to;
+  if (min && nextFrom && nextFrom < min) nextFrom = min;
+  if (max && nextTo && nextTo > max) nextTo = max;
+  if (nextFrom && nextTo && nextFrom > nextTo) {
+    return { from: nextTo, to: nextFrom };
+  }
+  return { from: nextFrom, to: nextTo };
 }
 
 function ScoreCell({
@@ -83,8 +136,144 @@ export default function GradeTable({
   editable = false,
   onUpdateScore,
   showAsPercentage = false,
+  view = 'scores',
+  yearStartDate = '',
+  yearEndDate = '',
 }: Props) {
   const showClasswork = config.weights.classwork > 0;
+
+  // ── Attendance view ──────────────────────────────────────────────────────
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const [attendanceRaw, setAttendanceRaw] = useState<{
+    sessions: ClassSessionDoc[];
+    scheduleSlots: ScheduleSlot[];
+  } | null>(null);
+  const loadedAttendanceKeyRef = useRef('');
+  const [dateFilterOpen, setDateFilterOpen] = useState(false);
+  const [datePreset, setDatePreset] = useState<AttendanceDatePreset>('semester');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+
+  useEffect(() => {
+    if (view !== 'attendance') return;
+    if (!config.classId || !config.subjectId || !config.academicYearId) return;
+
+    const key = `${config.classId}|${config.subjectId}|${config.academicYearId}|${config.semester}`;
+    if (loadedAttendanceKeyRef.current === key) return;
+
+    let cancelled = false;
+    setAttendanceLoading(true);
+    setAttendanceError(null);
+
+    (async () => {
+      try {
+        const [sessionsSnap, schedulesSnap] = await Promise.all([
+          getDocs(query(
+            collection(db, 'class_sessions'),
+            where('classId', '==', config.classId),
+            where('academicYearId', '==', config.academicYearId),
+            where('subjectId', '==', config.subjectId),
+            where('semester', '==', config.semester),
+          )),
+          getDocs(query(
+            collection(db, 'schedules'),
+            where('year', '==', config.academicYearId),
+            where('semester', '==', config.semester),
+            where('classId', '==', config.classId),
+            where('subjectId', '==', config.subjectId),
+          )),
+        ]);
+        if (cancelled) return;
+
+        const sessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }) as ClassSessionDoc);
+        const scheduleSlots = schedulesSnap.docs.map((d) => {
+          const data = d.data() as { day?: number; dayOfWeek?: number; period?: number };
+          return { day: data.day ?? data.dayOfWeek ?? 0, period: data.period ?? 0 };
+        });
+
+        setAttendanceRaw({ sessions, scheduleSlots });
+        loadedAttendanceKeyRef.current = key;
+      } catch (err) {
+        if (cancelled) return;
+        console.error('[GradeTable attendance]', err);
+        setAttendanceError('โหลดข้อมูลการเข้าเรียนไม่สำเร็จ');
+      } finally {
+        if (!cancelled) setAttendanceLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [view, config.classId, config.subjectId, config.academicYearId, config.semester]);
+
+  const attendanceDateRange = useMemo(() => {
+    if (datePreset === 'month') {
+      const month = monthRange();
+      return clampRange(month.from, month.to, yearStartDate || undefined, yearEndDate || undefined);
+    }
+    if (datePreset === 'custom') {
+      const from = customFrom || yearStartDate;
+      const to = customTo || yearEndDate || getLocalDateString();
+      return clampRange(from, to, yearStartDate || undefined, yearEndDate || undefined);
+    }
+    return {
+      from: yearStartDate,
+      to: yearEndDate || getLocalDateString(),
+    };
+  }, [datePreset, customFrom, customTo, yearStartDate, yearEndDate]);
+
+  const attendanceDateLabel = useMemo(() => {
+    if (datePreset === 'semester') return 'ทั้งภาคเรียน';
+    if (datePreset === 'month') return 'เดือนนี้';
+    if (attendanceDateRange.from && attendanceDateRange.to) {
+      return formatThaiDateRangeFromIso(attendanceDateRange.from, attendanceDateRange.to);
+    }
+    return 'เลือกช่วงวันที่';
+  }, [datePreset, attendanceDateRange.from, attendanceDateRange.to]);
+
+  const attendanceByStudent = useMemo(() => {
+    const map = new Map<string, AttendanceBreakdown>();
+    if (!attendanceRaw) return map;
+
+    summaries.forEach((s) => {
+      const rows = buildStudentSubjectAttendanceHistory({
+        studentId: s.studentId,
+        sessions: attendanceRaw.sessions,
+        scheduleSlots: attendanceRaw.scheduleSlots,
+        rangeStart: attendanceDateRange.from,
+        rangeEnd: attendanceDateRange.to,
+        academicYearId: config.academicYearId,
+      });
+      const summary = summarizeStudentSubjectAttendance(rows);
+      map.set(s.studentId, {
+        pct: summary.pct,
+        total: summary.total,
+        present: summary.counts.present ?? 0,
+        late: summary.counts.late ?? 0,
+        absent: summary.counts.absent ?? 0,
+        leave: (summary.counts.excused ?? 0) + (summary.counts.leave ?? 0),
+      });
+    });
+
+    return map;
+  }, [attendanceRaw, summaries, attendanceDateRange.from, attendanceDateRange.to, config.academicYearId]);
+
+  const attendanceStatItems = useMemo(() => {
+    const rows = summaries
+      .map(s => attendanceByStudent.get(s.studentId))
+      .filter((r): r is AttendanceBreakdown => !!r && r.total > 0);
+    const avgPct = rows.length > 0
+      ? Math.round(rows.reduce((acc, r) => acc + (r.pct ?? 0), 0) / rows.length)
+      : null;
+    const lowAttendance = rows.filter(r => (r.pct ?? 100) < 80).length;
+
+    return [
+      { label: 'นักเรียนทั้งหมด', value: summaries.length, color: '#0f172a' },
+      { label: 'มีข้อมูล', value: rows.length, color: '#2563eb' },
+      { label: 'เข้าเรียนเฉลี่ย', value: avgPct !== null ? `${avgPct}%` : '—', color: '#059669' },
+      { label: 'เข้าเรียนต่ำ (<80%)', value: lowAttendance, color: '#dc2626' },
+    ];
+  }, [summaries, attendanceByStudent]);
 
   // Stats summary
   const graded = summaries.filter(s => s.grade !== null).length;
@@ -114,18 +303,104 @@ export default function GradeTable({
     ? '2rem minmax(0, 2fr) repeat(3, minmax(0, 1fr)) minmax(0, 1fr) minmax(3.5rem, 0.75fr)'
     : '2rem minmax(0, 2fr) repeat(2, minmax(0, 1fr)) minmax(0, 1fr) minmax(3.5rem, 0.75fr)';
 
+  const displayedStatItems = view === 'scores' ? statItems : attendanceStatItems;
+
   return (
     <div className="flex flex-col gap-3">
+      {view === 'attendance' && (
+        <div className="flex items-center justify-between gap-2 px-1">
+          <p className="text-[11px] font-bold text-slate-400 font-sarabun">สถิติการเข้าเรียน</p>
+          <Popover open={dateFilterOpen} onOpenChange={setDateFilterOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                <HiCalendarDays className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                <span className="truncate">{attendanceDateLabel}</span>
+                <HiChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-72 gap-3 rounded-xl p-3">
+              <p className="text-[11px] font-black text-slate-500 font-sukhumvit uppercase tracking-wide">
+                เลือกช่วงวันที่
+              </p>
+              <div className="grid grid-cols-1 gap-1.5">
+                {([
+                  { key: 'semester' as const, label: 'ทั้งภาคเรียน' },
+                  { key: 'month' as const, label: 'เดือนนี้' },
+                  { key: 'custom' as const, label: 'กำหนดเอง' },
+                ]).map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => {
+                      setDatePreset(opt.key);
+                      if (opt.key !== 'custom') setDateFilterOpen(false);
+                      if (opt.key === 'custom' && !customFrom && !customTo) {
+                        setCustomFrom(yearStartDate || monthRange().from);
+                        setCustomTo(yearEndDate || getLocalDateString());
+                      }
+                    }}
+                    className={cn(
+                      'h-8 rounded-lg px-2.5 text-left text-[12px] font-bold font-sarabun transition',
+                      datePreset === opt.key
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-slate-50 text-slate-600 hover:bg-slate-100',
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {datePreset === 'custom' && (
+                <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-bold text-slate-400 font-sarabun">เริ่ม</span>
+                    <input
+                      type="date"
+                      value={customFrom}
+                      min={yearStartDate || undefined}
+                      max={customTo || yearEndDate || undefined}
+                      onChange={(e) => setCustomFrom(e.target.value)}
+                      className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-sarabun text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400/40"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-bold text-slate-400 font-sarabun">สิ้นสุด</span>
+                    <input
+                      type="date"
+                      value={customTo}
+                      min={customFrom || yearStartDate || undefined}
+                      max={yearEndDate || undefined}
+                      onChange={(e) => setCustomTo(e.target.value)}
+                      className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-sarabun text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400/40"
+                    />
+                  </label>
+                </div>
+              )}
+
+              {attendanceDateRange.from && attendanceDateRange.to && (
+                <p className="text-[10px] font-semibold text-slate-400 font-sarabun">
+                  {formatThaiDateRangeFromIso(attendanceDateRange.from, attendanceDateRange.to)}
+                </p>
+              )}
+            </PopoverContent>
+          </Popover>
+        </div>
+      )}
+
       {/* Summary bar */}
-      <div className="bg-white/40 p-3 rounded-2xl border border-white/60 overflow-x-auto scrollbar-hide">
+      <div className="p-3 overflow-x-auto scrollbar-hide">
         <div
           className="grid gap-2 w-full min-w-[520px] md:min-w-0"
-          style={{ gridTemplateColumns: `repeat(${statItems.length}, minmax(0, 1fr))` }}
+          style={{ gridTemplateColumns: `repeat(${displayedStatItems.length}, minmax(0, 1fr))` }}
         >
-          {statItems.map(item => (
+          {displayedStatItems.map(item => (
             <div
               key={item.label}
-              className="flex flex-col items-center justify-center px-2 py-2 rounded-2xl min-w-0 w-full"
+              className="flex flex-col items-center justify-center px-2 py-2 rounded-lg min-w-0 w-full shadow-sm"
               style={{ background: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.9)' }}
             >
               <span className="text-[15px] font-black font-sukhumvit tabular-nums" style={{ color: item.color }}>{item.value}</span>
@@ -134,6 +409,18 @@ export default function GradeTable({
           ))}
         </div>
       </div>
+
+      {view === 'attendance' && attendanceError && (
+        <div className="flex items-center gap-2 text-rose-500 bg-rose-50 px-4 py-3 rounded-2xl border border-rose-200">
+          <p className="text-[12px] font-sarabun">{attendanceError}</p>
+        </div>
+      )}
+
+      {view === 'attendance' && attendanceLoading && (
+        <div className="flex items-center justify-center h-24">
+          <div className="w-6 h-6 border-3 border-violet-200 border-t-violet-500 rounded-full animate-spin" />
+        </div>
+      )}
 
       {/* Mobile: card list */}
       <div className="md:hidden flex flex-col gap-2.5 px-0.5">
@@ -245,45 +532,85 @@ export default function GradeTable({
                   </div>
                 )}
 
-                <div
-                  className={cn(
-                    'mt-2.5 pt-2.5 border-t border-slate-100 grid gap-2',
-                    scoreMetrics.length >= 3 ? 'grid-cols-3' : 'grid-cols-2',
-                  )}
-                >
-                  {scoreMetrics.map((metric) => (
-                    <div key={metric.key} className="text-center min-w-0">
-                      <p
-                        className="text-[9px] font-black uppercase tracking-wide font-sukhumvit mb-0.5 truncate"
-                        style={{ color: metric.color }}
-                      >
-                        {metric.label}
-                      </p>
-                      <div className="flex justify-center">
-                        <ScoreCell
-                          value={metric.value}
-                          editable={editable && !s.absent}
-                          showAsPercentage={showAsPercentage}
-                          weightPercent={showAsPercentage ? metric.weight : undefined}
-                          onChange={(v) => onUpdateScore?.(s.studentId, metric.field, v)}
-                        />
-                      </div>
+                {view === 'scores' ? (
+                  <>
+                    <div
+                      className={cn(
+                        'mt-2.5 pt-2.5 border-t border-slate-100 grid gap-2',
+                        scoreMetrics.length >= 3 ? 'grid-cols-3' : 'grid-cols-2',
+                      )}
+                    >
+                      {scoreMetrics.map((metric) => (
+                        <div key={metric.key} className="text-center min-w-0">
+                          <p
+                            className="text-[9px] font-black uppercase tracking-wide font-sukhumvit mb-0.5 truncate"
+                            style={{ color: metric.color }}
+                          >
+                            {metric.label}
+                          </p>
+                          <div className="flex justify-center">
+                            <ScoreCell
+                              value={metric.value}
+                              editable={editable && !s.absent}
+                              showAsPercentage={showAsPercentage}
+                              weightPercent={showAsPercentage ? metric.weight : undefined}
+                              onChange={(v) => onUpdateScore?.(s.studentId, metric.field, v)}
+                            />
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
 
-                <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
-                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-wide font-sukhumvit">
-                    รวม (%)
-                  </p>
-                  {s.totalScore !== null ? (
-                    <span className="text-[14px] font-black font-sukhumvit tabular-nums" style={{ color: gc?.text ?? '#0f172a' }}>
-                      {Math.round(s.totalScore)}%
-                    </span>
-                  ) : (
-                    <span className="text-[12px] text-slate-300 font-bold">—</span>
-                  )}
-                </div>
+                    <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-wide font-sukhumvit">
+                        รวม (%)
+                      </p>
+                      {s.totalScore !== null ? (
+                        <span className="text-[14px] font-black font-sukhumvit tabular-nums" style={{ color: gc?.text ?? '#0f172a' }}>
+                          {Math.round(s.totalScore)}%
+                        </span>
+                      ) : (
+                        <span className="text-[12px] text-slate-300 font-bold">—</span>
+                      )}
+                    </div>
+                  </>
+                ) : (() => {
+                  const att = attendanceByStudent.get(s.studentId) ?? null;
+                  return (
+                    <>
+                      <div className="mt-2.5 pt-2.5 border-t border-slate-100 grid grid-cols-4 gap-2">
+                        {([
+                          { key: 'present', label: 'มา', color: '#059669', value: att?.present ?? 0 },
+                          { key: 'late', label: 'สาย', color: '#d97706', value: att?.late ?? 0 },
+                          { key: 'absent', label: 'ขาด', color: '#e11d48', value: att?.absent ?? 0 },
+                          { key: 'leave', label: 'ลา', color: '#7c3aed', value: att?.leave ?? 0 },
+                        ] as const).map((m) => (
+                          <div key={m.key} className="text-center min-w-0">
+                            <p className="text-[9px] font-black uppercase tracking-wide font-sukhumvit mb-0.5" style={{ color: m.color }}>
+                              {m.label}
+                            </p>
+                            <p className="text-[13px] font-black font-sukhumvit tabular-nums" style={{ color: m.color }}>
+                              {m.value}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-wide font-sukhumvit">
+                          คาบทั้งหมด {att ? `(${att.total})` : ''}
+                        </p>
+                        {att && att.pct !== null ? (
+                          <span className="text-[14px] font-black font-sukhumvit tabular-nums" style={{ color: gpaStyle((att.pct / 100) * 4).text }}>
+                            {att.pct}%
+                          </span>
+                        ) : (
+                          <span className="text-[12px] text-slate-300 font-bold">—</span>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </motion.div>
           );
@@ -302,24 +629,37 @@ export default function GradeTable({
         {/* Header */}
         <div className="grid gap-2 px-4 py-2.5 w-full"
           style={{
-            gridTemplateColumns: tableGridColumns,
+            gridTemplateColumns: view === 'scores' ? tableGridColumns : ATTENDANCE_TABLE_COLUMNS,
             background: 'rgba(248,250,252,0.8)',
           }}>
           <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit">#</span>
           <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit">นักเรียน</span>
-          {showClasswork && (
-            <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#7c3aed' }}>
-              เก็บ ({config.weights.classwork}%)
-            </span>
+          {view === 'scores' ? (
+            <>
+              {showClasswork && (
+                <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#7c3aed' }}>
+                  เก็บ ({config.weights.classwork}%)
+                </span>
+              )}
+              <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#0891b2' }}>
+                กลางภาค ({config.weights.midterm}%)
+              </span>
+              <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#059669' }}>
+                ปลายภาค ({config.weights.final}%)
+              </span>
+              <span className="text-[9px] font-black text-slate-500 uppercase font-sukhumvit text-right">รวม (%)</span>
+              <span className="text-[9px] font-black text-slate-500 uppercase font-sukhumvit text-center">GPA</span>
+            </>
+          ) : (
+            <>
+              <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#059669' }}>มา</span>
+              <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#d97706' }}>สาย</span>
+              <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#e11d48' }}>ขาด</span>
+              <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#7c3aed' }}>ลา</span>
+              <span className="text-[9px] font-black text-slate-500 uppercase font-sukhumvit text-right">คาบทั้งหมด</span>
+              <span className="text-[9px] font-black text-slate-500 uppercase font-sukhumvit text-center">เข้าเรียน %</span>
+            </>
           )}
-          <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#0891b2' }}>
-            กลางภาค ({config.weights.midterm}%)
-          </span>
-          <span className="text-[9px] font-black uppercase font-sukhumvit text-right" style={{ color: '#059669' }}>
-            ปลายภาค ({config.weights.final}%)
-          </span>
-          <span className="text-[9px] font-black text-slate-500 uppercase font-sukhumvit text-right">รวม (%)</span>
-          <span className="text-[9px] font-black text-slate-500 uppercase font-sukhumvit text-center">GPA</span>
         </div>
 
         {/* Rows */}
@@ -327,6 +667,7 @@ export default function GradeTable({
           {summaries.map((s, i) => {
             const gpa = s.grade !== null ? gradeLetterToGpa(s.grade) : null;
             const gc = gpa !== null ? gpaStyle(gpa) : null;
+            const att = attendanceByStudent.get(s.studentId) ?? null;
             return (
               <motion.div
                 key={s.studentId}
@@ -334,7 +675,7 @@ export default function GradeTable({
                 transition={{ delay: i * 0.015 }}
                 className="grid gap-2 px-4 py-2.5 items-center hover:bg-slate-50/40 transition-colors w-full"
                 style={{
-                  gridTemplateColumns: tableGridColumns,
+                  gridTemplateColumns: view === 'scores' ? tableGridColumns : ATTENDANCE_TABLE_COLUMNS,
                   background: s.absent ? 'rgba(255,228,230,0.3)' : undefined,
                 }}
               >
@@ -370,6 +711,38 @@ export default function GradeTable({
                   )}
                 </div>
 
+                {view === 'attendance' ? (
+                  <>
+                    <div className="text-right text-[12px] font-black font-sukhumvit tabular-nums" style={{ color: '#059669' }}>
+                      {att?.present ?? 0}
+                    </div>
+                    <div className="text-right text-[12px] font-black font-sukhumvit tabular-nums" style={{ color: '#d97706' }}>
+                      {att?.late ?? 0}
+                    </div>
+                    <div className="text-right text-[12px] font-black font-sukhumvit tabular-nums" style={{ color: '#e11d48' }}>
+                      {att?.absent ?? 0}
+                    </div>
+                    <div className="text-right text-[12px] font-black font-sukhumvit tabular-nums" style={{ color: '#7c3aed' }}>
+                      {att?.leave ?? 0}
+                    </div>
+                    <div className="text-right text-[12px] font-bold text-slate-600 font-sukhumvit tabular-nums">
+                      {att?.total ?? 0}
+                    </div>
+                    <div className="flex justify-center">
+                      {att && att.pct !== null ? (
+                        <span
+                          className="text-[11px] font-black px-2.5 py-1 rounded-xl font-sukhumvit tabular-nums"
+                          style={{ color: gpaStyle((att.pct / 100) * 4).text, background: gpaStyle((att.pct / 100) * 4).bg }}
+                        >
+                          {att.pct}%
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-slate-300 font-sarabun">—</span>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                <>
                 {/* Classwork */}
                 {showClasswork && (
                   <div className="flex justify-end">
@@ -427,6 +800,8 @@ export default function GradeTable({
                     <span className="text-[10px] text-slate-300 font-sarabun">—</span>
                   )}
                 </div>
+                </>
+                )}
               </motion.div>
             );
           })}

@@ -5,6 +5,8 @@ import { WIDGET_CARD, WIDGET_GLASS } from '../widgetStyles';
 import { WidgetSkeleton } from '../components/WidgetSkeleton';
 import { useExamRoom } from '@/hooks/useExamRoom';
 import { useAuth } from '@/hooks/useAuth';
+import { attemptScorePercent, resolveAttemptScoreDisplay } from '@/lib/exam/examRoomScoring';
+import { resolveAttemptTotalScore } from '@/lib/exam/manualEssayGrading';
 import type { ExamAttempt, ExamRoom } from '@/types/exam';
 
 interface SubjectGroup {
@@ -50,9 +52,11 @@ export default function StudentExamScoreWidget() {
       const roomAttempts = myAttempts.filter((a) => a.roomId === room.id);
       if (roomAttempts.length === 0) continue;
 
-      const gradedAttempts = roomAttempts.filter((a) => a.score !== null);
+      const gradedAttempts = roomAttempts.filter((a) => resolveAttemptTotalScore(a) !== null);
       const bestScore =
-        gradedAttempts.length > 0 ? Math.max(...gradedAttempts.map((a) => a.score as number)) : null;
+        gradedAttempts.length > 0
+          ? Math.max(...gradedAttempts.map((a) => resolveAttemptTotalScore(a) as number))
+          : null;
       const latestAttempt =
         roomAttempts.sort((a, b) => (b.round ?? 0) - (a.round ?? 0))[0] ?? null;
 
@@ -75,16 +79,20 @@ export default function StudentExamScoreWidget() {
 
       const allGraded = group.rooms.flatMap((r) =>
         r.attempts
-          .filter((a) => a.score !== null)
-          .map((a) => ({
-            score: a.score as number,
-            total: r.room.totalPoints,
-          })),
+          .filter((a) => resolveAttemptTotalScore(a) !== null)
+          .map((a) => {
+            const display = resolveAttemptScoreDisplay(r.room, a);
+            return {
+              score: display.score as number,
+              total: display.maxPoints,
+              percent: attemptScorePercent(r.room, a),
+            };
+          }),
       );
 
       if (allGraded.length > 0) {
         const best = allGraded.reduce((acc, cur) =>
-          cur.total > 0 && cur.score / cur.total > (acc.score / acc.total || 0) ? cur : acc,
+          (cur.percent ?? 0) > (acc.percent ?? 0) ? cur : acc,
         );
         group.bestScore = best.score;
         group.totalPoints = best.total;
@@ -151,22 +159,20 @@ export default function StudentExamScoreWidget() {
           (() => {
             const { room, attempt } = latestOverall;
             const subjectLabel = room.subjectName || room.title;
-            const pct =
-              attempt.score !== null && room.totalPoints
-                ? Math.round((attempt.score / room.totalPoints) * 100)
-                : null;
+            const display = resolveAttemptScoreDisplay(room, attempt);
+            const pct = display.percent;
 
             return (
               <div className="w-full rounded-xl border px-2.5 py-1.5 bg-indigo-50/50 border-indigo-100">
                 <div className="flex items-center gap-2 min-w-0">
                   <p className="text-[11px] font-black text-slate-800 truncate flex-1">{subjectLabel}</p>
-                  {attempt.score !== null ? (
+                  {display.score !== null ? (
                     <span
                       className="text-[11px] font-black shrink-0 tabular-nums"
                       style={{ color: pct !== null ? scoreColor(pct) : '#6366f1' }}
                     >
-                      {attempt.score}
-                      <span className="text-[10px] font-bold text-slate-400">/{room.totalPoints}</span>
+                      {display.score}
+                      <span className="text-[10px] font-bold text-slate-400">/{display.maxPoints}</span>
                     </span>
                   ) : (
                     <span className="text-[10px] font-bold text-amber-600 shrink-0">รอตรวจ</span>

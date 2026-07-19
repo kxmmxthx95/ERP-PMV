@@ -1,8 +1,14 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, query, where, writeBatch,
+  doc, query, where, writeBatch, getDocs,
 } from 'firebase/firestore';
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
@@ -34,6 +40,12 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
 
   const teacherMgr = useTeacherManager();
   const studentMgr = useStudentManager(activeYearStr);
+  // Always-current students ref — lets the attendance listener below read the latest
+  // roster without listing studentMgr.students as a dependency, so the listener isn't
+  // torn down and re-subscribed (re-reading the whole collection) every time that
+  // array gets a new reference.
+  const studentsRef = useRef(studentMgr.students);
+  studentsRef.current = studentMgr.students;
   const classMgr = useClassroomManager();
   const curriculum = useCurriculum();
   const { coursesByVersion } = useCurriculumVersioned();
@@ -45,6 +57,9 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
   const [submissions, setSubmissions] = useState<AssignmentSubmission[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
   const [examScores, setExamScores] = useState<ExamScore[]>([]);
+  // Version counters: bump to trigger a re-fetch after local mutations
+  const [submissionsVersion, setSubmissionsVersion] = useState(0);
+  const [examScoresVersion, setExamScoresVersion] = useState(0);
 
   // ── Current Teacher ──────────────────────────────────────────────────────────
   const currentTeacher = useMemo(
@@ -123,6 +138,10 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
     [classMgr.allClasses, activeYearStr],
   );
 
+  // Stable ID lists used to scope submissions/scores queries
+  const assignmentIds = useMemo(() => assignments.map(a => a.id), [assignments]);
+  const examIds = useMemo(() => exams.map(e => e.id), [exams]);
+
   const getStudentsForClass = (classId: string) => {
     // 1. Identify students via official enrollments
     let matchedEnrollments = studentMgr.enrollments.filter(
@@ -184,7 +203,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       {
         next: snap => {
           const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassSession));
-          const studentMap = new Map(studentMgr.students.map(s => [s.id, s]));
+          const studentMap = new Map(studentsRef.current.map(s => [s.id, s]));
 
           const flattened = sessions.flatMap(session => {
             const subjectName = session.subjectName ?? '';
@@ -242,16 +261,6 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       }
     );
 
-    const unsubSubmissions = onSnapshot(
-      query(collection(db, 'assignment_submissions'),
-        where('academicYearId', '==', activeYearStr),
-      ),
-      {
-        next: snap => setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() } as AssignmentSubmission))),
-        error: () => { /* Silent fail */ }
-      }
-    );
-
     const examsColl = collection(db, 'exams');
     const examsQuery = canViewAllSubjects
       ? query(examsColl,
@@ -272,24 +281,52 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       }
     );
 
-    const unsubExamScores = onSnapshot(
-      query(collection(db, 'exam_scores'),
-        where('academicYearId', '==', activeYearStr),
-      ),
-      {
-        next: snap => setExamScores(snap.docs.map(d => ({ id: d.id, ...d.data() } as ExamScore))),
-        error: () => { /* Silent fail */ }
-      }
-    );
-
     return () => {
       unsubAttendance();
       unsubAssignments();
-      unsubSubmissions();
       unsubExams();
-      unsubExamScores();
     };
-  }, [currentTeacherId, activeYearStr, semester, studentMgr.students, canViewAllSubjects]);
+  }, [currentTeacherId, activeYearStr, semester, canViewAllSubjects]);
+
+  // ── Submissions: one-shot fetch scoped to known assignment IDs ───────────────
+  // assignment_submissions has no academicYearId field — filter by assignmentId instead
+  useEffect(() => {
+    if (assignmentIds.length === 0) { setSubmissions([]); return; }
+    let cancelled = false;
+    async function fetchSubmissions() {
+      const all: AssignmentSubmission[] = [];
+      for (const chunk of chunkArray(assignmentIds, 30)) {
+        if (cancelled) return;
+        const snap = await getDocs(
+          query(collection(db, 'assignment_submissions'), where('assignmentId', 'in', chunk)),
+        );
+        snap.docs.forEach(d => all.push({ id: d.id, ...d.data() } as AssignmentSubmission));
+      }
+      if (!cancelled) setSubmissions(all);
+    }
+    fetchSubmissions();
+    return () => { cancelled = true; };
+  }, [assignmentIds, submissionsVersion]);
+
+  // ── Exam scores: one-shot fetch scoped to known exam IDs ─────────────────────
+  // exam_scores has no academicYearId field — filter by examId instead
+  useEffect(() => {
+    if (examIds.length === 0) { setExamScores([]); return; }
+    let cancelled = false;
+    async function fetchExamScores() {
+      const all: ExamScore[] = [];
+      for (const chunk of chunkArray(examIds, 30)) {
+        if (cancelled) return;
+        const snap = await getDocs(
+          query(collection(db, 'exam_scores'), where('examId', 'in', chunk)),
+        );
+        snap.docs.forEach(d => all.push({ id: d.id, ...d.data() } as ExamScore));
+      }
+      if (!cancelled) setExamScores(all);
+    }
+    fetchExamScores();
+    return () => { cancelled = true; };
+  }, [examIds, examScoresVersion]);
 
   // ── ATTENDANCE CRUD ──────────────────────────────────────────────────────────
 
@@ -401,6 +438,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       gradedAt: new Date().toISOString(),
       note: sub.note ?? '',
     });
+    setSubmissionsVersion(v => v + 1);
   };
 
   const initSubmissions = async (assignmentId: string, classId: string) => {
@@ -422,6 +460,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       }
     });
     await batch.commit();
+    setSubmissionsVersion(v => v + 1);
   };
 
   const getSubmissionsForAssignment = (assignmentId: string) =>
@@ -465,6 +504,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       }
     });
     await batch.commit();
+    setExamScoresVersion(v => v + 1);
   };
 
   const saveExamScore = async (score: ExamScore) => {
@@ -474,6 +514,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       note: score.note ?? '',
       gradedAt: new Date().toISOString(),
     });
+    setExamScoresVersion(v => v + 1);
   };
 
   const getScoresForExam = (examId: string) =>

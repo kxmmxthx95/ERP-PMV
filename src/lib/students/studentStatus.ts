@@ -26,7 +26,45 @@ export function isInactiveStudent(student: StudentStatusLike): boolean {
   );
 }
 
+export type StudentStudyStatus = 'studying' | 'transferred' | 'graduated';
+
+/** นักเรียนที่จบการศึกษาแล้ว */
+export function isGraduatedStudent(student: StudentStatusLike): boolean {
+  const status = String(student.status ?? '').toLowerCase();
+  const currentStatus = String(student.currentStatus ?? '').toLowerCase();
+
+  return status === 'graduated' || currentStatus === 'graduated';
+}
+
+/** นักเรียนที่ย้ายออกจากโรงเรียน */
+export function isTransferredStudent(student: StudentStatusLike): boolean {
+  const status = String(student.status ?? '').toLowerCase();
+  const currentStatus = String(student.currentStatus ?? '').toLowerCase();
+
+  return status === 'transferred' || currentStatus === 'left';
+}
+
 /** นักเรียนที่ยัง "กำลังศึกษา" อยู่ (ยังไม่จบ/ยังไม่ย้ายออก) */
 export function isStudyingStudent(student: StudentStatusLike): boolean {
   return !isInactiveStudent(student);
+}
+
+/** นักเรียนที่ควรแสดงในรายชื่อค่าเทอม (กำลังศึกษา หรือย้ายออกแล้ว) */
+export function isTuitionRosterStudent(
+  student: StudentStatusLike,
+  enrollmentStatus?: string | null,
+): boolean {
+  if (isStudyingStudent(student)) return true;
+  if (isTransferredStudent(student)) return true;
+  return (enrollmentStatus ?? 'studying') === 'transferred';
+}
+
+/** สถานะการเรียนสำหรับแสดงใน UI */
+export function resolveStudentStudyStatus(
+  student: StudentStatusLike,
+  enrollmentStatus?: string | null,
+): StudentStudyStatus {
+  if (isGraduatedStudent(student) || enrollmentStatus === 'graduated') return 'graduated';
+  if (isTransferredStudent(student) || enrollmentStatus === 'transferred') return 'transferred';
+  return 'studying';
 }

@@ -432,9 +432,6 @@ function GradeLevelRoomCard({
         {grade.gradeLevel === 'ไม่ระบุระดับชั้น' ? '?' : grade.gradeLevel}
       </div>
       <div className="mt-1.5 min-w-0 w-full">
-        <p className="truncate text-[9px] font-black text-slate-800 sm:text-[11px]">
-          {grade.gradeLevel}
-        </p>
         <p className="mt-0.5 text-base font-black sm:text-lg md:text-xl" style={{ color: grade.color }}>
           {grade.count}
         </p>
@@ -574,16 +571,20 @@ function TeacherRoomCard({
       type="button"
       onClick={onClick}
       className={cn(
-        'group flex h-full min-h-[100px] w-full overflow-hidden rounded-[1.75rem] bg-white text-left active:scale-[0.98] sm:min-h-[118px] sm:rounded-[2rem] md:min-h-[148px]',
+        'group flex h-full min-h-[100px] w-full overflow-hidden rounded-2xl bg-white text-left active:scale-[0.98] sm:min-h-[118px] md:min-h-[148px]',
         DASHBOARD_STAT_CARD_SHADOW,
         DASHBOARD_STAT_CARD_SHADOW_HOVER,
         DASHBOARD_STAT_CARD_SHADOW_TRANSITION,
       )}
     >
       <div className="flex min-w-0 flex-1 flex-col justify-between px-3 py-2.5 sm:px-3.5 sm:py-3 md:px-5 md:py-4">
-        <p className="text-[10px] font-semibold text-slate-400 sm:text-[11px] md:text-sm">ห้องสอบ</p>
-        <p className="font-sukhumvit text-3xl font-black leading-none text-[#4169E1] sm:text-4xl md:text-5xl lg:text-6xl">
-          {teacher.count}
+        <p className="text-[10px] font-semibold text-slate-400 sm:text-[11px] md:text-sm">
+          ห้องสอบ/เปิดสอบ
+        </p>
+        <p className="font-sukhumvit text-3xl font-black leading-none sm:text-4xl md:text-5xl lg:text-6xl">
+          <span className="text-[#4169E1]">{teacher.count}</span>
+          <span className="text-slate-300">/</span>
+          <span className="text-emerald-600">{teacher.openedCount}</span>
         </p>
         <p className="truncate font-sukhumvit text-xs font-bold text-slate-900 sm:text-sm md:text-base">
           {teacher.teacherName}

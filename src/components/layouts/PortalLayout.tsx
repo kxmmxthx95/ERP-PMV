@@ -640,7 +640,7 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
             {showAiAgentButton && renderAiAgentHeaderButton()}
           </div>
 
-          <div className="hidden lg:flex items-center gap-1 shrink-0">
+          <div className="hidden lg:flex items-center gap-1.5 shrink-0">
             <div id="header-portal-home-actions" className="flex items-center gap-1.5" />
             {renderDesktopHomeMenuButtons()}
           </div>

@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { HiArrowLeft, HiOutlineEye, HiUsers, HiXMark } from 'react-icons/hi2';
 import { formatThaiDateLabel } from '@/lib/dateUtils';
+import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useStudentSummary } from '@/hooks/useStudentSummary';
 import { useTodayRollCallSessions } from '@/hooks/useMorningRollCall';
@@ -15,6 +16,14 @@ import {
   WIDGET_STAT_VALUE,
 } from '../widgetStyles';
 import { WidgetSkeleton } from '../components/WidgetSkeleton';
+import {
+  getWidgetHolidayCardStyle,
+  WidgetHolidayBadge,
+  WidgetHolidayBody,
+  widgetHolidayDateClass,
+  widgetHolidayHeaderClass,
+  widgetHolidayIconButtonClass,
+} from '../components/WidgetHolidayContent';
 import {
   Drawer,
   DrawerContent,
@@ -177,6 +186,7 @@ export default function MorningRollCallSummaryWidget() {
   const presentPct = denominator > 0 ? Math.round((attendedTotal / denominator) * 100) : 0;
 
   const todayLabel = useMemo(() => formatThaiDateLabel(), []);
+  const { isHoliday, isWeekend, holidayTitle } = useIsSchoolDayToday();
 
   const isLoading = sessionsLoading || studentsLoading || classesLoading;
 
@@ -200,45 +210,50 @@ export default function MorningRollCallSummaryWidget() {
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        style={WIDGET_GLASS}
+        style={isHoliday ? getWidgetHolidayCardStyle(isWeekend) : WIDGET_GLASS}
         className={WIDGET_CARD}
       >
         <div className="flex items-center justify-between shrink-0">
           <div className="min-w-0">
-            <p className="font-bold text-sm text-slate-700 truncate">สรุปเช็คชื่อเข้าแถว</p>
-            <p className="text-[10px] text-slate-400 truncate">{todayLabel}</p>
+            <p className={widgetHolidayHeaderClass(isHoliday)}>สรุปเช็คชื่อเข้าแถว</p>
+            <p className={widgetHolidayDateClass(isHoliday)}>{todayLabel}</p>
           </div>
-          <div className="flex items-center shrink-0">
+          <div className="flex items-center shrink-0 gap-1">
+            {isHoliday ? <WidgetHolidayBadge /> : null}
             <motion.button
               type="button"
               whileTap={{ scale: 0.92 }}
               onClick={openDrawer}
-              className="p-1.5 rounded-lg hover:bg-slate-200/50 transition"
+              className={widgetHolidayIconButtonClass(isHoliday)}
               aria-label="ดูรายละเอียดห้องเรียน"
             >
-              <HiOutlineEye size={16} className="text-slate-600" />
+              <HiOutlineEye size={16} />
             </motion.button>
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 flex-1 min-h-0">
-          <div className={WIDGET_STAT_CELL}>
-            <span className={`${WIDGET_STAT_VALUE} text-indigo-600 text-sm`}>
-              {totalRooms > 0 ? `${checkedRooms}/${totalRooms}` : checkedRooms > 0 ? checkedRooms : '—'}
-            </span>
-            <span className={WIDGET_STAT_LABEL}>ห้อง</span>
+        {isHoliday ? (
+          <WidgetHolidayBody isWeekend={isWeekend} holidayTitle={holidayTitle} />
+        ) : (
+          <div className="grid grid-cols-3 gap-2 flex-1 min-h-0">
+            <div className={WIDGET_STAT_CELL}>
+              <span className={`${WIDGET_STAT_VALUE} text-indigo-600 text-sm`}>
+                {totalRooms > 0 ? `${checkedRooms}/${totalRooms}` : checkedRooms > 0 ? checkedRooms : '—'}
+              </span>
+              <span className={WIDGET_STAT_LABEL}>ห้อง</span>
+            </div>
+            <div className={WIDGET_STAT_CELL}>
+              <span className={`${WIDGET_STAT_VALUE} text-green-600`}>{presentPct}%</span>
+              <span className={WIDGET_STAT_LABEL}>มาเรียน</span>
+            </div>
+            <div className={WIDGET_STAT_CELL}>
+              <span className={`${WIDGET_STAT_VALUE} text-slate-700 text-sm`}>
+                {denominator > 0 ? `${attendedTotal}/${denominator}` : '—'}
+              </span>
+              <span className={WIDGET_STAT_LABEL}>คน/ทั้งหมด</span>
+            </div>
           </div>
-          <div className={WIDGET_STAT_CELL}>
-            <span className={`${WIDGET_STAT_VALUE} text-green-600`}>{presentPct}%</span>
-            <span className={WIDGET_STAT_LABEL}>มาเรียน</span>
-          </div>
-          <div className={WIDGET_STAT_CELL}>
-            <span className={`${WIDGET_STAT_VALUE} text-slate-700 text-sm`}>
-              {denominator > 0 ? `${attendedTotal}/${denominator}` : '—'}
-            </span>
-            <span className={WIDGET_STAT_LABEL}>คน/ทั้งหมด</span>
-          </div>
-        </div>
+        )}
       </motion.div>
 
       <Drawer open={drawerOpen} onOpenChange={handleDrawerChange} direction="right">

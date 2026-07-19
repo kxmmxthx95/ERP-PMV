@@ -18,6 +18,7 @@ import {
   buildAttemptScoreUpdate,
   getManualEssayQuestions,
   getQuestionMaxPoints,
+  resolveAttemptTotalScore,
 } from '@/lib/exam/manualEssayGrading';
 import { describeMissingQuestionsError } from '@/lib/exam/roundQuestions';
 import { shouldShowExamPartHeaders, type ExamPartGroupMeta } from '@/lib/exam/examPartGroups';
@@ -35,6 +36,11 @@ import {
   gradeSimulationAnswers,
   type GradedQuestionResult,
 } from '@/features/questionBank/utils/gradeSimulationAnswers';
+
+function formatScorePercent(earned: number, total: number): string | null {
+  if (total <= 0) return null;
+  return `${((earned / total) * 100).toFixed(1)}%`;
+}
 
 function groupResultsByPart(
   results: GradedQuestionResult[],
@@ -221,16 +227,6 @@ export function StudentExamScoreDetailDrawer({
   }, [open, initialAttempt?.id, room.id]);
 
   const attempt = liveAttempt || initialAttempt;
-  const roundTotal = useMemo(() => {
-    const roundKey = String(activeRound);
-    const points =
-      room.roundQuestions?.[roundKey]?.totalPoints
-      ?? room.roundQuestions?.['∞']?.totalPoints
-      ?? room.roundQuestions?.['1']?.totalPoints
-      ?? room.totalPoints
-      ?? 0;
-    return Number(points) > 0 ? Number(points) : 0;
-  }, [room, activeRound]);
 
   const groupedResults = useMemo(() => {
     if (!gradeSummary) return [];
@@ -260,7 +256,23 @@ export function StudentExamScoreDetailDrawer({
     );
   }, [gradeSummary, groupedResults, questions, questionPoints, attempt, draftScores]);
 
-  const attemptScore = normalizeExamScore(attempt?.score);
+  // คะแนนเต็มจริง = ผลรวม maxPoints ของแต่ละ Part สดๆ (ตรงกับคะแนนต่อข้อปัจจุบันเสมอ)
+  // fallback ไปใช้ค่าที่แคชไว้ตอนตั้งห้องสอบ เฉพาะตอนยังโหลดคำถามไม่เสร็จ
+  const roundTotal = useMemo(() => {
+    if (partScoreSummaries.length > 0) {
+      return partScoreSummaries.reduce((sum, part) => sum + part.maxPoints, 0);
+    }
+    const roundKey = String(activeRound);
+    const points =
+      room.roundQuestions?.[roundKey]?.totalPoints
+      ?? room.roundQuestions?.['∞']?.totalPoints
+      ?? room.roundQuestions?.['1']?.totalPoints
+      ?? room.totalPoints
+      ?? 0;
+    return Number(points) > 0 ? Number(points) : 0;
+  }, [partScoreSummaries, room, activeRound]);
+
+  const attemptScore = resolveAttemptTotalScore(attempt);
 
   useEffect(() => {
     if (!attempt) {
@@ -401,12 +413,19 @@ export function StudentExamScoreDetailDrawer({
                   คะแนน
                 </p>
                 {attemptScore !== null ? (
-                  <p className="text-[22px] font-black text-emerald-600 font-sukhumvit tabular-nums">
-                    {attemptScore}
+                  <>
+                    <p className="text-[22px] font-black text-emerald-600 font-sukhumvit tabular-nums leading-none">
+                      {attemptScore}
+                      {roundTotal > 0 && (
+                        <span className="text-[13px] text-slate-400 font-bold">/{roundTotal}</span>
+                      )}
+                    </p>
                     {roundTotal > 0 && (
-                      <span className="text-[13px] text-slate-400 font-bold">/{roundTotal}</span>
+                      <p className="text-[12px] font-bold text-emerald-500 font-sukhumvit tabular-nums mt-0.5">
+                        {formatScorePercent(attemptScore, roundTotal)}
+                      </p>
                     )}
-                  </p>
+                  </>
                 ) : attempt ? (
                   <p className="text-[12px] font-bold text-amber-600 font-sarabun">รอตรวจ</p>
                 ) : (
@@ -501,6 +520,11 @@ export function StudentExamScoreDetailDrawer({
                                 <span className="text-[14px] text-amber-600">รอตรวจ</span>
                               )}
                             </p>
+                            {part.earnedPoints !== null && (
+                              <p className="font-sukhumvit text-[11px] font-bold text-emerald-500 tabular-nums mt-0.5">
+                                {formatScorePercent(part.earnedPoints, part.maxPoints)}
+                              </p>
+                            )}
                           </div>
                           <div className="flex gap-1.5 text-[10px] font-bold font-sarabun">
                             <span className="rounded-lg bg-emerald-100 px-2 py-1 text-emerald-700">{part.correct} ถูก</span>
@@ -563,6 +587,9 @@ export function StudentExamScoreDetailDrawer({
                                   <>
                                     <span className="text-emerald-600">{part.earnedPoints}</span>
                                     <span className="text-slate-400">/{part.maxPoints}</span>
+                                    <span className="ml-1 text-[10px] text-emerald-500">
+                                      ({formatScorePercent(part.earnedPoints, part.maxPoints)})
+                                    </span>
                                   </>
                                 ) : (
                                   <span className="text-[11px] text-amber-600">รอตรวจ</span>

@@ -30,6 +30,7 @@ import UserRoleFilterButton from './components/UserRoleFilterButton';
 import UserMobileHeaderControls from './components/UserMobileHeaderControls';
 import UserImportModal from './components/UserImportModal';
 import UsersDashboard from './components/UsersDashboard';
+import UsersDepartmentDrawer from './components/UsersDepartmentDrawer';
 import {
   collection,
   getDocs,
@@ -98,6 +99,8 @@ export default function UsersPage() {
   const [isMdOrBelow, setIsMdOrBelow] = useState(() => window.innerWidth < 1024);
   const [headerCenterMobileEl, setHeaderCenterMobileEl] = useState<HTMLElement | null>(null);
   const [headerHomeActionsEl, setHeaderHomeActionsEl] = useState<HTMLElement | null>(null);
+  const [departmentDrawerOpen, setDepartmentDrawerOpen] = useState(false);
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(null);
 
   useEffect(() => {
     setHeaderCenterMobileEl(document.getElementById('header-portal-center-mobile'));
@@ -482,10 +485,8 @@ export default function UsersPage() {
   };
 
   const handleDashboardDepartmentSelect = (department: string) => {
-    setFilterDepartment(department);
-    setFilterRole('all');
-    setSearchTerm('');
-    setPageTab('list');
+    setSelectedDepartmentId(department);
+    setDepartmentDrawerOpen(true);
   };
 
   const desktopTabPortal = !isMdOrBelow && headerCenterEl && createPortal(
@@ -965,6 +966,17 @@ export default function UsersPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <UsersDepartmentDrawer
+        open={departmentDrawerOpen}
+        onClose={() => {
+          setDepartmentDrawerOpen(false);
+          setSelectedDepartmentId(null);
+        }}
+        departmentId={selectedDepartmentId}
+        users={users}
+        gradeLevels={gradeLevels}
+      />
     </div>
   );
 }

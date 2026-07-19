@@ -3,16 +3,29 @@ import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Plus, FileSpreadsheet } from 'lucide-react';
-import { HiArrowLeft, HiChevronLeft, HiMagnifyingGlass, HiOutlineBookOpen, HiXMark } from 'react-icons/hi2';
+import { HiArrowLeft, HiBars3, HiChevronLeft, HiMagnifyingGlass, HiOutlineBookOpen, HiXMark } from 'react-icons/hi2';
+import {
+  ExamFilterShowResultsButton,
+  ExamMobileFilterDrawer,
+} from '@/features/exam/components/ExamMobileFilterMenuButton';
+import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 import { useQuestionSetBank, type QuestionSetFilters } from '@/hooks/useQuestionSetBank';
 import type { NewQuestionSet, QuestionSet } from '@/types/questionBank';
-import { SUBJECT_GROUP_CONFIG, SUBJECT_SUBGROUP_CONFIG, DEPARTMENT_CONFIG, type Department, type SubjectGroupId } from '@/types/curriculum';
+import { DEPARTMENT_CONFIG, type Department, type SubjectGroupId } from '@/types/curriculum';
 import QuestionSetBuilder from './components/QuestionSetBuilder';
 import QuestionSetImportModal from './components/QuestionSetImportModal';
 import QuestionSetExamSimulator from './components/QuestionSetExamSimulator';
 import QuestionSetList from './components/QuestionSetList';
 import QuestionSetQuestionManager from './components/QuestionSetQuestionManager';
+import QuestionBankBrowseNav, {
+  type QuestionBankBrowseStep,
+  UNSPECIFIED_SUB_SUBJECT,
+  browseStepLabel,
+  nextBrowseStepAfterGroup,
+  previousBrowseStep,
+  QuestionBankBrowseHeader,
+} from './components/QuestionBankBrowseNav';
 
 const DEPT_OPTIONS = [
   { id: 'all', label: 'ทั้งหมด' },
@@ -49,16 +62,17 @@ export default function QuestionBankManager() {
     description?: string;
     gradeLevel?: string;
     department?: string;
+    subjectGroup?: SubjectGroupId;
+    subSubjectGroup?: string;
   } | null>(null);
   const [setImportModalOpen, setSetImportModalOpen] = useState(false);
   const [simulatingSet, setSimulatingSet] = useState<QuestionSet | null>(null);
   const [editingSet, setEditingSet] = useState<QuestionSet | null>(null);
   const [selectedSet, setSelectedSet] = useState<QuestionSet | null>(null);
+  const [browseStep, setBrowseStep] = useState<QuestionBankBrowseStep>({ level: 'groups' });
 
   const [filters, setFilters] = useState<QuestionSetFilters>({
     search: '',
-    subjectGroup: 'all',
-    subSubjectGroup: 'all',
     department: 'all',
     gradeLevel: 'all',
   });
@@ -68,6 +82,8 @@ export default function QuestionBankManager() {
   const [headerMobileActionsPortalEl, setHeaderMobileActionsPortalEl] = useState<HTMLElement | null>(null);
   const [headerMobileBackPortalEl, setHeaderMobileBackPortalEl] = useState<HTMLElement | null>(null);
   const [isSearchMode, setIsSearchMode] = useState(false);
+  const [mobileFilterDrawerOpen, setMobileFilterDrawerOpen] = useState(false);
+  const [mobileActionsMenuOpen, setMobileActionsMenuOpen] = useState(false);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false,
   );
@@ -80,6 +96,15 @@ export default function QuestionBankManager() {
   }, []);
 
   useEffect(() => {
+    if (!mobileActionsMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileActionsMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mobileActionsMenuOpen]);
+
+  useEffect(() => {
     const handleResize = () => setIsMdOrBelow(window.innerWidth < 1024);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -88,8 +113,8 @@ export default function QuestionBankManager() {
   useEffect(() => {
     const defaultBack = document.getElementById('portal-default-mobile-back');
     if (!defaultBack) return;
-    defaultBack.style.display = selectedSet ? 'none' : '';
-  }, [selectedSet]);
+    defaultBack.style.display = (selectedSet || browseStep.level !== 'groups') ? 'none' : '';
+  }, [selectedSet, browseStep.level]);
 
   useEffect(() => {
     const state = location.state as {
@@ -111,26 +136,92 @@ export default function QuestionBankManager() {
   const clearFilters = () => {
     setFilters({
       search: '',
-      subjectGroup: 'all',
-      subSubjectGroup: 'all',
       department: 'all',
       gradeLevel: 'all',
     });
+    setBrowseStep({ level: 'groups' });
+    setIsSearchMode(false);
   };
 
-  const hasActiveFilters = 
-    filters.search !== '' || 
-    filters.subjectGroup !== 'all' || 
-    filters.subSubjectGroup !== 'all' || 
-    filters.department !== 'all' || 
+  const hasActiveFilters =
+    filters.search !== '' ||
+    filters.department !== 'all' ||
     filters.gradeLevel !== 'all';
+
+  const isSearchActive = Boolean(filters.search?.trim());
+
+  const baseSets = useMemo(() => {
+    const filtered = filterQuestionSets({
+      search: '',
+      subjectGroup: 'all',
+      subSubjectGroup: 'all',
+      department: filters.department,
+      gradeLevel: filters.gradeLevel,
+    }).filter((set) => set.setKind !== 'exercise');
+    return isStudentView ? filtered.filter((set) => set.isPublished) : filtered;
+  }, [filterQuestionSets, filters.department, filters.gradeLevel, isStudentView]);
 
   const visibleSets = useMemo(() => {
     const filtered = filterQuestionSets(filters).filter((set) => set.setKind !== 'exercise');
     return isStudentView ? filtered.filter((set) => set.isPublished) : filtered;
   }, [filterQuestionSets, filters, isStudentView]);
 
-  const openCreateSet = () => { setEditingSet(null); setCreatePrefill(null); setSetModalOpen(true); };
+  const browseSets = useMemo(() => {
+    if (browseStep.level !== 'sets') return [];
+    return baseSets.filter((set) => {
+      if (set.subjectGroup !== browseStep.subjectGroup) return false;
+      if (!browseStep.subSubjectGroup) return true;
+      if (browseStep.subSubjectGroup === UNSPECIFIED_SUB_SUBJECT) return !set.subSubjectGroup?.trim();
+      return set.subSubjectGroup === browseStep.subSubjectGroup;
+    });
+  }, [baseSets, browseStep]);
+
+  const handleBrowseBack = () => {
+    setBrowseStep((prev) => previousBrowseStep(prev));
+  };
+
+  const handleSelectGroup = (subjectGroup: SubjectGroupId) => {
+    setBrowseStep(nextBrowseStepAfterGroup(subjectGroup));
+  };
+
+  const handleSelectSubGroup = (subSubjectGroup: string) => {
+    if (browseStep.level !== 'subgroups') return;
+    setBrowseStep({
+      level: 'sets',
+      subjectGroup: browseStep.subjectGroup,
+      subSubjectGroup,
+    });
+  };
+
+  const getCreatePrefillFromBrowse = (): typeof createPrefill => {
+    if (browseStep.level === 'sets') {
+      return {
+        subjectGroup: browseStep.subjectGroup,
+        subSubjectGroup: browseStep.subSubjectGroup === UNSPECIFIED_SUB_SUBJECT
+          ? ''
+          : browseStep.subSubjectGroup,
+        department: filters.department !== 'all' ? filters.department : undefined,
+        gradeLevel: filters.gradeLevel !== 'all' ? filters.gradeLevel : undefined,
+      };
+    }
+    if (browseStep.level === 'subgroups') {
+      return {
+        subjectGroup: browseStep.subjectGroup,
+        department: filters.department !== 'all' ? filters.department : undefined,
+        gradeLevel: filters.gradeLevel !== 'all' ? filters.gradeLevel : undefined,
+      };
+    }
+    return {
+      department: filters.department !== 'all' ? filters.department : undefined,
+      gradeLevel: filters.gradeLevel !== 'all' ? filters.gradeLevel : undefined,
+    };
+  };
+
+  const openCreateSet = () => {
+    setEditingSet(null);
+    setCreatePrefill(getCreatePrefillFromBrowse());
+    setSetModalOpen(true);
+  };
   const openImportSets = () => setSetImportModalOpen(true);
   const openEditSet = (set: QuestionSet) => { setEditingSet(set); setSetModalOpen(true); };
 
@@ -196,34 +287,6 @@ export default function QuestionBankManager() {
         </motion.div>
       ) : (
         <div className="flex items-center gap-1.5">
-          <select
-            value={filters.subjectGroup}
-            onChange={(e) => setFilters(prev => ({ ...prev, subjectGroup: e.target.value as SubjectGroupId | 'all', subSubjectGroup: 'all' }))}
-            className="h-8 px-3 rounded-full text-[11px] font-black text-slate-500 hover:text-slate-800 hover:bg-black/5 transition-all outline-none cursor-pointer font-sukhumvit"
-          >
-            <option value="all">ทุกกลุ่มสาระ</option>
-            {Object.entries(SUBJECT_GROUP_CONFIG)
-              .sort(([, a], [, b]) => a.order - b.order)
-              .map(([id, cfg]) => (
-                <option key={id} value={id}>{cfg.name}</option>
-              ))}
-          </select>
-
-          {filters.subjectGroup && filters.subjectGroup !== 'all' && SUBJECT_SUBGROUP_CONFIG[filters.subjectGroup] && (
-            <select
-              value={filters.subSubjectGroup}
-              onChange={(e) => setFilters(prev => ({ ...prev, subSubjectGroup: e.target.value }))}
-              className="h-8 px-3 rounded-full text-[11px] font-black text-slate-500 hover:text-slate-800 hover:bg-black/5 transition-all outline-none cursor-pointer font-sukhumvit"
-            >
-              <option value="all">ทุกวิชา/สาระย่อย</option>
-              {SUBJECT_SUBGROUP_CONFIG[filters.subjectGroup]?.map(sub => (
-                <option key={sub} value={sub}>{sub}</option>
-              ))}
-            </select>
-          )}
-
-          <div className="w-px h-5 bg-black/10 mx-1 shrink-0" />
-
           <AnimatePresence mode="wait">
             {filters.department === 'all' ? (
               <motion.div
@@ -343,161 +406,23 @@ export default function QuestionBankManager() {
     </motion.div>
   ) : null;
 
-  const mobileFilterCapsules = !selectedSet ? (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: -4 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={`pointer-events-auto flex w-full min-w-0 flex-col gap-2 rounded-2xl p-2 transition-all duration-300 ${
-        isSearchMode
-          ? 'border border-blue-100 bg-blue-50/90 shadow-md'
-          : 'border border-white bg-white/60 shadow-[0_8px_32px_rgba(0,0,0,0.04)] backdrop-blur-xl'
-      }`}
-    >
-      {isSearchMode ? (
-        <div className="flex h-9 w-full min-w-0 items-center gap-2 px-2">
-          <HiMagnifyingGlass size={15} className="shrink-0 text-slate-400" />
-          <input
-            value={filters.search || ''}
-            onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
-            placeholder="ค้นหาชุดข้อสอบ..."
-            autoFocus
-            className="min-w-0 flex-1 border-none bg-transparent text-[11px] font-bold text-slate-800 outline-none placeholder:text-slate-400 font-sukhumvit"
-          />
-          <button
-            type="button"
-            onClick={() => {
-              setFilters((prev) => ({ ...prev, search: '' }));
-              setIsSearchMode(false);
-            }}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 transition-all hover:bg-black/5 hover:text-slate-600"
-            aria-label="ปิดการค้นหา"
-          >
-            <HiXMark size={14} />
-          </button>
-        </div>
-      ) : (
-        <>
-          <div className="flex w-full min-w-0 gap-2">
-            <select
-              value={filters.subjectGroup}
-              onChange={(e) => setFilters(prev => ({ ...prev, subjectGroup: e.target.value as SubjectGroupId | 'all', subSubjectGroup: 'all' }))}
-              className="h-8 min-w-0 flex-1 rounded-xl bg-white/80 px-2 text-[10px] font-black text-slate-600 outline-none cursor-pointer font-sukhumvit"
-            >
-              <option value="all">ทุกกลุ่มสาระ</option>
-              {Object.entries(SUBJECT_GROUP_CONFIG)
-                .sort(([, a], [, b]) => a.order - b.order)
-                .map(([id, cfg]) => (
-                  <option key={id} value={id}>{cfg.name}</option>
-                ))}
-            </select>
-
-            {filters.subjectGroup && filters.subjectGroup !== 'all' && SUBJECT_SUBGROUP_CONFIG[filters.subjectGroup] && (
-              <select
-                value={filters.subSubjectGroup}
-                onChange={(e) => setFilters(prev => ({ ...prev, subSubjectGroup: e.target.value }))}
-                className="h-8 min-w-0 flex-1 rounded-xl bg-white/80 px-2 text-[10px] font-black text-slate-600 outline-none cursor-pointer font-sukhumvit"
-              >
-                <option value="all">ทุกสาระย่อย</option>
-                {SUBJECT_SUBGROUP_CONFIG[filters.subjectGroup]?.map(sub => (
-                  <option key={sub} value={sub}>{sub}</option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <div className="flex w-full min-w-0 items-center gap-1">
-            <AnimatePresence mode="wait">
-              {filters.department === 'all' ? (
-                <motion.div
-                  key="mobile-depts"
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 8 }}
-                  className="flex min-w-0 flex-1 items-center gap-1"
-                >
-                  {DEPT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setFilters(prev => ({ ...prev, department: opt.id as Department | 'all', gradeLevel: 'all' }))}
-                      className={`h-8 min-w-0 flex-1 rounded-full px-1 text-center text-[10px] font-black whitespace-nowrap transition-all font-sukhumvit ${
-                        filters.department === opt.id
-                          ? 'bg-slate-900 text-white shadow-md'
-                          : 'bg-white/80 text-slate-500 hover:bg-black/5 hover:text-slate-800'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="mobile-grades"
-                  initial={{ opacity: 0, x: 8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -8 }}
-                  className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setFilters(prev => ({ ...prev, department: 'all', gradeLevel: 'all' }))}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/80 text-slate-500 transition-all hover:bg-black/5 hover:text-slate-800"
-                    aria-label="กลับเลือกแผนก"
-                  >
-                    <HiChevronLeft size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFilters(prev => ({ ...prev, gradeLevel: 'all' }))}
-                    className={`h-8 shrink-0 rounded-full px-3 text-[10px] font-black whitespace-nowrap transition-all font-sukhumvit ${
-                      filters.gradeLevel === 'all'
-                        ? 'bg-slate-900 text-white shadow-md'
-                        : 'bg-white/80 text-slate-500 hover:bg-black/5 hover:text-slate-800'
-                    }`}
-                  >
-                    ทุกระดับ
-                  </button>
-                  {(DEPARTMENT_CONFIG[filters.department as Department]?.grades || []).map((grade) => (
-                    <button
-                      key={grade}
-                      type="button"
-                      onClick={() => setFilters(prev => ({ ...prev, gradeLevel: grade }))}
-                      className={`h-8 shrink-0 rounded-full px-3 text-[10px] font-black whitespace-nowrap transition-all font-sukhumvit ${
-                        filters.gradeLevel === grade
-                          ? 'bg-slate-900 text-white shadow-md'
-                          : 'bg-white/80 text-slate-500 hover:bg-black/5 hover:text-slate-800'
-                      }`}
-                    >
-                      {gradeShortLabel(grade)}
-                    </button>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {hasActiveFilters && (
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-rose-500 transition-all hover:bg-rose-50"
-                title="ล้างตัวกรองทั้งหมด"
-                aria-label="ล้างตัวกรองทั้งหมด"
-              >
-                <HiXMark size={14} />
-              </button>
-            )}
-          </div>
-        </>
-      )}
-    </motion.div>
-  ) : null;
-
   const mobilePageTitle = selectedSet ? (
     <div className="pointer-events-auto flex min-w-0 items-center justify-center gap-1.5 max-w-[calc(100vw-112px)]">
       <HiOutlineBookOpen className="h-4 w-4 shrink-0 text-slate-500" />
       <span className="truncate text-[13px] font-black text-slate-800 tracking-tight font-sukhumvit">
         {selectedSet.title}
+      </span>
+    </div>
+  ) : isSearchActive ? (
+    <div className="pointer-events-auto flex items-center justify-center gap-1.5">
+      <HiMagnifyingGlass className="h-4 w-4 shrink-0 text-slate-500" />
+      <span className="text-[14px] font-black text-slate-800 tracking-tight font-sukhumvit">ค้นหาชุดข้อสอบ</span>
+    </div>
+  ) : browseStep.level !== 'groups' ? (
+    <div className="pointer-events-auto flex min-w-0 items-center justify-center gap-1.5 max-w-[calc(100vw-112px)]">
+      <HiOutlineBookOpen className="h-4 w-4 shrink-0 text-slate-500" />
+      <span className="truncate text-[13px] font-black text-slate-800 tracking-tight font-sukhumvit">
+        {browseStepLabel(browseStep)}
       </span>
     </div>
   ) : (
@@ -508,20 +433,35 @@ export default function QuestionBankManager() {
   );
 
   return (
-    <div className="relative w-full min-w-0 bg-transparent overflow-x-hidden h-full">
+    <div className="relative w-full min-w-0 overflow-x-hidden h-full">
+      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+        <div className="absolute -top-24 -left-16 h-72 w-72 rounded-full bg-indigo-200/40 blur-3xl" />
+        <div className="absolute top-24 -right-20 h-80 w-80 rounded-full bg-violet-200/35 blur-3xl" />
+      </div>
       {!isMdOrBelow && headerFiltersPortalEl && filterCapsules && createPortal(filterCapsules, headerFiltersPortalEl)}
 
       {isMdOrBelow && headerCenterMobilePortalEl && createPortal(mobilePageTitle, headerCenterMobilePortalEl)}
 
-      {isMdOrBelow && headerMobileBackPortalEl && selectedSet && createPortal(
+      {isMdOrBelow && headerMobileBackPortalEl && (selectedSet || browseStep.level !== 'groups' || isSearchActive) && createPortal(
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
           type="button"
-          onClick={() => setSelectedSet(null)}
+          onClick={() => {
+            if (selectedSet) {
+              setSelectedSet(null);
+              return;
+            }
+            if (isSearchActive) {
+              setFilters((prev) => ({ ...prev, search: '' }));
+              setIsSearchMode(false);
+              return;
+            }
+            handleBrowseBack();
+          }}
           className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
-          title="กลับรายการชุดข้อสอบ"
-          aria-label="กลับรายการชุดข้อสอบ"
+          title={selectedSet ? 'กลับรายการชุดข้อสอบ' : 'กลับ'}
+          aria-label={selectedSet ? 'กลับรายการชุดข้อสอบ' : 'กลับ'}
         >
           <HiArrowLeft className="h-5 w-5" />
         </motion.button>,
@@ -529,47 +469,190 @@ export default function QuestionBankManager() {
       )}
 
       {isMdOrBelow && headerMobileActionsPortalEl && !selectedSet && createPortal(
-        <div className="flex items-center gap-1.5">
+        <div className="pointer-events-auto flex items-center gap-1.5">
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             type="button"
-            onClick={() => setIsSearchMode(true)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
-            title="ค้นหาชุดข้อสอบ"
-            aria-label="ค้นหาชุดข้อสอบ"
+            onClick={() => setMobileFilterDrawerOpen(true)}
+            className={cn(
+              'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50',
+              hasActiveFilters && 'border-violet-200 bg-violet-50 text-violet-700',
+            )}
+            title="ค้นหาและตัวกรอง"
+            aria-label="ค้นหาและตัวกรอง"
           >
             <HiMagnifyingGlass className="h-5 w-5" />
+            {hasActiveFilters && (
+              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-violet-500" aria-hidden />
+            )}
           </motion.button>
           {!isStudentView && (
-            <>
+            <div className="relative">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 type="button"
-                onClick={openImportSets}
+                onClick={() => setMobileActionsMenuOpen((open) => !open)}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
-                title="นำเข้าชุดข้อสอบจาก CSV/Excel"
-                aria-label="นำเข้าชุดข้อสอบจาก CSV/Excel"
+                title="เมนูจัดการ"
+                aria-label="เมนูจัดการ"
+                aria-expanded={mobileActionsMenuOpen}
               >
-                <FileSpreadsheet className="h-5 w-5" />
+                <HiBars3 className="h-5 w-5" />
               </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                type="button"
-                onClick={openCreateSet}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-900 bg-slate-900 text-white shadow-sm transition-colors hover:bg-slate-800"
-                title="เพิ่มชุดข้อสอบ"
-                aria-label="เพิ่มชุดข้อสอบ"
-              >
-                <Plus className="h-5 w-5" strokeWidth={2.5} />
-              </motion.button>
-            </>
+              {mobileActionsMenuOpen && (
+                <>
+                  <button
+                    type="button"
+                    className="fixed inset-0 z-[90] bg-black/20"
+                    aria-label="ปิดเมนู"
+                    onClick={() => setMobileActionsMenuOpen(false)}
+                  />
+                  <div className="fixed right-4 top-14 z-[100] w-[min(240px,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileActionsMenuOpen(false);
+                        openImportSets();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-700 transition-colors hover:bg-slate-50"
+                    >
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600">
+                        <FileSpreadsheet size={14} />
+                      </span>
+                      <span>นำเข้าชุดข้อสอบ</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileActionsMenuOpen(false);
+                        openCreateSet();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-900 transition-colors hover:bg-slate-50"
+                    >
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-900 bg-slate-900 text-white">
+                        <Plus size={14} strokeWidth={2.5} />
+                      </span>
+                      <span>เพิ่มชุดข้อสอบ</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           )}
         </div>,
         headerMobileActionsPortalEl,
       )}
+
+      <ExamMobileFilterDrawer
+        open={mobileFilterDrawerOpen}
+        onOpenChange={setMobileFilterDrawerOpen}
+        title="ค้นหาและตัวกรอง"
+        description="ค้นหาชื่อชุดข้อสอบ หรือเลือกแผนก/ระดับชั้น"
+        footer={(
+          <ExamFilterShowResultsButton onClick={() => setMobileFilterDrawerOpen(false)} />
+        )}
+      >
+        <div>
+          <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">ค้นหา</p>
+          <div className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3">
+            <HiMagnifyingGlass className="h-4 w-4 shrink-0 text-slate-400" />
+            <input
+              value={filters.search || ''}
+              onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
+              placeholder="ค้นหาชุดข้อสอบ..."
+              className="min-w-0 flex-1 border-none bg-transparent text-[12px] font-bold text-slate-800 outline-none placeholder:text-slate-400 font-sukhumvit"
+            />
+            {filters.search && (
+              <button
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, search: '' }))}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
+                aria-label="ล้างคำค้นหา"
+              >
+                <HiXMark className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">แผนก</p>
+          <div className="grid grid-cols-2 gap-2">
+            {DEPT_OPTIONS.map((opt) => {
+              const isActive = filters.department === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setFilters((prev) => ({
+                    ...prev,
+                    department: opt.id as Department | 'all',
+                    gradeLevel: 'all',
+                  }))}
+                  className={cn(
+                    'rounded-xl border px-3 py-2.5 text-[12px] font-black transition-all font-sukhumvit',
+                    isActive
+                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+                  )}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {filters.department !== 'all' && (
+          <div>
+            <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">ระดับชั้น</p>
+            <div className="grid grid-cols-4 gap-2">
+              <button
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, gradeLevel: 'all' }))}
+                className={cn(
+                  'rounded-xl border px-2 py-2.5 text-[12px] font-black transition-all font-sukhumvit',
+                  filters.gradeLevel === 'all'
+                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+                )}
+              >
+                ทั้งหมด
+              </button>
+              {(DEPARTMENT_CONFIG[filters.department as Department]?.grades || []).map((grade) => {
+                const isActive = filters.gradeLevel === grade;
+                return (
+                  <button
+                    key={grade}
+                    type="button"
+                    onClick={() => setFilters((prev) => ({ ...prev, gradeLevel: grade }))}
+                    className={cn(
+                      'rounded-xl border px-2 py-2.5 text-[12px] font-black transition-all font-sukhumvit',
+                      isActive
+                        ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+                    )}
+                  >
+                    {gradeShortLabel(grade)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {hasActiveFilters && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="w-full rounded-xl border border-rose-200 bg-rose-50 py-2.5 text-[12px] font-black text-rose-600 transition-colors hover:bg-rose-100 font-sukhumvit"
+          >
+            ล้างตัวกรองทั้งหมด
+          </button>
+        )}
+      </ExamMobileFilterDrawer>
 
       <div className="w-full min-w-0 flex flex-col h-full gap-4 pb-24">
         <div className="flex-1 flex gap-4 min-h-0 min-w-0">
@@ -579,11 +662,6 @@ export default function QuestionBankManager() {
             transition={{ delay: 0.15 }}
             className={`flex-1 flex flex-col min-h-0 min-w-0 w-full ${selectedSet ? 'p-0' : 'p-2'}`}
           >
-            {isMdOrBelow && !selectedSet && mobileFilterCapsules && (
-              <div className="mb-4 w-full min-w-0 lg:hidden">
-                {mobileFilterCapsules}
-              </div>
-            )}
             {!isMdOrBelow && !headerFiltersPortalEl && filterCapsules && (
               <div className="mb-6">
                 {filterCapsules}
@@ -598,18 +676,9 @@ export default function QuestionBankManager() {
                 set={selectedSet}
                 onBack={() => setSelectedSet(null)}
                 onSetUpdated={setSelectedSet}
+                updateQuestionSet={updateQuestionSet}
               />
-            ) : !hasActiveFilters ? (
-              <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white/50 py-16 text-center text-slate-400">
-                <HiOutlineBookOpen className="mb-3 h-10 w-10 opacity-40" />
-                <p className="font-sukhumvit text-[14px] font-black text-slate-600">
-                  เลือกตัวกรองเพื่อแสดงชุดข้อสอบ
-                </p>
-                <p className="mt-1 max-w-xs font-sarabun text-[12px] font-medium text-slate-400">
-                  เลือกกลุ่มสาระ แผนก ระดับชั้น หรือค้นหาชื่อชุดข้อสอบ
-                </p>
-              </div>
-            ) : (
+            ) : isSearchActive ? (
               <QuestionSetList
                 sets={visibleSets}
                 isStudentView={isStudentView}
@@ -619,6 +688,33 @@ export default function QuestionBankManager() {
                 onSimulate={setSimulatingSet}
                 onTogglePublished={handleTogglePublished}
               />
+            ) : browseStep.level === 'groups' || browseStep.level === 'subgroups' ? (
+              <>
+                {browseStep.level === 'subgroups' && (
+                  <QuestionBankBrowseHeader step={browseStep} onBack={handleBrowseBack} />
+                )}
+                <QuestionBankBrowseNav
+                  step={browseStep}
+                  sets={baseSets}
+                  onSelectGroup={handleSelectGroup}
+                  onSelectSubGroup={handleSelectSubGroup}
+                />
+              </>
+            ) : (
+              <>
+                <QuestionBankBrowseHeader step={browseStep} onBack={handleBrowseBack} />
+                <QuestionSetList
+                  sets={browseSets}
+                  isStudentView={isStudentView}
+                  emptyTitle="ยังไม่มีชุดข้อสอบในรายการนี้"
+                  emptyHint="ลองเปลี่ยนตัวกรองแผนก/ระดับชั้น หรือเพิ่มชุดข้อสอบใหม่"
+                  onSelect={setSelectedSet}
+                  onEdit={openEditSet}
+                  onDelete={handleDeleteSet}
+                  onSimulate={setSimulatingSet}
+                  onTogglePublished={handleTogglePublished}
+                />
+              </>
             )}
           </motion.section>
         </div>

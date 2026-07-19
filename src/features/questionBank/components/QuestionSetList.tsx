@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/sheet';
 import { PdfPageViewer } from '@/features/exam/components/PdfExamViewer';
 import { cn } from '@/lib/utils';
+import { SubSubjectGroupBadge } from '@/components/school/SubSubjectGroupBadge';
 import { SUBJECT_GROUP_CONFIG, DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
 import type { QuestionSet } from '@/types/questionBank';
 
@@ -137,9 +138,9 @@ export default function QuestionSetList({
                   </div>
                 )}
                 <p className="truncate text-[13px] font-black text-slate-800 font-sukhumvit">{set.title}</p>
-                {set.subSubjectGroup && (
-                  <p className="mt-0.5 truncate text-[11px] font-bold text-slate-500 font-sukhumvit">
-                    {set.subSubjectGroup}
+                {set.createdByName && (
+                  <p className="mt-0.5 truncate text-[10px] font-semibold text-slate-400 font-sarabun">
+                    สร้างโดย {set.createdByName}
                   </p>
                 )}
                 {set.description && (
@@ -260,6 +261,14 @@ export default function QuestionSetList({
               >
                 {groupCfg.name}
               </span>
+              {set.subSubjectGroup && (
+                <SubSubjectGroupBadge
+                  label={set.subSubjectGroup}
+                  subjectGroupId={set.subjectGroup}
+                  className="rounded-full px-2 py-0.5 text-[10px]"
+                  maxWidth="140px"
+                />
+              )}
               <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-600 shrink-0">
                 {set.questionCount ?? 0} ข้อ
               </span>

@@ -23,7 +23,7 @@ interface DailyReportSchedule {
   recipients?: ScheduleRecipientSnapshot[];
   /** วันที่ส่งรอบล่าสุด (แสดงใน UI) */
   lastSentDate?: string;
-  /** วันที่ของ lastSentTimes */
+  /** วันที่ของ lastSentSlotsDate */
   lastSentSlotsDate?: string;
   /** รอบที่ส่งแล้วในวัน lastSentSlotsDate เช่น ["08:00","17:00"] */
   lastSentTimes?: string[];
@@ -31,6 +31,11 @@ interface DailyReportSchedule {
 
 interface StaffSummaryInternal extends StaffSummary {}
 interface StudentSummaryInternal extends StudentSummary {}
+
+// Module-level cache — persists across warm invocations on the same instance.
+// Skips the Firestore read on every tick when no send is due.
+let _settingsCache: { data: DailyReportSchedule; ts: number } | null = null;
+const SETTINGS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 function bangkokDateParts(now = new Date()): { date: string; time: string; hour: number } {
   const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -64,6 +69,28 @@ function normalizeTime(value: string | undefined): string | null {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+function parseTimeToMinutes(t: string): number {
+  const parts = t.split(":");
+  return Number(parts[0]) * 60 + Number(parts[1] ?? 0);
+}
+
+/**
+ * Returns the configured sendTime slot (e.g. "08:00") whose 5-minute window
+ * contains currentTime, or null if no slot is active right now.
+ *
+ * Window: [slotMin, slotMin + 5) in minutes-of-day.
+ * This makes the function tolerant of the ±0–4 minute jitter introduced by
+ * "every 5 minutes" scheduling, while still deduplicating by the slot value.
+ */
+function matchSendSlot(sendTimes: string[], currentTime: string): string | null {
+  const nowMin = parseTimeToMinutes(currentTime);
+  for (const slot of sendTimes) {
+    const slotMin = parseTimeToMinutes(slot);
+    if (nowMin >= slotMin && nowMin < slotMin + 5) return slot;
+  }
+  return null;
+}
+
 function resolveSendTimes(schedule: DailyReportSchedule): string[] {
   const fromArray = Array.isArray(schedule.sendTimes)
     ? schedule.sendTimes
@@ -77,7 +104,7 @@ function resolveSendTimes(schedule: DailyReportSchedule): string[] {
   return single ? [single] : [];
 }
 
-/** โหมดรอบเดียว (sendTime) — หลายรอบใช้ lastSentSlotsDate/lastSentTimes เท่านั้น */
+/** โมดรอบเดียว (sendTime) — หลายรอบใช้ lastSentSlotsDate/lastSentTimes เท่านั้น */
 function isLegacySingleSlotSchedule(schedule: DailyReportSchedule): boolean {
   return resolveSendTimes(schedule).length <= 1;
 }
@@ -91,8 +118,7 @@ function getSentTimesForDate(schedule: DailyReportSchedule, date: string): Set<s
     }
     return sent;
   }
-  // Legacy single-slot: lastSentDate หมายถึงส่งที่ sendTime แล้ว — ห้ามใช้กับหลายรอบ
-  // (sendTime ถูกเก็บเป็นรอบแรกหลัง sort ไม่ใช่รอบที่ส่งจริง)
+  // Legacy single-slot: lastSentDate หมายถึงส่งที่ sendTime แล้ว
   if (isLegacySingleSlotSchedule(schedule) && schedule.lastSentDate === date) {
     const legacy = normalizeTime(schedule.sendTime);
     if (legacy) sent.add(legacy);
@@ -338,7 +364,6 @@ async function resolveRecipients(
       continue;
     }
 
-    // ผู้รับที่บันทึกพร้อม LINE snapshot จาก UI — ส่งได้เลย (UI กรอง role แล้ว)
     if (snapshotLineId) {
       recipients.push({ uid, lineToken: lineId });
       continue;
@@ -363,43 +388,61 @@ async function resolveRecipients(
 
 export const reportDailyScheduled = onSchedule(
   {
-    schedule: "every 1 minutes",
+    // Runs every 5 minutes instead of every 1 minute.
+    // matchSendSlot() accepts any configured sendTime within the current 5-minute window,
+    // so reports arrive within 0–4 minutes of the configured time.
+    // Combined with the module-level settings cache, Firestore reads drop from
+    // ~1,440/day to ~12/day (one refresh per 10-minute cache window per instance).
+    schedule: "every 5 minutes",
     timeZone: "Asia/Bangkok",
     region: REGION,
     timeoutSeconds: 120,
     memory: "256MiB",
   },
   async () => {
+    const { date, time } = bangkokDateParts();
     const scheduleRef = db.collection("settings").doc("report_daily_schedule");
-    const scheduleSnap = await scheduleRef.get();
-    if (!scheduleSnap.exists) {
-      return;
+
+    // Fast path: serve from cache. Only read Firestore when cache is stale.
+    const nowMs = Date.now();
+    if (!_settingsCache || nowMs - _settingsCache.ts >= SETTINGS_CACHE_TTL_MS) {
+      const snap = await scheduleRef.get();
+      if (!snap.exists) return;
+      _settingsCache = { data: snap.data() as DailyReportSchedule, ts: nowMs };
     }
 
+    const cached = _settingsCache.data;
+    if (!cached.enabled) return;
+
+    const cachedSendTimes = resolveSendTimes(cached);
+    if (cachedSendTimes.length === 0) return;
+
+    // Quick check against cached settings — no Firestore read on misses
+    const maybeSlot = matchSendSlot(cachedSendTimes, time);
+    if (!maybeSlot) return;
+
+    // We're in a send window. Re-fetch fresh settings for deduplication accuracy.
+    const scheduleSnap = await scheduleRef.get();
+    if (!scheduleSnap.exists) return;
     const schedule = scheduleSnap.data() as DailyReportSchedule;
-    if (!schedule.enabled) {
-      return;
-    }
+    _settingsCache = { data: schedule, ts: Date.now() };
+
+    if (!schedule.enabled) return;
 
     const sendTimes = resolveSendTimes(schedule);
-    if (sendTimes.length === 0) {
-      console.warn("[reportDailyScheduled] invalid sendTimes / sendTime");
-      return;
-    }
+    const matchedSlot = matchSendSlot(sendTimes, time);
+    if (!matchedSlot) return;
 
-    const { date, time } = bangkokDateParts();
-    if (!sendTimes.includes(time)) {
-      return;
-    }
-
-    // แปลง lastSentDate แบบเก่า → lastSentTimes (บล็อกเฉพาะรอบที่ส่งแล้ว ไม่บล็อกทั้งวัน)
+    // Migrate legacy lastSentDate → lastSentTimes before deduplication check
     await migrateLegacySentSlots(scheduleRef, schedule, date);
 
     const scheduleSnapFresh = await scheduleRef.get();
     const scheduleFresh = (scheduleSnapFresh.data() ?? schedule) as DailyReportSchedule;
+    _settingsCache = { data: scheduleFresh, ts: Date.now() };
 
     const sentTimes = getSentTimesForDate(scheduleFresh, date);
-    if (sentTimes.has(time)) {
+    if (sentTimes.has(matchedSlot)) {
+      // Already sent this slot today (deduplication key = configured sendTime, not execution time)
       return;
     }
 
@@ -453,10 +496,12 @@ export const reportDailyScheduled = onSchedule(
       recipients,
       sentAt: admin.firestore.FieldValue.serverTimestamp(),
       triggeredBy: "scheduled",
-      scheduleTime: time,
+      scheduleTime: matchedSlot, // configured slot (e.g. "08:00"), not actual execution minute
     });
 
-    const nextSentTimes = [...sentTimes, time].sort();
+    // Record matchedSlot (not actual time) so deduplication works correctly
+    // even when the function runs at 08:03 for the "08:00" slot.
+    const nextSentTimes = [...sentTimes, matchedSlot].sort();
 
     await scheduleRef.set(
       {
@@ -472,7 +517,7 @@ export const reportDailyScheduled = onSchedule(
     );
 
     console.log(
-      `[reportDailyScheduled] queued daily report ${sendRef.id} for ${date} at ${time} (db=${getFirestoreDatabaseId()}) to ${recipients.length} recipients`,
+      `[reportDailyScheduled] queued daily report ${sendRef.id} for ${date} slot=${matchedSlot} (db=${getFirestoreDatabaseId()}) to ${recipients.length} recipients`,
     );
   },
 );

@@ -1,5 +1,8 @@
 import type { LeaveRequest } from '@/types/leave';
+import type { RollCallStatus } from '@/types/morningRollCall';
 import { studentIdentityKeys, type StudentIdentityFields } from '@/lib/students/studentIdentity';
+
+export type ClassAttendanceStatus = 'present' | 'late' | 'absent' | 'leave';
 
 function normalizeThaiName(value: string): string {
   return value.replace(/\s+/g, '').trim();
@@ -52,4 +55,78 @@ export function leaveRequestMatchesStudent(
   if (leaveName === fullName) return true;
   if (displayName && leaveName === normalizeThaiName(displayName)) return true;
   return false;
+}
+
+export function applyApprovedLeaveToMorningRollCallRows<
+  T extends {
+    studentId: string;
+    studentCode: string;
+    studentName: string;
+    status: RollCallStatus;
+    note?: string;
+  },
+>(
+  rows: T[],
+  classStudents: Array<StudentIdentityFields & { id: string; prefix?: string; firstName?: string; lastName?: string }>,
+  leaveRequests: LeaveRequest[],
+  date: string,
+): T[] {
+  if (leaveRequests.length === 0) return rows;
+
+  const studentById = new Map(classStudents.map((student) => [student.id, student]));
+
+  return rows.map((row) => {
+    if (row.status !== 'unmarked') return row;
+
+    const student = studentById.get(row.studentId);
+    const approvedLeave = findApprovedLeaveForStudentOnDate(
+      leaveRequests,
+      student ?? { id: row.studentId, studentCode: row.studentCode },
+      date,
+      row.studentName,
+    );
+    if (!approvedLeave) return row;
+
+    return {
+      ...row,
+      status: 'leave' as RollCallStatus,
+      note: buildLeaveNote(approvedLeave),
+    };
+  });
+}
+
+export function applyApprovedLeaveToClassAttendanceRows<
+  T extends {
+    id: string;
+    code: string;
+    name: string;
+    status: ClassAttendanceStatus | null;
+    note?: string;
+  },
+>(
+  rows: T[],
+  studentDetails: Map<string, StudentIdentityFields & { prefix?: string; firstName?: string; lastName?: string }>,
+  leaveRequests: LeaveRequest[],
+  date: string,
+): T[] {
+  if (leaveRequests.length === 0) return rows;
+
+  return rows.map((row) => {
+    if (row.status !== null) return row;
+
+    const student = studentDetails.get(row.id);
+    const approvedLeave = findApprovedLeaveForStudentOnDate(
+      leaveRequests,
+      student ?? { id: row.id, studentCode: row.code },
+      date,
+      row.name,
+    );
+    if (!approvedLeave) return row;
+
+    return {
+      ...row,
+      status: 'leave' as ClassAttendanceStatus,
+      note: buildLeaveNote(approvedLeave),
+    };
+  });
 }

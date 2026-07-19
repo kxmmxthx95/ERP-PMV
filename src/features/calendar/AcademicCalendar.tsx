@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { isSameDay } from 'date-fns';
-import { collection, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useAuth } from '@/hooks/useAuth';
@@ -58,23 +58,26 @@ export default function AcademicCalendar() {
       setDbEvents([]);
       return;
     }
+    let cancelled = false;
     const q = query(
       collection(db, 'calendar_events'),
       where('academicYearId', '==', activeYear.year)
     );
-    const unsubscribe = onSnapshot(q, {
-      next: (snap) => {
+    void getDocs(q)
+      .then((snap) => {
+        if (cancelled) return;
         const evts = snap.docs.map(d => ({ id: d.id, ...d.data() } as CalendarEvent));
         setDbEvents(evts);
-      },
-      error: (err) => {
-        if (role === 'admin' || role === 'sysadmin') {
-          console.error('calendar_events listener error:', err);
+      })
+      .catch((err) => {
+        if (!cancelled && (role === 'admin' || role === 'sysadmin')) {
+          console.error('calendar_events fetch error:', err);
         }
-      }
-    });
-    return () => unsubscribe();
-  }, [activeYear?.year]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeYear?.year, role]);
 
   const allEvents = useMemo(() => {
     const apiHolidays: CalendarEvent[] = holidays.map(h => ({

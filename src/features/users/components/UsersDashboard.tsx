@@ -205,7 +205,7 @@ export default function UsersDashboard({
           )}
         </DashboardCard>
 
-        <DashboardCard title="จำนวนตามแผนก" subtitle="นักเรียนและครูที่ระบุแผนก">
+        <DashboardCard title="จำนวนตามแผนก" subtitle="คลิกแท่งกราฟเพื่อดูรายชื่อตามระดับชั้น">
           {deptChartData.length > 0 ? (
             <div className="h-64 min-h-[240px]">
               <ResponsiveContainer width="100%" height="100%">

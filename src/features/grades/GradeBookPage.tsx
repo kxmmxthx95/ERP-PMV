@@ -5,7 +5,7 @@ import {
   GraduationCap, ChevronDown, Settings2, RefreshCw, BookOpen, AlertCircle, ClipboardList,
   ArrowLeft, Users, TrendingUp, Monitor, Link2, Link2Off,
 } from 'lucide-react';
-import { HiBookOpen, HiAdjustmentsHorizontal, HiClipboardDocumentList, HiBars3 } from 'react-icons/hi2';
+import { HiBookOpen, HiAdjustmentsHorizontal, HiClipboardDocumentList, HiCalendarDays, HiBars3 } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
 import { toast } from 'sonner';
 import { collection, doc, getDocs, query, updateDoc, where } from 'firebase/firestore';
@@ -38,7 +38,7 @@ import { resolveAttemptTotalScore } from '@/lib/exam/manualEssayGrading';
 import type { Exam, ExamScore, ExamType } from '@/types/teaching';
 import type { ExamRoom, ExamAttempt } from '@/types/exam';
 
-type Tab = 'table' | 'config' | 'exams';
+type Tab = 'table' | 'config' | 'exams' | 'attendance';
 
 const GRADE_BOOK_MENU = {
   label: 'สมุดคะแนน',
@@ -49,6 +49,7 @@ const GRADE_BOOK_TAB_CONFIG: Record<Tab, { label: string; icon: IconType }> = {
   table: { label: 'ตารางคะแนนรวม', icon: HiBookOpen },
   config: { label: 'ตั้งค่าเกรด', icon: HiAdjustmentsHorizontal },
   exams: { label: 'คะแนนการสอบ', icon: HiClipboardDocumentList },
+  attendance: { label: 'การเข้าเรียน', icon: HiCalendarDays },
 };
 
 /** Whether online exam room scores should flow into the grade table. */
@@ -124,7 +125,7 @@ function SelectField({
 
 export default function GradeBookPage() {
   const { user, role } = useAuth();
-  const { year: academicYear, activeSemester } = useActiveAcademicYear();
+  const { year: academicYear, activeSemester, activeYear } = useActiveAcademicYear();
   const canViewAllSubjects = role === 'admin' || role === 'sysadmin';
   const teachingMgr = useTeachingManager(user?.uid ?? '', canViewAllSubjects);
   const gradeBook = useGradeBook();
@@ -981,7 +982,7 @@ export default function GradeBookPage() {
       {selectedClassId && selectedSubjectId && (
         <motion.div
           initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-          className="hidden md:flex rounded-[2rem] p-4 flex-col gap-3 shrink-0"
+          className="hidden md:flex rounded-xl p-4 flex-col gap-3 shrink-0"
           style={GLASS}
         >
           <div className="flex items-center gap-2 flex-wrap">
@@ -997,6 +998,7 @@ export default function GradeBookPage() {
                 { key: 'table' as Tab, icon: <BookOpen size={11} />, label: 'ตารางคะแนนรวม' },
                 { key: 'config' as Tab, icon: <Settings2 size={11} />, label: 'ตั้งค่าเกรด' },
                 { key: 'exams' as Tab, icon: <ClipboardList size={11} />, label: 'คะแนนการสอบ' },
+                { key: 'attendance' as Tab, icon: <HiCalendarDays size={11} />, label: 'การเข้าเรียน' },
               ] as const).map(tab => (
                 <button
                   key={tab.key}
@@ -1531,6 +1533,33 @@ export default function GradeBookPage() {
               </motion.div>
             )}
           </AnimatePresence>
+        ) : activeTab === 'attendance' ? (
+          /* ── Attendance Tab ── */
+          gradeBook.isLoading ? (
+            <div className="flex items-center justify-center h-32">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-3 border-violet-200 border-t-violet-500 rounded-full animate-spin" />
+                <p className="text-[12px] text-slate-400 font-sarabun">กำลังโหลดข้อมูลคะแนนรวม...</p>
+              </div>
+            </div>
+          ) : gradeBook.error ? (
+            <div className="flex items-center justify-center h-32">
+              <div className="flex items-center gap-2 text-rose-500 bg-rose-50 px-4 py-3 rounded-2xl border border-rose-200">
+                <AlertCircle size={15} />
+                <p className="text-sm font-sarabun">{gradeBook.error}</p>
+              </div>
+            </div>
+          ) : (
+            gradeBook.config && (
+              <GradeTable
+                summaries={displaySummaries}
+                config={gradeBook.config}
+                view="attendance"
+                yearStartDate={activeYear?.startDate ?? ''}
+                yearEndDate={activeYear?.endDate ?? ''}
+              />
+            )
+          )
         ) : (
           /* ── Table & Config Tabs ── */
           <>
@@ -1559,6 +1588,8 @@ export default function GradeBookPage() {
                         summaries={displaySummaries}
                         config={gradeBook.config}
                         showAsPercentage
+                        yearStartDate={activeYear?.startDate ?? ''}
+                        yearEndDate={activeYear?.endDate ?? ''}
                       />
                     )}
                   </motion.div>

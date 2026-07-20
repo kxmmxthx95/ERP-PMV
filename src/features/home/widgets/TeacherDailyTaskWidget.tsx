@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   HiAcademicCap,
   HiCheckCircle,
@@ -199,7 +200,19 @@ function TeachingReflectionTaskList({
 
 export default function TeacherDailyTaskWidget() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        queryClient.invalidateQueries({ queryKey: ['microSyllabus'] });
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [queryClient]);
+
   const {
     today,
     loading,

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   HiAcademicCap,
   HiCheckCircle,
@@ -129,11 +130,13 @@ function TeachingReflectionTaskList({
   reflectionStats,
   teachingReflectionTasks,
   showSectionHeader = true,
+  onSelectTask,
 }: {
   hasReflectionTasksToday: boolean;
   reflectionStats: { done: number; total: number };
   teachingReflectionTasks: ReturnType<typeof useTeacherDailyTasks>['teachingReflectionTasks'];
   showSectionHeader?: boolean;
+  onSelectTask?: (task: ReturnType<typeof useTeacherDailyTasks>['teachingReflectionTasks'][number]) => void;
 }) {
   return (
     <section>
@@ -157,31 +160,37 @@ function TeachingReflectionTaskList({
         </p>
       ) : (
         <div className="space-y-2">
-          {teachingReflectionTasks.map((task) => (
-            <div
-              key={task.taskId}
-              className={`rounded-2xl border p-3 ${
-                task.status === 'done'
-                  ? 'bg-emerald-50/90 border-emerald-200'
-                  : task.status === 'not_applicable'
-                    ? 'bg-slate-50 border-slate-200'
-                    : 'bg-white border-slate-200'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-[13px] font-black text-slate-800 truncate">
-                    {task.subjectName}
-                  </p>
-                  <p className="text-[10px] font-bold text-slate-500 truncate mt-0.5">
-                    {task.className}
-                    {task.periods.length > 0 ? ` · คาบ ${task.periods.join(', ')}` : ''}
-                  </p>
+          {teachingReflectionTasks.map((task) => {
+            const clickable = task.status !== 'not_applicable' && !!onSelectTask;
+            const Wrapper = clickable ? 'button' : 'div';
+            return (
+              <Wrapper
+                key={task.taskId}
+                type={clickable ? 'button' : undefined}
+                onClick={clickable ? () => onSelectTask!(task) : undefined}
+                className={`w-full text-left rounded-2xl border p-3 transition-colors ${
+                  task.status === 'done'
+                    ? 'bg-emerald-50/90 border-emerald-200'
+                    : task.status === 'not_applicable'
+                      ? 'bg-slate-50 border-slate-200'
+                      : 'bg-white border-slate-200'
+                } ${clickable ? 'active:scale-[0.99] hover:border-sky-300' : ''}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-black text-slate-800 truncate">
+                      {task.subjectName}
+                    </p>
+                    <p className="text-[10px] font-bold text-slate-500 truncate mt-0.5">
+                      {task.className}
+                      {task.periods.length > 0 ? ` · คาบ ${task.periods.join(', ')}` : ''}
+                    </p>
+                  </div>
+                  <TaskBadge status={task.status} />
                 </div>
-                <TaskBadge status={task.status} />
-              </div>
-            </div>
-          ))}
+              </Wrapper>
+            );
+          })}
         </div>
       )}
     </section>
@@ -189,6 +198,7 @@ function TeachingReflectionTaskList({
 }
 
 export default function TeacherDailyTaskWidget() {
+  const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const {
     today,
@@ -204,6 +214,11 @@ export default function TeacherDailyTaskWidget() {
     hasClassesToday,
     hasReflectionTasksToday,
   } = useTeacherDailyTasks();
+
+  const goToReflectionTask = (task: { classId: string; subjectId: string }) => {
+    setDrawerOpen(false);
+    navigate(`/portal/micro-syllabus?classId=${encodeURIComponent(task.classId)}&subjectId=${encodeURIComponent(task.subjectId)}`);
+  };
 
   const {
     isHoliday: isBlocked,
@@ -411,6 +426,7 @@ export default function TeacherDailyTaskWidget() {
               hasReflectionTasksToday={hasReflectionTasksToday}
               reflectionStats={reflectionStats}
               teachingReflectionTasks={teachingReflectionTasks}
+              onSelectTask={goToReflectionTask}
             />
 
             {!isBlocked && allDone && (hasHomeroom || hasClassesToday || hasReflectionTasksToday) && (

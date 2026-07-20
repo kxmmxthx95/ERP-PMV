@@ -283,6 +283,7 @@ import {
 import type { Subject } from '@/types/curriculum';
 import { db } from '@/lib/firebase';
 import { logActivity } from '@/lib/activityLogger';
+import { approveScoreOverride } from '@/lib/exam/scoreOverride';
 import {
   buildStudentIdentityLookup,
   buildStudentDisplayNameByIdentityKey,
@@ -3773,6 +3774,27 @@ function RoomDetailView({
     }
   }, [bulkEditValues, bulkReason, user, pagedSummaryRows, pendingOverridesByAttemptId, room.id, room.title, currentUserName, cancelBulkEditMode]);
 
+  const [isApprovingAll, setIsApprovingAll] = useState(false);
+
+  const approveAllPending = useCallback(async () => {
+    if (!user) return;
+    const requests = Array.from(pendingOverridesByAttemptId.values());
+    if (requests.length === 0) return;
+    if (!window.confirm(`อนุมัติคำขอแก้ไขคะแนนทั้งหมด ${requests.length} รายการ?`)) return;
+    setIsApprovingAll(true);
+    try {
+      const results = await Promise.allSettled(
+        requests.map((req) => approveScoreOverride(req, user.uid, currentUserName)),
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      const succeeded = results.length - failed;
+      if (succeeded > 0) toast.success(`อนุมัติคะแนนแล้ว ${succeeded} รายการ`);
+      if (failed > 0) toast.error(`อนุมัติไม่สำเร็จ ${failed} รายการ`);
+    } finally {
+      setIsApprovingAll(false);
+    }
+  }, [pendingOverridesByAttemptId, user, currentUserName]);
+
   const openScoreDetail = useCallback((
     student: {
       id: string;
@@ -4719,6 +4741,20 @@ function RoomDetailView({
                                           title={bulkEditMode ? 'ออกจากโหมดแก้ไขคะแนน' : 'กรอกคะแนนเองทั้งตาราง'}
                                         >
                                           <HiMiniPencil size={12} />
+                                        </button>
+                                      )}
+                                      {(role === 'admin' || role === 'sysadmin') && pendingOverridesByAttemptId.size > 0 && (
+                                        <button
+                                          type="button"
+                                          disabled={isApprovingAll}
+                                          onClick={() => void approveAllPending()}
+                                          className="flex h-6 items-center gap-1 rounded-md bg-emerald-600 px-2 text-white normal-case tracking-normal transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                                          title="อนุมัติคำขอแก้ไขคะแนนทั้งหมดในห้องนี้"
+                                        >
+                                          <HiCheckCircle size={12} />
+                                          <span className="text-[10px] font-black">
+                                            {isApprovingAll ? 'กำลังอนุมัติ...' : `อนุมัติทั้งหมด (${pendingOverridesByAttemptId.size})`}
+                                          </span>
                                         </button>
                                       )}
                                     </div>

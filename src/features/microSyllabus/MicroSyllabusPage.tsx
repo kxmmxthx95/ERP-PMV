@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -333,6 +334,8 @@ export default function MicroSyllabusPage() {
   }, [yearClasses, myIdentityKeys, myTeacher, resolveSubject, syllabi, canManageOwnPlans, activeYear, activeSemester]);
 
   // ── Selection state ───────────────────────────────────────────────────────
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepLinkHandledRef = useRef(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pendingSelectId, setPendingSelectId] = useState<string | null>(null);
   const [creatingKey, setCreatingKey] = useState<string | null>(null);
@@ -392,6 +395,20 @@ export default function MicroSyllabusPage() {
     setPendingSelectId(newId);
     setCreatingKey(null);
   };
+
+  // Deep link from "งานประจำวันครู" widget: /portal/micro-syllabus?classId=&subjectId=
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return;
+    const classId = searchParams.get('classId');
+    const subjectId = searchParams.get('subjectId');
+    if (!classId || !subjectId) return;
+    if (assignedSubjects.length === 0) return;
+    const match = assignedSubjects.find((a) => a.classId === classId && a.subjectId === subjectId);
+    if (!match) return;
+    deepLinkHandledRef.current = true;
+    void handleSelectAssignment(match);
+    setSearchParams({}, { replace: true });
+  }, [assignedSubjects, searchParams, setSearchParams]);
 
   const handleSaveTopics = async (topics: WeeklyTopic[]) => {
     if (!selectedSyllabus) return;

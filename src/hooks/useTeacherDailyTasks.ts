@@ -40,6 +40,7 @@ export interface TeacherClassAttendanceTask {
 export interface TeacherTeachingReflectionTask {
   taskId: string;
   classId: string;
+  subjectId: string;
   className: string;
   subjectName: string;
   periods: number[];
@@ -201,6 +202,7 @@ export function useTeacherDailyTasks() {
       groups.set(taskId, {
         taskId,
         classId: entry.classId,
+        subjectId: entry.subjectId,
         className,
         subjectName,
         periods: [entry.period],

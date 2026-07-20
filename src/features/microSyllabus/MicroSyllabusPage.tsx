@@ -2,9 +2,11 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'sonner';
 import {
   HiOutlineCalendarDays,
   HiOutlineCog6Tooth,
+  HiCheck,
 } from 'react-icons/hi2';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
@@ -15,6 +17,7 @@ import { resolveTeacherFromAuth, buildTeacherIdentityKeys, matchesTeacherIdentit
 import { resolveSubjectDetail } from '@/lib/teachers/resolveSubjectDetail';
 import { useMicroSyllabus, useMicroSyllabusAll } from '@/hooks/useMicroSyllabus';
 import { cn } from '@/lib/utils';
+import { getLocalDateString } from '@/lib/dateUtils';
 import { Skeleton } from '@/components/ui/skeleton';
 import WeeklyTopicGrid from './components/WeeklyTopicGrid';
 import LessonContentSettingsDrawer from './components/LessonContentSettingsDrawer';
@@ -342,6 +345,10 @@ export default function MicroSyllabusPage() {
   const [lessonSettingsOpen, setLessonSettingsOpen] = useState(false);
   const [headerRightEl, setHeaderRightEl] = useState<HTMLElement | null>(null);
   const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
+  const [reflectionPlanStatus, setReflectionPlanStatus] = useState<'on_plan' | 'off_plan'>('on_plan');
+  const [reflectionOverview, setReflectionOverview] = useState<'good' | 'medium' | 'review'>('good');
+  const [reflectionNotes, setReflectionNotes] = useState('');
+  const [savingReflection, setSavingReflection] = useState(false);
 
   useEffect(() => {
     setHeaderRightEl(document.getElementById('header-portal-right-actions'));
@@ -423,6 +430,52 @@ export default function MicroSyllabusPage() {
   const handleSaveLessonOptions = async (lessonOptions: string[]) => {
     if (!selectedSyllabus) return;
     await updateLessonOptions(selectedSyllabus.id, lessonOptions);
+  };
+
+  const handleSaveReflection = async () => {
+    if (!selectedSyllabus) return;
+    setSavingReflection(true);
+    try {
+      const today = getLocalDateString();
+      const topicIndex = selectedSyllabus.topics.findIndex(t => t.date === today);
+      const updatedTopics = [...selectedSyllabus.topics];
+
+      if (topicIndex >= 0) {
+        updatedTopics[topicIndex] = {
+          ...updatedTopics[topicIndex],
+          teachingReflection: {
+            planStatus: reflectionPlanStatus,
+            overview: reflectionOverview,
+            additionalRequest: reflectionNotes || undefined,
+            recordedAt: new Date().toISOString(),
+          },
+          completedAt: new Date().toISOString(),
+        };
+      } else {
+        updatedTopics.push({
+          weekNumber: Math.ceil(updatedTopics.length / 1),
+          date: today,
+          title: 'บันทึกหลังการสอน',
+          teachingReflection: {
+            planStatus: reflectionPlanStatus,
+            overview: reflectionOverview,
+            additionalRequest: reflectionNotes || undefined,
+            recordedAt: new Date().toISOString(),
+          },
+          completedAt: new Date().toISOString(),
+        } as WeeklyTopic);
+      }
+
+      await handleSaveTopics(updatedTopics);
+      setReflectionPlanStatus('on_plan');
+      setReflectionOverview('good');
+      setReflectionNotes('');
+      toast.success('บันทึกหลังการสอนเรียบร้อย');
+    } catch {
+      toast.error('บันทึกหลังการสอนไม่สำเร็จ');
+    } finally {
+      setSavingReflection(false);
+    }
   };
 
   const handleBackToSubjects = () => {
@@ -570,6 +623,56 @@ export default function MicroSyllabusPage() {
               exit={{ opacity: 0, x: 12 }}
               className="w-full min-w-0 flex flex-col gap-3"
             >
+              {/* Teaching Reflection Form */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <h3 className="text-sm font-black text-slate-800 font-sukhumvit mb-3">บันทึกหลังการสอนวันนี้</h3>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-black text-slate-600 mb-1">แผนการสอน</label>
+                      <select
+                        value={reflectionPlanStatus}
+                        onChange={(e) => setReflectionPlanStatus(e.target.value as 'on_plan' | 'off_plan')}
+                        className="w-full h-8 rounded-lg border border-slate-200 bg-white text-[12px] font-sukhumvit text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      >
+                        <option value="on_plan">ตามแผน</option>
+                        <option value="off_plan">เบี่ยงเบน</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-black text-slate-600 mb-1">ผลการสอน</label>
+                      <select
+                        value={reflectionOverview}
+                        onChange={(e) => setReflectionOverview(e.target.value as 'good' | 'medium' | 'review')}
+                        className="w-full h-8 rounded-lg border border-slate-200 bg-white text-[12px] font-sukhumvit text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      >
+                        <option value="good">ดี</option>
+                        <option value="medium">ปานกลาง</option>
+                        <option value="review">ต้องปรับปรุง</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-black text-slate-600 mb-1">หมายเหตุเพิ่มเติม</label>
+                    <textarea
+                      value={reflectionNotes}
+                      onChange={(e) => setReflectionNotes(e.target.value)}
+                      placeholder="ป้อนหมายเหตุ หากนักเรียนมีปัญหา ข้อเสนอแนะ ฯลฯ"
+                      className="w-full h-20 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] font-sarabun text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={savingReflection}
+                    onClick={() => void handleSaveReflection()}
+                    className="w-full h-9 rounded-lg bg-blue-600 text-white text-[12px] font-black font-sukhumvit hover:bg-blue-700 disabled:opacity-60 flex items-center justify-center gap-2"
+                  >
+                    <HiCheck size={14} />
+                    บันทึกหลังการสอน
+                  </button>
+                </div>
+              </div>
+
               <WeeklyTopicGrid
                 topics={selectedSyllabus.topics}
                 lessonOptions={selectedLessonOptions}

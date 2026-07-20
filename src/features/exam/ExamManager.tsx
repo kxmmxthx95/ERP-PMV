@@ -900,30 +900,6 @@ function ProctoringModal({
     }
   }, [attempts, onRecalculateScores, room.currentRound, room.id, room.status]);
 
-  // คำนวณคะแนนหลังปิดห้องเท่านั้น — ไม่ตรวจขณะรอบยังเปิดอยู่
-  useEffect(() => {
-    if (!canRecalculateScores) return;
-    let cancelled = false;
-    void (async () => {
-      setIsRecalculating(true);
-      try {
-        const rounds = Array.from(new Set(
-          attempts.map((a) => normalizeExamRound(a.round)),
-        )).filter((r) => r > 0);
-        const targetRounds = rounds.length > 0
-          ? rounds
-          : [normalizeExamRound(room.currentRound)];
-        await Promise.all(
-          targetRounds.map((round) => onRecalculateScores?.(room.id, round)),
-        );
-      } finally {
-        if (!cancelled) setIsRecalculating(false);
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once when dashboard opens after close
-  }, [room.id, canRecalculateScores]);
-
   const proctorRound = normalizeExamRound(room.currentRound);
   const roundAttempts = useMemo(
     () => attempts.filter((a) => normalizeExamRound(a.round) === proctorRound),
@@ -3747,6 +3723,13 @@ function RoomDetailView({
     questionPoints: Record<string, number>,
     totalPoints: number,
   ) => {
+    const roundNum = normalizeExamRound(roundKey);
+    const hasExistingAttempts = attempts.some((att) => normalizeExamRound(att.round) === roundNum);
+    if (hasExistingAttempts) {
+      toast.error('ไม่สามารถแก้ไขข้อสอบรอบนี้ได้ เนื่องจากมีนักเรียนทำข้อสอบไปแล้ว');
+      return;
+    }
+
     const savedEntry = {
       questionSetId,
       questionIds,
@@ -3768,18 +3751,6 @@ function RoomDetailView({
       ...(isFirstRound ? { questionSetId, selectedQuestionIds: questionIds, questionCount: questionIds.length, totalPoints } : {}),
       roundQuestions,
     });
-
-    if (onRecalculateScores) {
-      const roundsToRecalc = new Set<number>();
-      attempts.forEach((att) => {
-        if (att.status === 'submitted' || att.status === 'graded') {
-          roundsToRecalc.add(att.round);
-        }
-      });
-      await Promise.all(
-        [...roundsToRecalc].map((round) => onRecalculateScores(room.id, round)),
-      );
-    }
   };
 
   const handleSaveScoreSettings = useCallback(async (

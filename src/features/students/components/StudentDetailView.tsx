@@ -1,4 +1,4 @@
-import { Phone, MapPin, User, BookOpen, Pencil, Trash2, Mail, AlertCircle } from 'lucide-react';
+import { Phone, MapPin, User, BookOpen, Pencil, Trash2, Mail, AlertCircle, Hash } from 'lucide-react';
 import { motion } from 'framer-motion';
 import type { Student, Enrollment } from '@/types/student';
 import { checkStudentCompletion } from '@/utils/studentValidation';
@@ -156,6 +156,7 @@ export default function StudentDetailView({ student, enrollments, onEdit, onDele
                 <InfoRow icon={Phone} label="เบอร์โทรศัพท์" value={student.phone} />
                 <InfoRow icon={Mail} label="อีเมล" value={student.email} />
                 <InfoRow icon={MapPin} label="ที่อยู่" value={student.address} />
+                <InfoRow icon={Hash} label="Firebase ID" value={student.id} />
               </div>
             </div>
 

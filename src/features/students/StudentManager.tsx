@@ -735,6 +735,9 @@ export default function StudentManager() {
                     <p className="text-base font-bold text-blue-600 mb-2">
                       รหัส: {selectedStudent.studentCode}
                     </p>
+                    <p className="text-[10px] font-bold text-slate-400 mb-2 break-all">
+                      Firebase ID: {selectedStudent.id}
+                    </p>
                     <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center justify-center gap-2">
                       <span
                         className="w-2.5 h-2.5 rounded-full inline-block"

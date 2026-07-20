@@ -147,8 +147,8 @@ export function CreateRoomModal({
           teacherId: user.uid,
           teacherName: creatorName,
           ...(creatorPhotoURL ? { teacherPhotoURL: creatorPhotoURL } : {}),
-          questionCount: 5,
-          totalPoints: 100,
+          questionCount: 0,
+          totalPoints: 0,
         });
       }
       onClose();

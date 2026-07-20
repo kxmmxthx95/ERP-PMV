@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, XCircle, MinusCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import {
   Drawer,
   DrawerContent,
@@ -26,11 +26,12 @@ import { getPartBadgeTheme } from '@/features/exam/utils/partBadgeTheme';
 import { computePartScoreSummaries } from '@/features/exam/utils/partScoreSummary';
 import { db } from '@/lib/firebase';
 import { logActivity } from '@/lib/activityLogger';
+import { approveScoreOverride, rejectScoreOverride } from '@/lib/exam/scoreOverride';
 import { normalizeExamScore } from '@/lib/students/studentIdentity';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 import ImageZoomModal from '@/features/exam/components/ImageZoomModal';
-import type { ExamAttempt, ExamRoom } from '@/types/exam';
+import type { ExamAttempt, ExamRoom, ExamScoreOverrideRequest } from '@/types/exam';
 import type { Question } from '@/types/questionBank';
 import {
   gradeSimulationAnswers,
@@ -133,8 +134,11 @@ export function StudentExamScoreDetailDrawer({
   roundNumbers,
   initialRound,
 }: Props) {
-  const { role } = useAuth();
+  const { role, user, userData } = useAuth();
   const canEditScores = role === 'teacher' || role === 'admin' || role === 'sysadmin';
+  const isScoreApprover = role === 'admin' || role === 'sysadmin';
+  const currentUserName = [userData?.prefix, userData?.firstName, userData?.lastName].filter(Boolean).join(' ').trim()
+    || userData?.displayName || userData?.name || user?.displayName || 'ไม่ทราบชื่อ';
 
   const availableRounds = useMemo(
     () => roundNumbers.filter((round) => attemptsByRound.has(round)),
@@ -151,6 +155,11 @@ export function StudentExamScoreDetailDrawer({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [zoomImageUrl, setZoomImageUrl] = useState<string | null>(null);
+  const [pendingOverride, setPendingOverride] = useState<ExamScoreOverrideRequest | null>(null);
+  const [showOverrideForm, setShowOverrideForm] = useState(false);
+  const [overrideScoreInput, setOverrideScoreInput] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
+  const [isSubmittingOverride, setIsSubmittingOverride] = useState(false);
 
   const questionPoints = useMemo(() => {
     const roundKey = String(activeRound);
@@ -227,6 +236,39 @@ export function StudentExamScoreDetailDrawer({
   }, [open, initialAttempt?.id, room.id]);
 
   const attempt = liveAttempt || initialAttempt;
+
+  useEffect(() => {
+    if (!open || !attempt) {
+      setPendingOverride(null);
+      return;
+    }
+    const q = query(
+      collection(db, 'exam_score_overrides'),
+      where('attemptId', '==', attempt.id),
+      where('status', '==', 'pending'),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      if (snap.empty) {
+        setPendingOverride(null);
+        return;
+      }
+      const d = snap.docs[0];
+      const raw = d.data();
+      setPendingOverride({
+        ...raw,
+        id: d.id,
+        createdAt: normalizeTimestamp(raw.createdAt),
+        updatedAt: raw.updatedAt ? normalizeTimestamp(raw.updatedAt) : undefined,
+      } as ExamScoreOverrideRequest);
+    });
+    return () => unsub();
+  }, [open, attempt?.id]);
+
+  useEffect(() => {
+    setShowOverrideForm(false);
+    setOverrideScoreInput('');
+    setOverrideReason('');
+  }, [attempt?.id]);
 
   const groupedResults = useMemo(() => {
     if (!gradeSummary) return [];
@@ -336,6 +378,94 @@ export function StudentExamScoreDetailDrawer({
     });
   }, []);
 
+  const submitOverrideRequest = useCallback(async () => {
+    if (!attempt || !user) return;
+    const parsed = Number(overrideScoreInput);
+    if (!Number.isFinite(parsed) || parsed < 0 || (roundTotal > 0 && parsed > roundTotal)) {
+      toast.error(`กรุณากรอกคะแนนระหว่าง 0 - ${roundTotal}`);
+      return;
+    }
+    if (!overrideReason.trim()) {
+      toast.error('กรุณาระบุเหตุผลที่ต้องแก้ไขคะแนน');
+      return;
+    }
+    setIsSubmittingOverride(true);
+    try {
+      await addDoc(collection(db, 'exam_score_overrides'), {
+        roomId: room.id,
+        roomTitle: room.title,
+        attemptId: attempt.id,
+        studentId: attempt.studentId,
+        studentName: student?.fullName || attempt.studentName || '',
+        round: activeRound,
+        requestedScore: parsed,
+        maxPoints: roundTotal,
+        previousScore: attemptScore,
+        reason: overrideReason.trim(),
+        requestedBy: user.uid,
+        requestedByName: currentUserName,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+      });
+      await logActivity({
+        action: 'request_score_override',
+        category: 'academic',
+        status: 'success',
+        targetId: attempt.id,
+        metadata: {
+          roomId: room.id,
+          round: activeRound,
+          studentId: attempt.studentId,
+          requestedScore: parsed,
+          previousScore: attemptScore,
+        },
+      });
+      toast.success('ส่งคำขอแก้ไขคะแนนแล้ว รอ sysadmin/ผู้บริหารอนุมัติ');
+      setShowOverrideForm(false);
+      setOverrideScoreInput('');
+      setOverrideReason('');
+    } catch {
+      toast.error('ส่งคำขอไม่สำเร็จ');
+    } finally {
+      setIsSubmittingOverride(false);
+    }
+  }, [attempt, user, overrideScoreInput, overrideReason, roundTotal, room.id, room.title, student, activeRound, attemptScore, currentUserName]);
+
+  const cancelOverrideRequest = useCallback(async () => {
+    if (!pendingOverride) return;
+    try {
+      await updateDoc(doc(db, 'exam_score_overrides', pendingOverride.id), {
+        status: 'rejected',
+        approverNote: 'ยกเลิกโดยผู้ยื่นคำขอ',
+        updatedAt: serverTimestamp(),
+      });
+      toast.info('ยกเลิกคำขอแล้ว');
+    } catch {
+      toast.error('ยกเลิกคำขอไม่สำเร็จ');
+    }
+  }, [pendingOverride]);
+
+  const approveOverrideRequest = useCallback(async () => {
+    if (!pendingOverride || !user) return;
+    try {
+      await approveScoreOverride(pendingOverride, user.uid, currentUserName);
+      toast.success('อนุมัติคะแนนใหม่เรียบร้อย');
+    } catch {
+      toast.error('อนุมัติไม่สำเร็จ');
+    }
+  }, [pendingOverride, user, currentUserName]);
+
+  const rejectOverrideRequest = useCallback(async () => {
+    if (!pendingOverride || !user) return;
+    const note = window.prompt('เหตุผลที่ปฏิเสธ (ถ้ามี)') ?? '';
+    try {
+      await rejectScoreOverride(pendingOverride, user.uid, currentUserName, note);
+      toast.info('ปฏิเสธคำขอแล้ว');
+    } catch {
+      toast.error('ปฏิเสธไม่สำเร็จ');
+    }
+  }, [pendingOverride, user, currentUserName]);
+
   useEffect(() => {
     if (!open || !student || !attempt) {
       setGradeSummary(null);
@@ -424,6 +554,9 @@ export function StudentExamScoreDetailDrawer({
                       <p className="text-[12px] font-bold text-emerald-500 font-sukhumvit tabular-nums mt-0.5">
                         {formatScorePercent(attemptScore, roundTotal)}
                       </p>
+                    )}
+                    {attempt?.manuallyOverridden && (
+                      <p className="text-[10px] font-bold text-indigo-500 font-sarabun mt-0.5">ปรับคะแนนแล้ว</p>
                     )}
                   </>
                 ) : attempt ? (
@@ -688,6 +821,107 @@ export function StudentExamScoreDetailDrawer({
                   >
                     {isSaving ? 'กำลังบันทึก...' : 'บันทึกคะแนนข้อเขียน'}
                   </button>
+                </div>
+              )}
+
+              {attempt && (role === 'teacher' || isScoreApprover) && (
+                <div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 px-4 py-3 flex flex-col gap-3">
+                  {pendingOverride ? (
+                    isScoreApprover ? (
+                      <>
+                        <p className="text-[12px] text-indigo-800 font-sarabun leading-snug">
+                          <span className="font-black">{pendingOverride.requestedByName}</span> ขอแก้คะแนนเป็น{' '}
+                          <span className="font-black">{pendingOverride.requestedScore}/{pendingOverride.maxPoints}</span>
+                          {' '}(เดิม {pendingOverride.previousScore ?? '-'})
+                        </p>
+                        <p className="text-[11px] text-indigo-600 font-sarabun">เหตุผล: {pendingOverride.reason}</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void approveOverrideRequest()}
+                            className="h-9 flex-1 rounded-xl bg-emerald-600 text-white text-[12px] font-black font-sukhumvit hover:bg-emerald-700"
+                          >
+                            อนุมัติ
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void rejectOverrideRequest()}
+                            className="h-9 flex-1 rounded-xl bg-rose-100 text-rose-700 text-[12px] font-black font-sukhumvit hover:bg-rose-200"
+                          >
+                            ปฏิเสธ
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[12px] text-indigo-800 font-sarabun">
+                          ส่งคำขอแก้คะแนนเป็น {pendingOverride.requestedScore}/{pendingOverride.maxPoints} แล้ว — รอ sysadmin/ผู้บริหารอนุมัติ
+                        </p>
+                        {pendingOverride.requestedBy === user?.uid && (
+                          <button
+                            type="button"
+                            onClick={() => void cancelOverrideRequest()}
+                            className="shrink-0 text-[11px] font-bold text-rose-500 hover:underline"
+                          >
+                            ยกเลิก
+                          </button>
+                        )}
+                      </div>
+                    )
+                  ) : role === 'teacher' ? (
+                    showOverrideForm ? (
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={roundTotal}
+                            step={0.5}
+                            value={overrideScoreInput}
+                            onChange={(e) => setOverrideScoreInput(e.target.value)}
+                            placeholder="คะแนนใหม่"
+                            className="h-9 w-24 rounded-lg border border-indigo-200 bg-white px-2 text-[13px] font-black text-slate-800 font-sukhumvit tabular-nums outline-none focus:ring-2 focus:ring-indigo-500/30"
+                          />
+                          <span className="text-[11px] text-slate-400 font-sarabun">/ {roundTotal}</span>
+                        </div>
+                        <textarea
+                          value={overrideReason}
+                          onChange={(e) => setOverrideReason(e.target.value)}
+                          placeholder="เหตุผลที่ต้องแก้ไขคะแนน"
+                          rows={2}
+                          className="rounded-lg border border-indigo-200 bg-white px-2 py-1.5 text-[12px] text-slate-700 font-sarabun outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={isSubmittingOverride}
+                            onClick={() => void submitOverrideRequest()}
+                            className="h-9 flex-1 rounded-xl bg-indigo-600 text-white text-[12px] font-black font-sukhumvit hover:bg-indigo-700 disabled:opacity-60"
+                          >
+                            {isSubmittingOverride ? 'กำลังส่ง...' : 'ส่งคำขอ'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowOverrideForm(false)}
+                            className="h-9 px-4 rounded-xl bg-white border border-slate-200 text-[12px] font-bold text-slate-500 font-sukhumvit hover:bg-slate-50"
+                          >
+                            ยกเลิก
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOverrideScoreInput(attemptScore != null ? String(attemptScore) : '');
+                          setShowOverrideForm(true);
+                        }}
+                        className="h-9 self-start rounded-xl bg-indigo-600 px-4 text-[12px] font-black text-white font-sukhumvit hover:bg-indigo-700"
+                      >
+                        กรอกคะแนนเอง
+                      </button>
+                    )
+                  ) : null}
                 </div>
               )}
 

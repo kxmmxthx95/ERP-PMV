@@ -94,6 +94,7 @@ export const FEATURE_LIST: FeaturePermission[] = [
   { featureKey: 'widget_morningRollCall',        label: 'วิดเจ็ตเช็คชื่อเข้าแถว',  category: 'วิดเจ็ต', enabled: true, accessLevel: 'view-only' },
   { featureKey: 'widget_teacherDailyTasks',      label: 'วิดเจ็ตงานประจำวันครู',    category: 'วิดเจ็ต', enabled: true, accessLevel: 'view-only' },
   { featureKey: 'widget_morningRollCallSummary', label: 'วิดเจ็ตสรุปเช็คชื่อเข้าแถว (ผู้บริหาร)', category: 'วิดเจ็ต', enabled: false, accessLevel: 'view-only' },
+  { featureKey: 'widget_scoreOverrideApproval',  label: 'วิดเจ็ตอนุมัติคำขอแก้ไขคะแนน (ผู้บริหาร)', category: 'วิดเจ็ต', enabled: true, accessLevel: 'edit' },
   { featureKey: 'widget_dailyAttendanceSummary', label: 'วิดเจ็ตสรุปการเข้างานรายวัน', category: 'เมนู', enabled: false, accessLevel: 'view-only' },
   { featureKey: 'widget_teacherLiveStatus',      label: 'วิดเจ็ตสถานะครูกำลังสอน/พัก',  category: 'เมนู', enabled: true,  accessLevel: 'view-only' },
   { featureKey: 'widget_studentSummary',         label: 'วิดเจ็ตสรุปจำนวนนักเรียน',    category: 'เมนู', enabled: false, accessLevel: 'view-only' },

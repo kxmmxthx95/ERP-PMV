@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } fro
 import { useNavigate, useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import {
   ResponsiveContainer,
   BarChart,
@@ -256,7 +256,7 @@ function StudentScoreSummaryModal({
 import { useExamRoom } from '@/hooks/useExamRoom';
 import { useAuth } from '@/hooks/useAuth';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
-import type { ExamRoom, ExamAttempt, GradeScoreType, GradeBookSubjectLink } from '@/types/exam';
+import type { ExamRoom, ExamAttempt, ExamScoreOverrideRequest, GradeScoreType, GradeBookSubjectLink } from '@/types/exam';
 import { rawPointsToPercent } from '@/types/grades';
 import { resolveAttemptScoreDisplay } from '@/lib/exam/examRoomScoring';
 import { Button } from '@/components/ui/button';
@@ -282,6 +282,7 @@ import {
 } from '@/lib/school/gradeLevelBadge';
 import type { Subject } from '@/types/curriculum';
 import { db } from '@/lib/firebase';
+import { logActivity } from '@/lib/activityLogger';
 import {
   buildStudentIdentityLookup,
   buildStudentDisplayNameByIdentityKey,
@@ -1025,12 +1026,14 @@ function questionPlainText(html: string): string {
 
 function QuestionsPanel({
   room,
+  attempts,
   onSave,
   onContentClick,
   mobileBankDrawerOpen = false,
   onMobileBankDrawerOpenChange,
 }: {
   room: ExamRoom;
+  attempts: ExamAttempt[];
   onSave: (
     roundKey: string,
     questionSetId: string,
@@ -1057,6 +1060,14 @@ function QuestionsPanel({
   useEffect(() => {
     if (!roundKeys.includes(activeRound)) setActiveRound(roundKeys[0] ?? '1');
   }, [roundKeys, activeRound]);
+
+  // Rounds that already have student attempts — editing questions for these is blocked
+  const roundsWithAttempts = useMemo(() => {
+    const set = new Set<number>();
+    attempts.forEach((att) => set.add(normalizeExamRound(att.round)));
+    return set;
+  }, [attempts]);
+  const activeRoundHasAttempts = roundsWithAttempts.has(normalizeExamRound(activeRound));
 
   useEffect(() => {
     setExpandedPartSetId(null);
@@ -1707,18 +1718,20 @@ function QuestionsPanel({
                         <HiEye className="w-3.5 h-3.5" />
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (expandedPartSetId === setId) setExpandedPartSetId(null);
-                        removeSetFromRound(rk, setId);
-                      }}
-                      className="flex h-8 w-8 items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-500 shadow-sm transition-colors hover:bg-rose-50"
-                      title="ลบ part นี้"
-                      aria-label={`ลบ Part ${index + 1}`}
-                    >
-                      <HiXMark className="w-3.5 h-3.5" />
-                    </button>
+                    {!roundsWithAttempts.has(normalizeExamRound(rk)) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (expandedPartSetId === setId) setExpandedPartSetId(null);
+                          removeSetFromRound(rk, setId);
+                        }}
+                        className="flex h-8 w-8 items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-500 shadow-sm transition-colors hover:bg-rose-50"
+                        title="ลบ part นี้"
+                        aria-label={`ลบ Part ${index + 1}`}
+                      >
+                        <HiXMark className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1766,7 +1779,8 @@ function QuestionsPanel({
                                 step={1}
                                 value={draft.questionPoints[q.id] ?? pts}
                                 onChange={(e) => updateQuestionPoint(rk, q.id, e.target.value)}
-                                className="w-14 h-8 rounded-lg border border-slate-200 bg-white px-1 text-center text-[11px] font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-300 font-sukhumvit"
+                                disabled={roundsWithAttempts.has(normalizeExamRound(rk))}
+                                className="w-14 h-8 rounded-lg border border-slate-200 bg-white px-1 text-center text-[11px] font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-300 font-sukhumvit disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
                                 aria-label={`คะแนนข้อ ${qi + 1}`}
                               />
                               <span className="text-[9px] text-slate-400 font-sarabun hidden sm:inline">
@@ -2065,6 +2079,8 @@ function QuestionsPanel({
           style={{
             background: 'rgba(248,250,252,0.8)',
             border: '1px solid rgba(226,232,240,0.6)',
+            opacity: activeRoundHasAttempts ? 0.5 : 1,
+            pointerEvents: activeRoundHasAttempts ? 'none' : undefined,
           }}
         >
           <div className="flex items-center justify-between shrink-0">
@@ -2097,21 +2113,27 @@ function QuestionsPanel({
                 </span>
               )}
 
-              <button
-                onClick={() => { requestSaveRound(activeRound); }}
-                disabled={isSaving === activeRound || !roundDraft[activeRound]}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all font-sukhumvit border border-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{
-                  background: savedRound === activeRound
-                    ? 'linear-gradient(135deg,#059669,#10b981)'
-                    : 'linear-gradient(135deg,#0f172a,#334155)',
-                  color: '#fff',
-                  opacity: (isSaving === activeRound || !roundDraft[activeRound]) ? 0.5 : 1,
-                }}
-              >
-                {savedRound === activeRound ? <HiCheck className="w-2.5 h-2.5" /> : <HiArrowDownTray className="w-2.5 h-2.5" />}
-                {savedRound === activeRound ? 'บันทึกแล้ว' : isSaving === activeRound ? 'กำลังบันทึก...' : 'บันทึก'}
-              </button>
+              {activeRoundHasAttempts ? (
+                <span className="text-[10px] font-black text-rose-600 font-sukhumvit">
+                  มีนักเรียนทำข้อสอบรอบนี้แล้ว ไม่สามารถแก้ไขได้
+                </span>
+              ) : (
+                <button
+                  onClick={() => { requestSaveRound(activeRound); }}
+                  disabled={isSaving === activeRound || !roundDraft[activeRound]}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all font-sukhumvit border border-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    background: savedRound === activeRound
+                      ? 'linear-gradient(135deg,#059669,#10b981)'
+                      : 'linear-gradient(135deg,#0f172a,#334155)',
+                    color: '#fff',
+                    opacity: (isSaving === activeRound || !roundDraft[activeRound]) ? 0.5 : 1,
+                  }}
+                >
+                  {savedRound === activeRound ? <HiCheck className="w-2.5 h-2.5" /> : <HiArrowDownTray className="w-2.5 h-2.5" />}
+                  {savedRound === activeRound ? 'บันทึกแล้ว' : isSaving === activeRound ? 'กำลังบันทึก...' : 'บันทึก'}
+                </button>
+              )}
             </div>
           </div>
 
@@ -2206,7 +2228,13 @@ function QuestionsPanel({
               </button>
             </div>
           </DrawerHeader>
-          <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-4 pt-3">
+          <div
+            className="flex flex-1 min-h-0 flex-col overflow-hidden p-4 pt-3"
+            style={{
+              opacity: activeRoundHasAttempts ? 0.5 : 1,
+              pointerEvents: activeRoundHasAttempts ? 'none' : undefined,
+            }}
+          >
             {renderQuestionBank()}
           </div>
         </DrawerContent>
@@ -3235,9 +3263,11 @@ function RoomDetailView({
   onRecalculateScores?: (roomId: string, round: number) => Promise<void>;
   initialTab?: SettingsTab;
 }) {
-  const { user, role } = useAuth();
+  const { user, role, userData } = useAuth();
   const canViewAllSubjects = role === 'admin' || role === 'sysadmin';
   const teachingMgr = useTeachingManager(user?.uid ?? '', canViewAllSubjects);
+  const currentUserName = [userData?.prefix, userData?.firstName, userData?.lastName].filter(Boolean).join(' ').trim()
+    || userData?.displayName || userData?.name || user?.displayName || 'ไม่ทราบชื่อ';
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'takers');
 
   useEffect(() => {
@@ -3636,6 +3666,112 @@ function RoomDetailView({
     roundNumbers,
     getRoundTotalPoints,
   ]);
+
+  // ── Pending score-override requests for this room (live — powers old→new badges everywhere) ──
+  const [pendingOverridesByAttemptId, setPendingOverridesByAttemptId] = useState<Map<string, ExamScoreOverrideRequest>>(new Map());
+
+  useEffect(() => {
+    if (activeTab !== 'score-summary') return;
+    const q = query(
+      collection(db, 'exam_score_overrides'),
+      where('roomId', '==', room.id),
+      where('status', '==', 'pending'),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const map = new Map<string, ExamScoreOverrideRequest>();
+      snap.docs.forEach((d) => {
+        const raw = d.data();
+        map.set(raw.attemptId as string, { ...raw, id: d.id } as ExamScoreOverrideRequest);
+      });
+      setPendingOverridesByAttemptId(map);
+    });
+    return () => unsub();
+  }, [activeTab, room.id]);
+
+  // ── Bulk score-override edit mode (whole-table manual score entry) ─────────
+  const [bulkEditMode, setBulkEditMode] = useState(false);
+  const [bulkEditValues, setBulkEditValues] = useState<Record<string, string>>({});
+  const [bulkReason, setBulkReason] = useState('');
+  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
+
+  const bulkEditKey = useCallback((studentId: string, round: number) => `${studentId}:${round}`, []);
+
+  const cancelBulkEditMode = useCallback(() => {
+    setBulkEditMode(false);
+    setBulkEditValues({});
+    setBulkReason('');
+  }, []);
+
+  const enterBulkEditMode = useCallback(() => {
+    setBulkEditValues({});
+    setBulkReason('');
+    setBulkEditMode(true);
+  }, []);
+
+  const submitBulkOverrides = useCallback(async () => {
+    if (!user) return;
+    const entries = Object.entries(bulkEditValues).filter(([, v]) => v.trim() !== '');
+    if (entries.length === 0) {
+      toast.error('ยังไม่มีคะแนนที่แก้ไข');
+      return;
+    }
+    if (!bulkReason.trim()) {
+      toast.error('กรุณาระบุเหตุผลที่แก้ไขคะแนน');
+      return;
+    }
+    setIsBulkSubmitting(true);
+    try {
+      const batch = writeBatch(db);
+      let count = 0;
+      for (const [key, rawValue] of entries) {
+        const [studentId, roundStr] = key.split(':');
+        const round = Number(roundStr);
+        const row = pagedSummaryRows.find((r) => r.student.id === studentId);
+        const roundData = row?.rounds.find((r) => r.round === round);
+        if (!row || !roundData || !roundData.att || !roundData.hasScore) continue;
+        if (pendingOverridesByAttemptId.has(roundData.att.id)) continue;
+        const parsed = Number(rawValue);
+        if (!Number.isFinite(parsed) || parsed < 0 || (roundData.roundTotal > 0 && parsed > roundData.roundTotal)) continue;
+        if (parsed === roundData.roundScore) continue;
+        const ref = doc(collection(db, 'exam_score_overrides'));
+        batch.set(ref, {
+          roomId: room.id,
+          roomTitle: room.title,
+          attemptId: roundData.att.id,
+          studentId,
+          studentName: row.student.fullName,
+          round,
+          requestedScore: parsed,
+          maxPoints: roundData.roundTotal,
+          previousScore: roundData.roundScore,
+          reason: bulkReason.trim(),
+          requestedBy: user.uid,
+          requestedByName: currentUserName,
+          status: 'pending',
+          createdAt: serverTimestamp(),
+        });
+        count += 1;
+      }
+      if (count === 0) {
+        toast.info('ไม่มีคะแนนที่เปลี่ยนแปลง หรือคะแนนอยู่นอกช่วงที่กำหนด');
+        return;
+      }
+      await batch.commit();
+      await logActivity({
+        action: 'request_score_override_bulk',
+        category: 'academic',
+        status: 'success',
+        targetId: room.id,
+        metadata: { roomId: room.id, count },
+      });
+      toast.success(`ส่งคำขอแก้ไขคะแนน ${count} รายการแล้ว รอ sysadmin/ผู้บริหารอนุมัติ`);
+      cancelBulkEditMode();
+    } catch {
+      toast.error('ส่งคำขอไม่สำเร็จ');
+    } finally {
+      setIsBulkSubmitting(false);
+    }
+  }, [bulkEditValues, bulkReason, user, pagedSummaryRows, pendingOverridesByAttemptId, room.id, room.title, currentUserName, cancelBulkEditMode]);
 
   const openScoreDetail = useCallback((
     student: {
@@ -4327,6 +4463,7 @@ function RoomDetailView({
                 <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
                   <QuestionsPanel
                     room={room}
+                    attempts={attempts}
                     onSave={handleSaveQuestions}
                     onContentClick={onContentClick}
                     mobileBankDrawerOpen={questionBankDrawerOpen}
@@ -4535,12 +4672,56 @@ function RoomDetailView({
 
                         {/* Desktop: table */}
                         <div className="hidden md:block rounded-2xl border border-slate-200 bg-white/80 overflow-hidden">
+                          {role === 'teacher' && bulkEditMode && (
+                            <div className="flex flex-col gap-2 border-b border-indigo-100 bg-indigo-50/60 px-4 py-3 sm:flex-row sm:items-center">
+                              <input
+                                value={bulkReason}
+                                onChange={(e) => setBulkReason(e.target.value)}
+                                placeholder="เหตุผลที่แก้ไขคะแนน (ใช้กับทุกคะแนนที่แก้ในครั้งนี้)"
+                                className="h-9 flex-1 rounded-lg border border-indigo-200 bg-white px-3 text-[12px] text-slate-700 font-sarabun outline-none focus:ring-2 focus:ring-indigo-500/30"
+                              />
+                              <div className="flex gap-2 shrink-0">
+                                <button
+                                  type="button"
+                                  disabled={isBulkSubmitting}
+                                  onClick={() => void submitBulkOverrides()}
+                                  className="h-9 rounded-xl bg-indigo-600 px-4 text-[12px] font-black text-white font-sukhumvit hover:bg-indigo-700 disabled:opacity-60"
+                                >
+                                  {isBulkSubmitting ? 'กำลังส่ง...' : 'ส่งคำขอทั้งหมด'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelBulkEditMode}
+                                  className="h-9 rounded-xl border border-slate-200 bg-white px-4 text-[12px] font-bold text-slate-500 font-sukhumvit hover:bg-slate-50"
+                                >
+                                  ยกเลิก
+                                </button>
+                              </div>
+                            </div>
+                          )}
                           <div className="overflow-x-auto">
                             <table className="min-w-full text-left">
                               <thead>
                                 <tr className="bg-slate-50/90 border-b border-slate-200">
                                   <th className="px-4 py-3 text-[11px] font-black text-slate-500 uppercase tracking-wider font-sukhumvit">
-                                    นักเรียน
+                                    <div className="flex items-center gap-1.5">
+                                      นักเรียน
+                                      {role === 'teacher' && (
+                                        <button
+                                          type="button"
+                                          onClick={() => (bulkEditMode ? cancelBulkEditMode() : enterBulkEditMode())}
+                                          className={cn(
+                                            'flex h-6 w-6 items-center justify-center rounded-md transition-colors',
+                                            bulkEditMode
+                                              ? 'bg-indigo-600 text-white'
+                                              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600',
+                                          )}
+                                          title={bulkEditMode ? 'ออกจากโหมดแก้ไขคะแนน' : 'กรอกคะแนนเองทั้งตาราง'}
+                                        >
+                                          <HiMiniPencil size={12} />
+                                        </button>
+                                      )}
+                                    </div>
                                   </th>
                                   {roundNumbers.map((round) => (
                                     <th
@@ -4595,9 +4776,46 @@ function RoomDetailView({
                                       </p>
                                     </td>
 
-                                    {row.rounds.map(({ round, roundScore, roundScorePercent, hasScore, isPending, isInProgress, needsManualReview, roundTotal }) => (
+                                    {row.rounds.map(({ round, att, roundScore, roundScorePercent, hasScore, isPending, isInProgress, needsManualReview, roundTotal }) => {
+                                      const pendingReq = att ? pendingOverridesByAttemptId.get(att.id) : undefined;
+                                      return (
                                       <td key={`${row.student.id}-${round}`} className="px-4 py-3 text-center">
-                                        {hasScore ? (
+                                        {bulkEditMode && hasScore && att ? (
+                                          pendingReq ? (
+                                            <span
+                                              className="inline-flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-slate-100 text-slate-500 text-[11px] font-bold font-sarabun"
+                                              title={`รออนุมัติ: ${pendingReq.previousScore ?? '-'} → ${pendingReq.requestedScore}`}
+                                            >
+                                              รออนุมัติ
+                                            </span>
+                                          ) : (
+                                            <div className="inline-flex items-center gap-1">
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                max={roundTotal}
+                                                step={0.5}
+                                                defaultValue={roundScore ?? undefined}
+                                                onChange={(e) => {
+                                                  const key = bulkEditKey(row.student.id, round);
+                                                  setBulkEditValues((prev) => ({ ...prev, [key]: e.target.value }));
+                                                }}
+                                                className="h-8 w-16 rounded-lg border border-indigo-200 bg-white px-1 text-center text-[12px] font-black text-slate-800 font-sukhumvit tabular-nums outline-none focus:ring-2 focus:ring-indigo-500/30"
+                                                aria-label={`คะแนนใหม่ ${row.student.fullName} รอบ ${round}`}
+                                              />
+                                              <span className="text-[10px] text-slate-400 font-sarabun">/{roundTotal}</span>
+                                            </div>
+                                          )
+                                        ) : hasScore && pendingReq ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => openScoreDetail(row.student, row.attemptsByRound, round)}
+                                            className="inline-flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-[12px] font-black font-sukhumvit hover:bg-indigo-100 tabular-nums"
+                                            title={`รอ sysadmin/ผู้บริหารอนุมัติ — เหตุผล: ${pendingReq.reason}`}
+                                          >
+                                            {pendingReq.previousScore ?? '-'} → {pendingReq.requestedScore}
+                                          </button>
+                                        ) : hasScore ? (
                                           <button
                                             type="button"
                                             onClick={() => openScoreDetail(row.student, row.attemptsByRound, round)}
@@ -4629,7 +4847,8 @@ function RoomDetailView({
                                           <span className="text-[12px] text-slate-300 font-bold">-</span>
                                         )}
                                       </td>
-                                    ))}
+                                      );
+                                    })}
 
                                     <td className="px-4 py-3 text-center">
                                       {row.bestScorePercent !== null ? (

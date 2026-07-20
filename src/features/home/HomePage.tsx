@@ -55,6 +55,7 @@ import HoroscopeWidget from './widgets/HoroscopeWidget';
 import WordGameWidget from './widgets/WordGameWidget';
 import StudentFeeWidget from './widgets/StudentFeeWidget';
 import TuitionStatusSummaryWidget from './widgets/TuitionStatusSummaryWidget';
+import ScoreOverrideApprovalWidget from './widgets/ScoreOverrideApprovalWidget';
 import { DashboardWidgetsSkeleton, MenuPageSkeleton } from './components/WidgetSkeleton';
 
 const MENU_GRID_COLUMNS = 4;
@@ -259,6 +260,9 @@ function DashboardWidgets({
     }
     if (isEnabled('widget_studentSummary') && hasRole('admin', 'sysadmin')) {
       pushItem('widget_studentSummary', 'widget_studentSummary', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentStatWidget /></motion.div>);
+    }
+    if (isEnabled('widget_scoreOverrideApproval') && hasRole('admin', 'sysadmin')) {
+      pushItem('widget_scoreOverrideApproval', 'widget_scoreOverrideApproval', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><ScoreOverrideApprovalWidget /></motion.div>);
     }
     if (isEnabled('widget_staffAttendance') && hasRole('staff', 'admin', 'teacher')) {
       pushItem('widget_staffAttendance', 'widget_staffAttendance', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StaffCheckInWidget /></motion.div>);

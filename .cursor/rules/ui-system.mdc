@@ -1,0 +1,116 @@
+---
+description: Iron rule — UI primitives from components/ui only; colors via CSS variables in index.css.
+alwaysApply: true
+---
+
+# UI System (กฎเหล็ก)
+
+## 1. Primitives: import only — never rebuild
+
+Need button / form / card / modal (dialog|sheet|drawer|alert-dialog)? **Import from `@/components/ui/`.** Do not hand-roll Tailwind for those primitives.
+
+| Need | Use |
+|------|-----|
+| Button | `@/components/ui/button` (`Button`, `buttonVariants`) |
+| Card | `@/components/ui/card` |
+| Form fields | `@/components/ui/form`, `input`, `textarea`, `label`, `select`, `checkbox`, `field` |
+| Modal / overlay | `@/components/ui/dialog`, `sheet`, `drawer`, `alert-dialog` |
+
+```tsx
+// ❌ BAD — custom button
+<button className="h-9 rounded-full bg-slate-900 text-white ...">บันทึก</button>
+
+// ✅ GOOD
+import { Button } from '@/components/ui/button'
+<Button variant="default">บันทึก</Button>
+```
+
+Missing variant/size? **Edit the one file in `src/components/ui/`** (e.g. `button.tsx`) so the whole app updates. Do not fork a one-off styled `<button>` in a feature.
+
+Layout/`className` for spacing/placement OK. Replacing the primitive's look with ad-hoc Tailwind is not.
+
+## 1b. Button radius (มาตรฐานความโค้งมน)
+
+**ทุกปุ่มใหม่ = `rounded-2xl`** — default ของ `@/components/ui/button`.
+
+```tsx
+// ❌ BAD
+<Button className="rounded-full">...</Button>
+<Button className="rounded-4xl">...</Button>
+<button className="rounded-full ...">...</button>
+
+// ✅ GOOD — default จาก Button ใช้ rounded-2xl อยู่แล้ว
+<Button>แสดงผล</Button>
+```
+
+อย่า override radius ใน feature ยกเว้นมีเหตุผลชัด (เช่น avatar วงกลม = `rounded-full` สำหรับรูป ไม่ใช่ปุ่ม action).
+อยากเปลี่ยนความโค้งทั้งระบบ → แก้ `src/components/ui/button.tsx` ที่เดียว.
+
+**ยกเว้น:** ปุ่ม icon บน portal header → ดู §1c
+
+## 1c. Header icon buttons (กฎเหล็ก)
+
+ปุ่ม icon บน header (`header-portal-right-actions`, `header-portal-home-actions`, `header-portal-mobile-actions`, filter/settings/home/menu/back) **ต้อง** ใช้ class จาก `@/lib/headerIconBtn`:
+
+```tsx
+import { HiOutlineFunnel } from 'react-icons/hi2'
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn'
+
+// group gap เท่ากันทุกแถว (gap-1.5) — ห้ามใช้ gap อื่น
+// ต้องคู่กับ flex / hidden lg:flex (อย่าใส่ flex ใน HEADER_ICON_BTN_GROUP)
+<div className={cn('hidden lg:flex', HEADER_ICON_BTN_GROUP)}>
+  <button type="button" className={HEADER_ICON_BTN} title="ตัวกรอง">
+    <HiOutlineFunnel size={16} />
+  </button>
+  <button type="button" className={HEADER_ICON_BTN} title="ตั้งค่า">
+    <SettingsIcon size={16} />
+  </button>
+</div>
+```
+
+**Filter trigger:** always `HEADER_ICON_BTN` + `HiOutlineFunnel` size 16 — see `.cursor/rules/filter-button.mdc`.
+
+```tsx
+// ❌ BAD — gap คนละขนาด / ออกแบบ header icon เอง / flex ทับ hidden
+<div className="flex items-center gap-2">...</div>
+<div className={cn('hidden lg:flex', 'flex items-center gap-1.5')}>...</div>
+
+// ✅ GOOD
+<div className={cn('hidden lg:flex', HEADER_ICON_BTN_GROUP)}>
+  <button type="button" className={HEADER_ICON_BTN}>...</button>
+</div>
+```
+
+- ปุ่มใหม่บน header: ใส่ในกลุ่มที่มี `HEADER_ICON_BTN_GROUP` (หรือ `gap-1.5` เท่านี้เท่านั้น)
+- อยากเปลี่ยนดีไซน์/ระยะห่างทั้งระบบ → แก้ `src/lib/headerIconBtn.ts` ที่เดียว
+- Badge/dot (เช่น filter active) วาง `absolute` ในปุ่มได้ — อย่าเปลี่ยน shape/border/gap ของกลุ่ม
+
+## 2. Colors: CSS variables only
+
+Source of truth: **`src/index.css`** (`:root` / `.dark` + `@theme inline`).
+
+```css
+/* change brand once → everywhere follows */
+:root {
+  --primary: ...;
+  --destructive: ...;
+}
+```
+
+```tsx
+// ❌ BAD — hardcoded
+className="text-[#ef4444] bg-[#3b82f6] border-slate-200"
+
+// ✅ GOOD — semantic tokens
+className="text-destructive bg-primary border-border text-muted-foreground"
+```
+
+Allowed tokens (prefer these): `background`, `foreground`, `card`, `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`, `input`, `ring`, `sidebar-*`, `chart-*`.
+
+School rebrand = edit **`src/index.css` only**. Never scatter hex/`oklch(...)`/`rgb(...)` in feature UI.
+
+## 3. Checklist before shipping UI
+
+1. Is there already a `components/ui/*` for this? → import it.
+2. Need a new look? → extend that ui file (or add a `variant`), not a feature-local copy.
+3. Need a color? → token from `index.css`, not `#hex` / raw `slate-*` / `blue-*` for brand/semantic meaning.

@@ -1,0 +1,88 @@
+---
+description: Iron rule — dialog/settings form layout matching ScheduleSettingsModal (labels, inputs, footer CTA).
+alwaysApply: true
+---
+
+# Form design (กฎเหล็ก)
+
+Canonical = ฟอร์มใน `ScheduleSettingsModal` (ตั้งค่าคาบเรียนและเวลา).
+
+ฟอร์มใหม่ใน Dialog / Sheet / Drawer **ต้อง** ตามโครงนี้ — อย่าออกแบบกรอบการ์ดซ้อน / label เทาจาง / ปุ่ม footer สี hardcode.
+
+## Shell (Dialog)
+
+| Piece | Value |
+|-------|--------|
+| Radius | `rounded-2xl` (ไม่ใช้ `rounded-[2rem]` / `rounded-4xl`) |
+| Padding | ขอบบน–ล่างเท่ากัน: header `pt-6 sm:pt-8`, footer `pb-6 sm:pb-8` |
+| Title | `text-lg sm:text-xl font-black tracking-tight` — ไม่ต้องมี description ใต้หัวข้อถ้าไม่จำเป็น |
+| Close | ปุ่ม X จาก `DialogContent` เท่านั้น — **อย่า** ใส่ปุ่ม «ยกเลิก» ใน footer |
+| Body | ไม่ห่อ section ด้วย `border` / `bg-white/40` / `shadow-sm` การ์ดซ้อน |
+
+## Field
+
+```tsx
+<div className="space-y-1">
+  <label className="pl-1 text-[10px] font-black uppercase tracking-wider text-slate-600">
+    เริ่มเรียน <span className="text-destructive">*</span>
+  </label>
+  <Input
+    className="h-10 rounded-xl border-none bg-slate-50/70 px-4 text-xs font-bold focus-visible:bg-slate-50/90 focus-visible:ring-2 focus-visible:ring-slate-900/20"
+  />
+</div>
+```
+
+| Piece | Value |
+|-------|--------|
+| Label | `text-[10px] font-black uppercase tracking-wider text-slate-600` (+ `pl-1`) |
+| Required | `*` ด้วย `text-destructive` (หรือ `text-rose-500`) |
+| Input | `Input` จาก `@/components/ui/input` — `h-10 rounded-xl border-none bg-slate-50/70 text-xs font-bold` |
+| Grid | คู่ฟิลด์สั้น = `grid grid-cols-2 gap-4`; ฟิลด์ยาว = full width |
+| Gap | ระหว่างฟิลด์ `space-y-4`; ระหว่างกลุ่ม `space-y-6` |
+
+## Actions
+
+```tsx
+{/* secondary / generate — full width, soft */}
+<Button
+  type="button"
+  variant="secondary"
+  className="h-10 w-full rounded-xl text-xs font-bold"
+>
+  สร้างเวลาอัตโนมัติ
+</Button>
+
+{/* primary save — footer, full width, system primary */}
+<DialogFooter className="border-t border-white/20 px-6 pt-4 pb-6 sm:px-8 sm:pb-8">
+  <Button type="button" className="h-10 w-full rounded-xl font-bold">
+    บันทึกการตั้งค่า
+  </Button>
+</DialogFooter>
+```
+
+| Piece | Value |
+|-------|--------|
+| Primary CTA | `Button` default (`primary`) — **full width** ใน footer — ห้าม `bg-slate-900` / hex |
+| Secondary | soft (`secondary` / muted) full width ใน body — ไม่แย่ง primary |
+| Radius ปุ่มในฟอร์มนี้ | `rounded-xl` (shell ยัง `rounded-2xl`) |
+
+## Forbidden
+
+```tsx
+// ❌ BAD — การ์ดซ้อนรอบฟิลด์
+<div className="rounded-2xl border bg-white/40 p-4 shadow-sm">...</div>
+
+// ❌ BAD — label จางเกิน / ไม่ uppercase
+<label className="text-sm text-muted-foreground">เริ่มเรียน</label>
+
+// ❌ BAD — ปุ่มบันทึกสี hardcode / ไม่เต็มความกว้าง
+<Button className="bg-slate-900 px-8">บันทึก</Button>
+```
+
+## Scope
+
+Applies to **settings / edit forms inside Dialog, Sheet, Drawer**.
+
+Does **not** replace filter drawers (ดู `filter-button.mdc`) หรือ header icon buttons (ดู `ui-system.mdc` §1c).
+
+Reference implementation: `src/features/schedule/components/ScheduleSettingsModal.tsx`.

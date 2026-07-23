@@ -1,0 +1,87 @@
+---
+description: Iron rule — portal data tables use GradeTable grid shell (desktop table + mobile cards, StudentAvatar).
+alwaysApply: true
+---
+
+# Data table (กฎเหล็ก)
+
+Canonical = `GradeTable.tsx` / `ExamRoomScoreTable.tsx` (สมุดบันทึกคะแนน) และรายชื่อห้องใน `ClassStudentPanel.tsx`.
+
+ตารางข้อมูลใน portal (รายชื่อนักเรียน, คะแนน, สถิติ) **ต้อง** ใช้ pattern นี้ — อย่าใช้ `@/components/ui/table` หรือ card grid แทนตาราง.
+
+## Tokens (คัดลอกในไฟล์ตาราง หรือ import จาก canonical)
+
+| Piece | Value |
+|-------|--------|
+| Shell | `TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden'` |
+| Header cell | `TABLE_HEADER_CELL = 'text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap'` |
+| Grid | `style={{ gridTemplateColumns: TABLE_GRID }}` — ปรับคอลัมน์ตาม feature |
+| Row | `grid gap-3 px-4 py-3 items-center border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors` |
+| Header row | `grid gap-3 border-b border-border bg-background px-4 py-3` |
+
+ตัวอย่าง grid 4 คอลัมน์ (สอบ/คะแนน):
+
+`minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) minmax(0, 1fr) minmax(5rem, 0.85fr)`
+
+## Layout
+
+1. **Wrapper** — `flex flex-col gap-3`
+2. **Mobile** (`md:hidden`) — การ์ด `rounded-2xl border border-border bg-card p-3` ต่อแถว; ข้อมูลหลัก + แถวรอง `border-t border-border pt-2`
+3. **Desktop** (`hidden md:block`) — `cn('hidden md:block', TABLE_SHELL)` + header grid + แถว grid
+
+## นักเรียนในตาราง
+
+- Avatar: **`StudentAvatar`** จาก `@/features/students/components/StudentAvatar` — `className="h-9 w-9 shrink-0 rounded-full"`
+- ชื่อ: `text-[13px] font-bold text-foreground font-sukhumvit truncate`
+- รหัส: `text-[13px] font-black text-foreground font-sukhumvit tabular-nums`
+- ค่าว่าง: `text-muted-foreground/40` + `—`
+
+## Badge / pill ในคอลัมน์
+
+```tsx
+<span className="inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-bold text-primary font-sukhumvit">
+  ตรวจแล้ว
+</span>
+```
+
+ใช้ semantic tokens (`primary`, `destructive`, `muted`) — ห้าม hex / `slate-*` สำหรับความหมายสถานะ.
+
+## Animation (optional)
+
+```tsx
+<motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.015 }} />
+```
+
+Mobile card: `initial={{ opacity: 0, y: 8 }}`, `delay: i * 0.02`.
+
+## Empty state
+
+```tsx
+<div className="py-12 text-center text-muted-foreground">
+  <p className="text-[13px] font-sarabun">ยังไม่มีข้อมูลนักเรียน</p>
+</div>
+```
+
+## Forbidden
+
+```tsx
+// ❌ BAD — shadcn Table สำหรับ portal data list
+import { Table, TableRow, TableCell } from '@/components/ui/table'
+
+// ❌ BAD — card grid แทนตาราง desktop
+<div className="grid grid-cols-3 gap-4">...</div>
+
+// ❌ BAD — header ตัวพิมพ์เล็ก uppercase จาง / ไม่ font-sukhumvit
+<th className="text-[10px] uppercase text-slate-400">ชื่อ</th>
+
+// ❌ BAD — แถวเลือกด้วย bg-blue-600 / hardcode
+<tr className="bg-blue-600 text-white">...</tr>
+```
+
+## Scope
+
+Applies to **portal feature data tables** (grades, classes roster, exam scores, attendance summaries ที่แสดงเป็น list+columns).
+
+Does **not** apply to: tiny import-preview tables, fingerprint admin tables, หรือ `<table>` ใน modal ที่เป็น debug/import-only.
+
+Reference: `src/features/grades/components/GradeTable.tsx`, `src/features/grades/components/ExamRoomScoreTable.tsx`, `src/features/classes/components/ClassStudentPanel.tsx` (แท็บรายชื่อ).

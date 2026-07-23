@@ -3,7 +3,6 @@ import {
   HiMapPin,
   HiUser,
   HiPhone,
-  HiBanknotes,
   HiUsers,
   HiHome,
   HiPhoto,
@@ -191,48 +190,6 @@ export function StudentDetailFormTab({
             <div className="space-y-1">
               <label className="text-[12px] font-black text-slate-700">อายุ (ปี)</label>
               <DetailViewField value={calcStudentAge(viewData.birthDate)} className="bg-slate-100 border-slate-200 text-slate-400" />
-            </div>
-          </div>
-        </div>
-
-        <div className="h-px bg-slate-100" />
-
-        <div className="space-y-4">
-          <SectionHeading icon={HiBanknotes} iconClassName="text-emerald-600">
-            ข้อมูลการเงิน
-          </SectionHeading>
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-[13px] font-bold text-slate-700">
-                ได้เงินมาโรงเรียนวันละ <span className="text-rose-500">*</span>
-              </span>
-              {isEditMode ? (
-                <input
-                  type="number"
-                  value={formData.financial_dailyAllowance ?? ''}
-                  onChange={e => onChange('financial_dailyAllowance', e.target.value === '' ? '' : Number(e.target.value))}
-                  className="w-28 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-center font-bold text-[13px] outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 transition-all"
-                />
-              ) : (
-                <DetailViewField value={viewData.financial_dailyAllowance} className="py-1 text-center font-black min-w-[80px]" />
-              )}
-              <span className="text-[13px] font-bold text-slate-500">บาท</span>
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-[13px] font-bold text-slate-700">
-                เหลือเก็บวันละ <span className="text-rose-500">*</span>
-              </span>
-              {isEditMode ? (
-                <input
-                  type="number"
-                  value={formData.financial_dailySavings ?? ''}
-                  onChange={e => onChange('financial_dailySavings', e.target.value === '' ? '' : Number(e.target.value))}
-                  className="w-28 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-center font-bold text-[13px] outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 transition-all"
-                />
-              ) : (
-                <DetailViewField value={viewData.financial_dailySavings} className="py-1 text-center font-black min-w-[80px]" />
-              )}
-              <span className="text-[13px] font-bold text-slate-500">บาท (กรอก 0 ถ้าไม่มี)</span>
             </div>
           </div>
         </div>

@@ -4,11 +4,13 @@ import { collection, getDocs, query, where, type QueryDocumentSnapshot, type Doc
 import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
+import { useCurriculum } from '@/hooks/useCurriculum';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import { loadThaiHolidaysForYear } from '@/features/calendar/hooks/useThaiHolidays';
 import { getSchedulesByYearSemesterStore } from '@/lib/firestoreShared/schedulesStore';
 import { getLocalDateString } from '@/lib/calendar/schoolDay';
 import { resolveSemesterDateRange, enumerateWorkingDays } from '@/lib/teacherKpi/semesterDates';
+import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
 import { isTimestampAtOrAfterNoon } from '@/hooks/useStaffAttendance';
 import { sessionCache } from '@/lib/sessionCache';
 import { useTeacherKpiSettings } from '@/hooks/useTeacherKpiSettings';
@@ -81,6 +83,7 @@ function cacheKey(
 export function useTeacherKpi() {
   const { activeYear, activeSemester, isLoaded: yearLoaded } = useActiveAcademicYear();
   const { teachers, loading: teachersLoading } = useTeachersCollection();
+  const { subjects: curriculumSubjects } = useCurriculum();
   const { events: calendarEvents } = useAcademicCalendar();
 
   const [summary, setSummary] = useState<TeacherKpiSummary | null>(null);
@@ -97,11 +100,16 @@ export function useTeacherKpi() {
     schedulesStoreObj.getSnapshot,
     schedulesStoreObj.getSnapshot,
   );
+  const deptSemesterSettings = useSyncExternalStore(
+    deptSemestersStore.subscribe,
+    deptSemestersStore.getSnapshot,
+    deptSemestersStore.getSnapshot,
+  );
 
   const semesterRange = useMemo(() => {
     if (!activeYear) return { startDate: '', endDate: '' };
-    return resolveSemesterDateRange(activeYear, semester, calendarEvents);
-  }, [activeYear, semester, calendarEvents]);
+    return resolveSemesterDateRange(activeYear, semester, calendarEvents, deptSemesterSettings);
+  }, [activeYear, semester, calendarEvents, deptSemesterSettings]);
 
   useEffect(() => {
     if (!yearLoaded || teachersLoading) return;
@@ -109,12 +117,13 @@ export function useTeacherKpi() {
 
     const today = getLocalDateString();
     const computedThrough = today < semesterRange.endDate ? today : semesterRange.endDate;
-    // ใช้วันที่ตั้งค่าไว้เป็นจุดเริ่ม ถ้าอยู่ในช่วงเทอมและก่อนวันที่คำนวณถึง — นอกเหนือจากนั้นใช้วันเริ่มเทอมจริง
+    // ใช้วันที่ตั้งค่าไว้เป็นจุดเริ่ม ถ้าอยู่ในช่วงเทอม — นอกเหนือจากนั้นใช้วันเริ่มเทอมจริง
+    // (ตั้งเป็นวันอนาคตได้ปกติ — enumerateWorkingDays คืนค่าว่างเองถ้ายังไม่ถึงวันนั้น)
     const configuredStart = settings.startDate;
     const effectiveStart = (
       configuredStart
       && configuredStart >= semesterRange.startDate
-      && configuredStart <= computedThrough
+      && configuredStart <= semesterRange.endDate
     ) ? configuredStart : semesterRange.startDate;
     const excludedByTeacher = settings.excludedSubjectsByTeacher ?? {};
     const key = cacheKey(academicYearId, semester, effectiveStart, computedThrough, excludedByTeacher);
@@ -191,21 +200,31 @@ export function useTeacherKpi() {
             });
           const teacherSessionCounts = sessionCountByTeacherSubject.get(teacher.id) ?? new Map<string, number>();
 
-          const subjectBreakdown: TeacherSubjectKpi[] = Array.from(schedulesBySubject.entries())
-            .map(([subjectId, entries]) => {
-              const subjectExpected = countExpectedSessions(entries, workingDays);
+          // นับจากรายวิชาที่ได้รับมอบหมาย (teachingSubjectIds) รวมกับวิชาที่มีคาบในตารางสอนจริง —
+          // วิชาที่ได้รับมอบหมายแต่ยังไม่ถูกจัดตาราง จะโชว์ expectedSessions:0 + inSchedule:false
+          const allSubjectIds = new Set<string>([
+            ...(teacher.teachingSubjectIds ?? []),
+            ...schedulesBySubject.keys(),
+          ]);
+
+          const subjectBreakdown: TeacherSubjectKpi[] = Array.from(allSubjectIds)
+            .map((subjectId) => {
+              const entries = schedulesBySubject.get(subjectId);
+              const subjectExpected = entries ? countExpectedSessions(entries, workingDays) : 0;
               const subjectCompleted = teacherSessionCounts.get(subjectId) ?? 0;
               const subjectRate = subjectExpected > 0
                 ? Math.min(100, Math.round((subjectCompleted / subjectExpected) * 1000) / 10)
                 : null;
+              const curriculumSubject = curriculumSubjects.find((s) => s.id === subjectId || s.code === subjectId);
               return {
                 subjectId,
-                subjectName: entries[0].subjectName,
-                subjectCode: entries[0].subjectCode,
+                subjectName: entries?.[0].subjectName ?? curriculumSubject?.name ?? subjectId,
+                subjectCode: entries?.[0].subjectCode ?? curriculumSubject?.code,
                 rate: subjectRate,
                 completedSessions: subjectCompleted,
                 expectedSessions: subjectExpected,
                 excluded: excludedSubjectIds.includes(subjectId),
+                inSchedule: !!entries,
               };
             })
             .sort((a, b) => a.subjectName.localeCompare(b.subjectName, 'th'));
@@ -262,6 +281,7 @@ export function useTeacherKpi() {
     yearLoaded, teachersLoading, academicYearId, semester,
     semesterRange.startDate, semesterRange.endDate, settings.startDate,
     settings.excludedSubjectsByTeacher, teachers, calendarEvents, schedules,
+    curriculumSubjects,
   ]);
 
   return {

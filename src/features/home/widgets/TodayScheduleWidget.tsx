@@ -1,6 +1,6 @@
-import { useMemo, useState, useEffect } from 'react';
-import { Clock, MapPin as PinIcon, X, ArrowLeft } from 'lucide-react';
-import { HiCheckCircle, HiExclamationTriangle, HiPencilSquare } from 'react-icons/hi2';
+import { useMemo, useState, useEffect, useCallback } from 'react';
+import { Clock, MapPin as PinIcon } from 'lucide-react';
+import { HiArrowLeft, HiCheckCircle, HiExclamationTriangle, HiPencilSquare, HiXMark } from 'react-icons/hi2';
 import { DAY_CANDY_SURFACE_CLASS, WIDGET_GLASS, getDayCandyBoxShadow, getDayCandyStyle } from '../widgetStyles';
 import { SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
 import { useSchedule } from '@/hooks/useSchedule';
@@ -10,7 +10,7 @@ import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
-import { applyApprovedLeaveToClassAttendanceRows } from '@/lib/attendance/leaveRequestStudentMatch';
+import { applyApprovedLeaveToClassAttendanceRows, findApprovedLeaveForStudentOnDate } from '@/lib/attendance/leaveRequestStudentMatch';
 import { getLocalDateString } from '@/lib/calendar/schoolDay';
 import { DEFAULT_SETTINGS } from '@/hooks/useScheduleSettings';
 import type { SchoolDay, ScheduleEntry } from '@/types/schedule';
@@ -20,7 +20,19 @@ import { fetchStudentsByIds } from '@/lib/firestoreShared/fetchStudentsByIds';
 import { sessionCache } from '@/lib/sessionCache';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription } from '@/components/ui/drawer';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
 import { cn } from '@/lib/utils';
+
+const ATTENDANCE_DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh flex-col bg-transparent p-0 before:hidden',
+  'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+  'sm:h-full sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md sm:p-2',
+);
+
+const ATTENDANCE_DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-col overflow-hidden bg-white',
+  'sm:rounded-4xl sm:border sm:border-slate-200/70 sm:shadow-xl',
+);
 
 type AttendanceStatus = 'present' | 'late' | 'absent' | 'leave';
 
@@ -217,6 +229,39 @@ export default function TodayScheduleWidget() {
     setSaveSuccessPopupOpen(false);
     setIncompletePopupOpen(false);
   };
+
+  const handleBackToSubjectList = useCallback(() => {
+    setSelectedAttendanceEntry(null);
+    setIsAttendanceLocked(false);
+    setAllPresentSnapshot(null);
+  }, []);
+
+  // Header back (desktop กลับไปเมนู / mobile กลับเมนู) → subject list when checking attendance
+  useEffect(() => {
+    if (!dayDrawerOpen || !selectedAttendanceEntry) return;
+
+    const isPortalBackButton = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      const btn = target.closest('button');
+      if (!btn) return false;
+      if (btn.id === 'portal-default-mobile-back') return true;
+      const title = btn.getAttribute('title') ?? '';
+      const label = btn.getAttribute('aria-label') ?? '';
+      if (title === 'กลับไปเมนู' || title === 'กลับเมนู' || label === 'กลับไปเมนู') return true;
+      // Home widget: desktop «เมนู» header while drawer is in attendance entry
+      return title === 'เมนู' && label === 'เมนู';
+    };
+
+    const onClick = (e: MouseEvent) => {
+      if (!isPortalBackButton(e.target)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      handleBackToSubjectList();
+    };
+
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [dayDrawerOpen, selectedAttendanceEntry, handleBackToSubjectList]);
 
   // 4. Fetch settings (once + cache) for involved classes to reduce Firestore reads.
   const [classSettings, setClassSettings] = useState<Record<string, any>>({});
@@ -464,11 +509,23 @@ export default function TodayScheduleWidget() {
 
   const setStudentStatus = (studentId: string, status: AttendanceStatus) => {
     if (isAttendanceLocked) return;
+    const row = attendanceRows.find((r) => r.id === studentId);
+    if (!row) return;
+    const nextStatus = row.status === status ? null : status;
+    if (nextStatus === 'leave') {
+      const approved = findApprovedLeaveForStudentOnDate(
+        leaveRequests,
+        { id: studentId, studentCode: row.code },
+        today,
+        row.name,
+      );
+      if (!approved) return;
+    }
     setAttendanceRows((prev) =>
-      prev.map((row) =>
-        row.id === studentId
-          ? { ...row, status: row.status === status ? null : status }
-          : row,
+      prev.map((r) =>
+        r.id === studentId
+          ? { ...r, status: nextStatus }
+          : r,
       ),
     );
     setAllPresentSnapshot(null);
@@ -671,18 +728,10 @@ export default function TodayScheduleWidget() {
     </div>
 
       <Drawer open={dayDrawerOpen} onOpenChange={setDayDrawerOpen} direction="right">
-        <DrawerContent
-          className={[
-            "h-dvh flex flex-col p-0 rounded-none",
-            "data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none",
-            "data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none",
-            "sm:h-full sm:rounded-l-3xl",
-            "sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md",
-            "sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl",
-          ].join(" ")}
-        >
-          <DrawerHeader className="px-4 pb-2">
-            <div className="relative flex items-center justify-center min-h-10">
+        <DrawerContent className={ATTENDANCE_DRAWER_CONTENT_CLASS}>
+          <div className={ATTENDANCE_DRAWER_PANEL_CLASS}>
+          <DrawerHeader className="shrink-0 px-4 pb-2 pt-4">
+            <div className="relative flex min-h-10 items-center justify-center">
               {selectedAttendanceEntry && !isSelectedPeriodUpcoming && (
                 isAttendanceLocked ? (
                   <button
@@ -705,7 +754,7 @@ export default function TodayScheduleWidget() {
                   </label>
                 )
               )}
-              <div className="min-w-0 text-center">
+              <div className="min-w-0 px-12 text-center">
                 {selectedAttendanceEntry ? (
                   <>
                     <DrawerTitle className="text-base font-black text-slate-800">
@@ -721,34 +770,31 @@ export default function TodayScheduleWidget() {
                   </>
                 )}
               </div>
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 shrink-0 flex items-center gap-2">
+              <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
                 {selectedAttendanceEntry && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedAttendanceEntry(null);
-                      setIsAttendanceLocked(false);
-                      setAllPresentSnapshot(null);
-                    }}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 active:scale-[0.98] transition"
+                    onClick={handleBackToSubjectList}
+                    className={DRAWER_HEADER_ICON_BTN}
                     aria-label="กลับไปรายการคาบ"
+                    title="กลับไปรายการคาบ"
                   >
-                    <ArrowLeft size={16} />
+                    <HiArrowLeft className="h-4 w-4" />
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => setDayDrawerOpen(false)}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 active:scale-[0.98] transition"
-                  aria-label="ปิดหน้ารายวิชาวันนี้"
+                  className={DRAWER_HEADER_ICON_BTN}
+                  aria-label="ปิด"
                 >
-                  <X size={16} />
+                  <HiXMark className="h-4 w-4" />
                 </button>
               </div>
             </div>
           </DrawerHeader>
 
-          <div className="px-4 pb-4 overflow-y-auto flex-1 min-h-0">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
             {selectedAttendanceEntry ? (
               isSelectedPeriodUpcoming ? (
                 <div className="h-full flex flex-col items-center justify-center py-10 px-6 text-center gap-3">
@@ -802,16 +848,26 @@ export default function TodayScheduleWidget() {
                       <div className="grid grid-cols-4 gap-1.5">
                         {ATTENDANCE_OPTIONS.map((opt) => {
                           const isActive = student.status === opt.value;
+                          const leaveBlocked =
+                            opt.value === 'leave'
+                            && !findApprovedLeaveForStudentOnDate(
+                              leaveRequests,
+                              { id: student.id, studentCode: student.code },
+                              today,
+                              student.name,
+                            );
+                          const disabled = isAttendanceLocked || leaveBlocked;
                           return (
                             <button
                               key={opt.value}
                               type="button"
-                              disabled={isAttendanceLocked}
+                              disabled={disabled}
+                              title={leaveBlocked ? 'ลาได้เฉพาะเมื่อมีใบลาที่อนุมัติแล้ว' : undefined}
                               onClick={() => setStudentStatus(student.id, opt.value)}
                               className={[
                                 'h-9 rounded-lg border text-[11px] font-black transition active:scale-[0.98]',
                                 isActive ? opt.activeClassName : opt.className,
-                                isAttendanceLocked ? 'opacity-60 cursor-not-allowed' : '',
+                                disabled ? 'opacity-60 cursor-not-allowed' : '',
                               ].join(' ')}
                             >
                               {opt.label}
@@ -893,32 +949,25 @@ export default function TodayScheduleWidget() {
             )}
           </div>
 
-          {selectedAttendanceEntry && !isSelectedPeriodUpcoming && !loadingAttendanceRows && attendanceRows.length > 0 && (
-            <div className="px-4 pb-4 pt-2 border-t border-slate-100 bg-white">
+          {selectedAttendanceEntry
+            && !isSelectedPeriodUpcoming
+            && !loadingAttendanceRows
+            && attendanceRows.length > 0
+            && !isAttendanceLocked && (
+            <div className="shrink-0 border-t border-slate-100 bg-white px-4 pt-2 pb-4">
               <button
                 type="button"
-                onClick={() => {
-                  if (isAttendanceLocked) {
-                    setIsAttendanceLocked(false);
-                    return;
-                  }
-                  void handleSaveAttendance();
-                }}
+                onClick={() => void handleSaveAttendance()}
                 disabled={savingAttendanceRows}
-                className={`w-full h-11 rounded-xl text-sm font-black transition active:scale-[0.99] disabled:opacity-60 ${
-                  isAttendanceLocked
-                    ? 'bg-emerald-600 text-white hover:bg-emerald-500'
-                    : 'bg-slate-900 text-white hover:bg-slate-800'
-                }`}
+                className="h-11 w-full rounded-xl bg-slate-900 text-sm font-black text-white transition hover:bg-slate-800 active:scale-[0.99] disabled:opacity-60"
               >
                 {savingAttendanceRows
                   ? 'กำลังบันทึก...'
-                  : isAttendanceLocked
-                    ? 'แก้ไข'
-                    : `บันทึกเช็กชื่อ (${attendanceRows.length} คน)`}
+                  : `บันทึกเช็กชื่อ (${attendanceRows.length} คน)`}
               </button>
             </div>
           )}
+          </div>
         </DrawerContent>
       </Drawer>
 

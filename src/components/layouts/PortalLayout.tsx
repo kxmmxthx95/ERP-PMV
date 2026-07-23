@@ -2,7 +2,7 @@
 import React, { memo, useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, Search, LogOut, Plus, ChevronLeft, Home } from 'lucide-react';
+import { LayoutDashboard, Search, LogOut, Plus, ChevronLeft, Home, ChevronRight } from 'lucide-react';
 import {
   HiOutlineHome,
   HiOutlineSquares2X2,
@@ -20,6 +20,18 @@ import { PermissionVisible } from '@/components/PermissionGate';
 import { authService } from '@/features/auth/authService';
 import { colors } from '@/lib/designTokens';
 import { cn } from '@/lib/utils';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
+import { resolvePortalPageTitle } from '@/lib/portalPageTitle';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
+
+export { HEADER_ICON_BTN, HEADER_ICON_BTN_GHOST, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
 
 function isUserLineConnected(userData: { lineUid?: string; lineToken?: string } | null | undefined): boolean {
   return Boolean((userData?.lineUid || userData?.lineToken || '').trim());
@@ -152,6 +164,19 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
   const isAiAgentsPage = location.pathname.startsWith('/portal/ai-agents');
   /** AI Agent shortcut — portal home (dashboard + menu) only */
   const showAiAgentButton = isHome;
+  const pageTitle = useMemo(
+    () => resolvePortalPageTitle(location.pathname),
+    [location.pathname],
+  );
+
+  const goToMenu = () => {
+    setView('menu');
+    navigate('/portal');
+  };
+
+  useEffect(() => {
+    if (!isHome && showProfilePopup) setShowProfilePopup(false);
+  }, [isHome, showProfilePopup]);
   const cfg = ROLE_CONFIG[role ?? ''] ?? ROLE_CONFIG.student;
   const isExecutiveRole = role === 'admin' || role === 'sysadmin';
   const mobileHeaderTabs = useMemo(() => {
@@ -192,38 +217,41 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
     setShowProfilePopup(prev => !prev);
   };
 
-  const renderDesktopHomeMenuButtons = () => (
-    <>
-      <button
-        type="button"
-        onClick={() => {
-          setView('dashboard');
-          navigate('/portal');
-        }}
-        className={`h-9 w-9 flex items-center justify-center rounded-full transition-all duration-300 shrink-0 ${(!isHome || view === 'dashboard')
-          ? 'bg-white/40 text-slate-800 border border-slate-300 shadow-xs'
-          : 'text-slate-600 border border-transparent'
-          }`}
-        title="หน้าหลัก"
-      >
-        <Home size={16} />
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setView('menu');
-          navigate('/portal');
-        }}
-        className={`h-9 w-9 flex items-center justify-center rounded-full transition-all duration-300 shrink-0 ${(isHome && view === 'menu')
-          ? 'bg-white/40 text-slate-800 border border-slate-300 shadow-xs'
-          : 'text-slate-600 border border-transparent'
-          }`}
-        title="เมนู"
-      >
-        <LayoutDashboard size={16} />
-      </button>
-    </>
-  );
+  const renderDesktopHomeMenuButtons = () => {
+    const homeActive = isHome && view === 'dashboard';
+    const menuActive = isHome && view === 'menu';
+
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            setView('dashboard');
+            navigate('/portal');
+          }}
+          className={cn(HEADER_ICON_BTN, homeActive && 'bg-white shadow-sm')}
+          title="หน้าหลัก"
+          aria-label="หน้าหลัก"
+          aria-pressed={homeActive}
+        >
+          <Home size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setView('menu');
+            navigate('/portal');
+          }}
+          className={cn(HEADER_ICON_BTN, menuActive && 'bg-white shadow-sm')}
+          title="เมนู"
+          aria-label="เมนู"
+          aria-pressed={menuActive}
+        >
+          <LayoutDashboard size={16} />
+        </button>
+      </>
+    );
+  };
 
   const renderMobileHeaderTabButton = (tab: (typeof mobileHeaderTabs)[number], idx: number) => (
     <motion.button
@@ -501,7 +529,8 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
             )}
           </div>
 
-          {/* Desktop: Avatar */}
+          {/* Desktop: Avatar + name — home (menu/dashboard) only */}
+          {isHome && (
           <div ref={profilePopupRef} className="hidden lg:flex items-center gap-2 relative">
             {/* Desktop: Avatar (clickable → Profile popup) */}
             <button
@@ -607,6 +636,37 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
               </motion.div>
             )}
           </div>
+          )}
+
+          {/* Desktop breadcrumb — feature pages only (top-left) */}
+          {!isHome && pageTitle && (
+            <Breadcrumb className="hidden lg:flex min-w-0 max-w-[min(560px,52vw)]">
+              <BreadcrumbList className="gap-1 sm:gap-1.5 text-[13px] font-sukhumvit">
+                <BreadcrumbItem>
+                  <BreadcrumbLink asChild>
+                    <button
+                      type="button"
+                      onClick={goToMenu}
+                      className="font-bold text-slate-500 hover:text-slate-800 transition-colors"
+                    >
+                      เมนู
+                    </button>
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator className="[&>svg]:size-3.5 text-slate-300">
+                  <ChevronRight />
+                </BreadcrumbSeparator>
+                <BreadcrumbItem className="min-w-0">
+                  <div id="header-portal-breadcrumb-page" className="peer/breadcrumb-page min-w-0" />
+                  <BreadcrumbPage className="font-black text-slate-800 truncate peer-[:not(:empty)]/breadcrumb-page:hidden">
+                    {pageTitle}
+                  </BreadcrumbPage>
+                </BreadcrumbItem>
+                {/* Feature pages may portal extra crumbs (e.g. selected subject) */}
+                <div id="header-portal-breadcrumb-extra" className="contents" />
+              </BreadcrumbList>
+            </Breadcrumb>
+          )}
 
           {/* Time & Date Display (Dashboard only) — isolated tick, no Outlet re-render */}
           {isHome && view === 'dashboard' && <PortalHeaderClock />}
@@ -640,22 +700,20 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
             {showAiAgentButton && renderAiAgentHeaderButton()}
           </div>
 
-          <div className="hidden lg:flex items-center gap-1.5 shrink-0">
-            <div id="header-portal-home-actions" className="flex items-center gap-1.5" />
+          <div className={cn('hidden lg:flex shrink-0', HEADER_ICON_BTN_GROUP)}>
+            <div id="header-portal-home-actions" className={cn('flex', HEADER_ICON_BTN_GROUP)} />
             {renderDesktopHomeMenuButtons()}
+            {isHome && (
+              <button
+                type="button"
+                onClick={() => authService.logout()}
+                className={cn(HEADER_ICON_BTN, 'text-rose-500')}
+                title="ออกจากระบบ"
+              >
+                <LogOut size={16} />
+              </button>
+            )}
           </div>
-
-          {isHome && (
-            <button
-              type="button"
-              onClick={() => authService.logout()}
-              className="hidden lg:flex h-9 w-9 rounded-full items-center justify-center text-rose-500 shrink-0"
-              style={GLASS}
-              title="ออกจากระบบ"
-            >
-              <LogOut size={16} />
-            </button>
-          )}
         </div>
         </div>
       </div>
@@ -707,11 +765,24 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
       </AnimatePresence>
 
       {/* ── Page Content (child routes rendered here) ── */}
-      <div className="relative flex-1 flex flex-col min-h-0 min-w-0">
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide overscroll-y-contain">
-          <div className="max-w-[1600px] mx-auto w-full px-4 sm:px-5 lg:px-8 pt-2 lg:pt-3 pb-5 lg:pb-12 min-h-full flex flex-col">
-            {/* Inner gutter so card shadows are not clipped by the scroll edges */}
-            <div className="px-1.5 py-3 sm:px-2 sm:py-4 flex flex-col flex-1 min-h-0 w-full">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain scrollbar-hide">
+          <div
+            className={cn(
+              'mx-auto flex min-h-full w-full max-w-[1600px] flex-col',
+              /* หน้าหลัก: gutter กว้าง + padding แนวตั้ง */
+              isHome && 'px-4 pt-2 pb-5 sm:px-5 lg:px-8 lg:pt-3 lg:pb-12',
+              /* หน้าอื่น: ไม่ตัดด้วย pt/pb — min-h-full ให้โตตามเนื้อหา + เต็ม scrollport */
+              !isHome && 'min-h-full px-2 sm:px-2.5 lg:px-3',
+            )}
+          >
+            {/* Inner: home มี py; หน้าอื่นไม่ตัดแนวตั้ง ส่งความสูงลง Outlet */}
+            <div
+              className={cn(
+                'flex w-full min-h-0 flex-1 flex-col',
+                isHome ? 'px-1.5 py-3 sm:px-2 sm:py-4' : 'min-h-full px-0.5 sm:px-1',
+              )}
+            >
               <Outlet context={{ view, showSearch }} />
             </div>
           </div>

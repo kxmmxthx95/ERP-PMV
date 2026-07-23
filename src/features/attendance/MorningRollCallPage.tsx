@@ -1,14 +1,28 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Save, Edit2, ArrowLeft, AlertTriangle, CheckCircle, RotateCcw, ChevronDown, ChevronUp, FileText } from 'lucide-react';
+import { AlertTriangle, CheckCircle } from 'lucide-react';
+import {
+  HiOutlineDocumentText,
+  HiPencilSquare,
+  HiXMark,
+  HiHomeModern,
+} from 'react-icons/hi2';
+import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
+import { ROLL_CALL_OPTIONS } from '@/features/attendance/rollCallUi';
+import {
+  ExamMobileFilterDrawer,
+  ExamMobileFilterTriggerButton,
+} from '@/features/exam/components/ExamMobileFilterMenuButton';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import {
-  useTodayMorningRollCall,
+  useMorningRollCall,
   useSaveMorningRollCall,
   getClassRollCallsByAcademicYear,
 } from '@/hooks/useMorningRollCall';
@@ -18,29 +32,173 @@ import { applyApprovedLeaveToMorningRollCallRows } from '@/lib/attendance/leaveR
 import type { RollCallStatus, StudentRollCall, MorningRollCallSession } from '@/types/morningRollCall';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import type { Department } from '@/types/curriculum';
-import { DEPARTMENT_CONFIG } from '@/types/curriculum';
-import { colors } from '@/lib/designTokens';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { GRADE_LEVEL_ORDER, type ClassRoom } from '@/types/class';
+import { Button } from '@/components/ui/button';
+import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from '@/components/ui/drawer';
+import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
+import { getLocalDateString, formatThaiDateRangeFromIso } from '@/lib/dateUtils';
+import { getClassesByYearStore } from '@/lib/firestoreShared/studentSummaryStore';
+import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
+import {
+  departmentToSemesterKey,
+  isDateInSemesterRange,
+  resolveInterSemesterBreak,
+} from '@/lib/teacherKpi/semesterDates';
+import { toDateStr, toThaiFullDate } from '@/features/calendar/utils';
+import { fallbackAcademicYearRange } from '@/features/teaching/components/TeacherAttendanceCalendar';
+import { MorningRollCallMonthCalendar } from '@/features/attendance/components/MorningRollCallMonthCalendar';
+import { cn } from '@/lib/utils';
 
 interface StudentRowData extends StudentRollCall {
   enrollmentIndex: number;
 }
 
-const SOLID_CLASS_CARD_COLOR = colors.palette.royalBlue;
+const DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh flex-col bg-transparent p-0 before:hidden',
+  'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+  'sm:h-full sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md sm:p-2',
+);
 
-function stripThaiPrefix(name: string) {
-  return name.replace(/^(นาย|นางสาว|นาง|ดร\.?|ผศ\.?)/i, '').trim();
+const DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-col overflow-hidden bg-white',
+  'sm:rounded-4xl sm:border sm:border-slate-200/70 sm:shadow-xl',
+);
+
+const noopSubscribe = () => () => {};
+const notReadySnapshot = () => false;
+
+function ClassPickerSkeleton() {
+  return (
+    <div className="flex w-full flex-col items-center gap-8 px-2" aria-busy="true" aria-label="กำลังโหลดห้องเรียน">
+      <div className="relative mx-auto h-[min(420px,58vh)] w-full max-w-5xl">
+        <Skeleton className="absolute left-1/2 top-1/2 h-[min(368px,50vh)] w-[min(230px,62vw)] -translate-x-[calc(50%+260px)] -translate-y-1/2 scale-92 rounded-[2rem] bg-slate-200/50" />
+        <Skeleton className="absolute left-1/2 top-1/2 h-[min(368px,50vh)] w-[min(230px,62vw)] -translate-x-[calc(50%-260px)] -translate-y-1/2 scale-92 rounded-[2rem] bg-slate-200/50" />
+        <Skeleton className="absolute left-1/2 top-1/2 z-10 h-[min(400px,54vh)] w-[min(250px,68vw)] -translate-x-1/2 -translate-y-1/2 rounded-[2rem] bg-slate-200/80">
+          <div className="absolute top-6 left-6 right-6 space-y-3">
+            <Skeleton className="h-8 w-[70%] rounded-lg bg-slate-300/70" />
+            <Skeleton className="h-4 w-[45%] rounded-lg bg-slate-300/50" />
+          </div>
+        </Skeleton>
+      </div>
+      <div className="flex items-center gap-2">
+        <Skeleton className="h-2 w-8 rounded-full bg-slate-300" />
+        <Skeleton className="h-2 w-2 rounded-full bg-slate-200" />
+        <Skeleton className="h-2 w-2 rounded-full bg-slate-200" />
+      </div>
+    </div>
+  );
+}
+
+function StudentRosterSkeleton({ count = 6 }: { count?: number }) {
+  return (
+    <div className="flex flex-col gap-2.5" aria-busy="true" aria-label="กำลังโหลดรายชื่อนักเรียน">
+      {Array.from({ length: count }, (_, index) => (
+        <div key={index} className="rounded-2xl border border-slate-200 bg-white p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-3.5 w-[55%] rounded-lg bg-slate-100" />
+              <Skeleton className="h-3 w-[28%] rounded-lg bg-slate-50" />
+            </div>
+            <Skeleton className="h-6 w-12 rounded-lg bg-slate-100" />
+          </div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {Array.from({ length: 4 }, (_, btn) => (
+              <Skeleton key={btn} className="h-9 rounded-xl bg-slate-100" />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReportListSkeleton({ count = 5 }: { count?: number }) {
+  return (
+    <div className="space-y-2" aria-busy="true" aria-label="กำลังโหลดรายงาน">
+      {Array.from({ length: count }, (_, index) => (
+        <div key={index} className="rounded-xl border border-slate-100 bg-white/70 px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-8 w-8 shrink-0 rounded-lg bg-slate-100" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-3 w-[50%] rounded-lg bg-slate-100" />
+              <Skeleton className="h-2.5 w-[28%] rounded-lg bg-slate-50" />
+            </div>
+          </div>
+          <div className="mt-2 grid grid-cols-4 gap-1.5">
+            {Array.from({ length: 4 }, (_, cell) => (
+              <Skeleton key={cell} className="h-10 rounded-lg bg-slate-50" />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MonthCalendarSkeleton() {
+  return (
+    <div
+      className="flex h-full min-h-0 w-full flex-col max-lg:overflow-y-auto"
+      aria-busy="true"
+      aria-label="กำลังโหลดตาราง"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-1.5 pt-0">
+        <Skeleton className="h-8 w-8 rounded-xl bg-slate-100" />
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-4 w-28 rounded-lg bg-slate-100" />
+          <Skeleton className="h-7 w-12 rounded-xl bg-slate-100" />
+        </div>
+        <Skeleton className="h-8 w-8 rounded-xl bg-slate-100" />
+      </div>
+      <div className="grid shrink-0 grid-cols-7 px-1 pb-1 pt-0">
+        {Array.from({ length: 7 }, (_, index) => (
+          <Skeleton key={index} className="mx-auto mb-2 h-3 w-4 rounded bg-slate-50" />
+        ))}
+      </div>
+      <div className="grid shrink-0 grid-cols-7 gap-1 px-1 pb-2 max-lg:auto-rows-[minmax(52px,auto)] lg:min-h-0 lg:flex-1 lg:auto-rows-fr">
+        {Array.from({ length: 35 }, (_, index) => (
+          <Skeleton
+            key={index}
+            className="min-h-[52px] rounded-xl bg-slate-100 lg:h-full lg:min-h-[80px]"
+          />
+        ))}
+      </div>
+      <div className="space-y-2 px-1 pb-2 lg:hidden">
+        <Skeleton className="h-3 w-28 rounded bg-slate-50" />
+        {Array.from({ length: 3 }, (_, index) => (
+          <Skeleton key={index} className="h-16 rounded-2xl bg-slate-100" />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function MorningRollCallPage() {
   const navigate = useNavigate();
   const { user, userData, role } = useAuth();
   const isAdmin = role === 'admin' || role === 'sysadmin';
-  const { year, activeSemester, isLoaded } = useActiveAcademicYear();
+  const { year, activeSemester, activeYear, isLoaded } = useActiveAcademicYear();
   const classMgr = useClassroomManager();
+  const classesStore = year ? getClassesByYearStore(year) : null;
+  const classesReady = useSyncExternalStore(
+    classesStore?.subscribe ?? noopSubscribe,
+    classesStore?.getReady ?? notReadySnapshot,
+    classesStore?.getReady ?? notReadySnapshot,
+  );
+  const isPageLoading = !isLoaded || !year || !classesReady;
   const { mutate: saveRollCall, isPending: isSaving } = useSaveMorningRollCall();
 
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
+  const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
+  const [dayDrawerOpen, setDayDrawerOpen] = useState(false);
   const { students: classStudents, loadingRoster: loadingClassStudents } = useMorningRollCallClassStudents(
     year ?? undefined,
     selectedClassId,
@@ -55,25 +213,76 @@ export default function MorningRollCallPage() {
   const [isLoadingReport, setIsLoadingReport] = useState(false);
   const [reportFrom, setReportFrom] = useState('');
   const [reportTo, setReportTo] = useState('');
+  const [reportFilterOpen, setReportFilterOpen] = useState(false);
   const [filterDept, setFilterDept] = useState<Department | 'all'>('all');
-  const [now, setNow] = useState(new Date());
+  const [filterGradeLevel, setFilterGradeLevel] = useState('');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [optimisticSession, setOptimisticSession] = useState<MorningRollCallSession | null>(null);
-  const [isMobileSummaryCollapsed, setIsMobileSummaryCollapsed] = useState(false);
 
   const [headerRightPortalEl, setHeaderRightPortalEl] = useState<HTMLElement | null>(null);
+  const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
   useEffect(() => {
     setHeaderRightPortalEl(document.getElementById('header-portal-right-actions'));
+    setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
   }, []);
 
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const { isHoliday: isRollCallBlocked, isWeekend, holidayTitle } = useIsSchoolDayToday(role ?? undefined, today);
-  const { requests: leaveRequests } = useStudentLeaveRequests(today);
-  const { data: fetchedSession } = useTodayMorningRollCall(selectedClassId);
+  const today = getLocalDateString();
+  const rollCallDate = selectedDateStr;
+  const deptSemesterSettings = useSyncExternalStore(
+    deptSemestersStore.subscribe,
+    deptSemestersStore.getSnapshot,
+    deptSemestersStore.getSnapshot,
+  );
+  const { isHoliday: isRollCallBlocked, isWeekend, holidayTitle } = useIsSchoolDayToday(
+    role ?? undefined,
+    rollCallDate ?? today,
+  );
+  const { requests: leaveRequests } = useStudentLeaveRequests(rollCallDate ?? today);
+  const { data: fetchedSession } = useMorningRollCall(selectedClassId, rollCallDate);
   const existingSession = optimisticSession ?? fetchedSession;
+
+  const selectedClass = useMemo(
+    () => classMgr.classes?.find((c: any) => c.id === selectedClassId),
+    [classMgr.classes, selectedClassId],
+  );
+
+  const interSemesterBreak = useMemo(() => {
+    const deptKey = departmentToSemesterKey(
+      (selectedClass?.departmentId as Department | undefined) ?? null,
+    );
+    return resolveInterSemesterBreak(deptSemesterSettings, deptKey);
+  }, [deptSemesterSettings, selectedClass?.departmentId]);
+
+  const isInterSemesterBreakDay = Boolean(
+    rollCallDate && isDateInSemesterRange(rollCallDate, interSemesterBreak),
+  );
+
+  const isDateEditable = Boolean(
+    rollCallDate && rollCallDate === today && !isRollCallBlocked && !isInterSemesterBreakDay,
+  );
+  const isReadOnly = !isDateEditable || Boolean(existingSession && !editMode);
+  const isRollCallLocked = Boolean(isReadOnly || !isDateEditable);
+
+  const academicYearRange = useMemo(() => {
+    const configuredStart = activeYear?.startDate?.trim() ?? '';
+    const configuredEnd = activeYear?.endDate?.trim() ?? '';
+    if (configuredStart && configuredEnd && configuredStart <= configuredEnd) {
+      return { start: configuredStart, end: configuredEnd };
+    }
+    return fallbackAcademicYearRange(year || activeYear?.year || '');
+  }, [activeYear?.endDate, activeYear?.startDate, activeYear?.year, year]);
+
+  const sessionDates = useMemo(
+    () => new Set(reportSessions.map((s) => s.date)),
+    [reportSessions],
+  );
 
   useEffect(() => {
     setOptimisticSession(null);
-  }, [selectedClassId]);
+    setEditMode(false);
+    setStudentRows([]);
+    setSaveError(null);
+  }, [selectedClassId, selectedDateStr]);
 
   useEffect(() => {
     const to = new Date();
@@ -83,57 +292,108 @@ export default function MorningRollCallPage() {
     setReportFrom(from.toISOString().slice(0, 10));
   }, []);
 
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+  const defaultReportRange = useMemo(() => {
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - 30);
+    return {
+      from: from.toISOString().slice(0, 10),
+      to: to.toISOString().slice(0, 10),
+    };
+  }, [today]);
 
+  const hasActiveReportFilter =
+    Boolean(reportFrom && reportTo) &&
+    (reportFrom !== defaultReportRange.from || reportTo !== defaultReportRange.to);
+
+  const resetReportDateFilter = () => {
+    setReportFrom(defaultReportRange.from);
+    setReportTo(defaultReportRange.to);
+  };
 
   const homeRoomClasses = useMemo(() => {
     if (!classMgr.classes || !year) return [];
     if (isAdmin) {
-      // admin/sysadmin เห็นทุกห้องเรียนในปีการศึกษานั้น
       return classMgr.classes.filter(
         (c: any) => String(c.academicYearId ?? c.academicYear ?? '') === String(year),
       );
     }
-    // homeroomTeacherId เก็บ TeacherProfile.id (Firestore doc ID) ไม่ใช่ Firebase Auth UID
-    // ต้องหา TeacherProfile ของ user ปัจจุบันก่อน แล้วเอา id มาเปรียบเทียบ
     const myProfile = classMgr.availableTeachers?.find(
       (t: any) => t.userId === user?.uid || t.id === user?.uid,
     );
     const myTeacherDocId = myProfile?.id;
 
-    return classMgr.classes.filter(
-      (c: any) => {
-        const sameYear = String(c.academicYearId ?? c.academicYear ?? '') === String(year);
-        const teacherIds: string[] = Array.isArray(c.homeroomTeacherIds) ? c.homeroomTeacherIds : [];
-        const isOwner =
-          // เปรียบเทียบด้วย TeacherProfile.id (ค่าที่บันทึกจริงใน Firestore)
-          (myTeacherDocId != null && (
-            c.homeroomTeacherId === myTeacherDocId || teacherIds.includes(myTeacherDocId)
-          )) ||
-          // fallback: กรณีที่ document ID ตรงกับ user.uid
-          c.homeroomTeacherId === user?.uid ||
-          teacherIds.includes(String(user?.uid ?? ''));
-        return sameYear && isOwner;
-      },
-    );
+    return classMgr.classes.filter((c: any) => {
+      const sameYear = String(c.academicYearId ?? c.academicYear ?? '') === String(year);
+      const teacherIds: string[] = Array.isArray(c.homeroomTeacherIds) ? c.homeroomTeacherIds : [];
+      const isOwner =
+        (myTeacherDocId != null && (
+          c.homeroomTeacherId === myTeacherDocId || teacherIds.includes(myTeacherDocId)
+        )) ||
+        c.homeroomTeacherId === user?.uid ||
+        teacherIds.includes(String(user?.uid ?? ''));
+      return sameYear && isOwner;
+    });
   }, [classMgr.classes, classMgr.availableTeachers, user?.uid, year, isAdmin]);
 
-  const filteredHomeRoomClasses = useMemo(() => {
-    if (filterDept === 'all') return homeRoomClasses;
-    return homeRoomClasses.filter((c: any) => (c.departmentId as Department) === filterDept);
+  const sidebarGradeOptions = useMemo(() => {
+    if (filterDept === 'all') return [] as string[];
+    const grades = new Set<string>();
+    homeRoomClasses.forEach((c: any) => {
+      if (c.departmentId === filterDept && c.gradeLevel) grades.add(String(c.gradeLevel));
+    });
+    return Array.from(grades).sort(
+      (a, b) => (GRADE_LEVEL_ORDER[a] ?? 99) - (GRADE_LEVEL_ORDER[b] ?? 99),
+    );
   }, [homeRoomClasses, filterDept]);
 
-  const selectedClass = useMemo(
-    () => classMgr.classes?.find((c: any) => c.id === selectedClassId),
-    [classMgr.classes, selectedClassId],
-  );
-  const selectedClassCard = useMemo(
-    () => classMgr.classCards?.find((card: any) => card.classRoom?.id === selectedClassId),
-    [classMgr.classCards, selectedClassId],
-  );
+  const sidebarClassOptions = useMemo(() => {
+    if (filterDept === 'all' || !filterGradeLevel) return [] as ClassRoom[];
+    return homeRoomClasses
+      .filter(
+        (c: any) => c.departmentId === filterDept && c.gradeLevel === filterGradeLevel,
+      )
+      .slice()
+      .sort((a: any, b: any) =>
+        String(a.roomNumber || a.className).localeCompare(
+          String(b.roomNumber || b.className),
+          undefined,
+          { numeric: true },
+        ),
+      ) as ClassRoom[];
+  }, [homeRoomClasses, filterDept, filterGradeLevel]);
+
+  const selectClassForRollCall = (id: string) => {
+    const cls = homeRoomClasses.find((c: any) => c.id === id) as ClassRoom | undefined;
+    if (cls?.departmentId === 'early' || cls?.departmentId === 'primary' || cls?.departmentId === 'secondary') {
+      setFilterDept(cls.departmentId);
+    }
+    if (cls?.gradeLevel) setFilterGradeLevel(String(cls.gradeLevel));
+    setSelectedClassId(id);
+    setIsLoadingReport(true);
+    setActiveTab('rollcall');
+    setEditMode(false);
+    setStudentRows([]);
+    setSelectedDateStr(null);
+    setDayDrawerOpen(false);
+  };
+
+  const handleSidebarSelectDept = (dept: Department) => {
+    setFilterDept(dept);
+    setFilterGradeLevel('');
+    setSelectedClassId(null);
+    setSelectedDateStr(null);
+    setDayDrawerOpen(false);
+    setActiveTab('rollcall');
+  };
+
+  const handleSidebarSelectGrade = (grade: string) => {
+    setFilterGradeLevel(grade);
+    setSelectedClassId(null);
+    setSelectedDateStr(null);
+    setDayDrawerOpen(false);
+    setActiveTab('rollcall');
+  };
 
   const students = useMemo<StudentRowData[]>(() => {
     if (!selectedClass || !year) return [];
@@ -163,21 +423,20 @@ export default function MorningRollCallPage() {
       });
   }, [selectedClass, year, classStudents]);
 
+  const leaveDate = rollCallDate ?? today;
   const studentsWithLeave = useMemo(
-    () => applyApprovedLeaveToMorningRollCallRows(students, classStudents, leaveRequests, today),
-    [students, classStudents, leaveRequests, today],
+    () => applyApprovedLeaveToMorningRollCallRows(students, classStudents, leaveRequests, leaveDate),
+    [students, classStudents, leaveRequests, leaveDate],
   );
 
   useEffect(() => {
-    if (!selectedClassId) return;
-    // existingSession is undefined while the query is loading — don't reset yet
+    if (!selectedClassId || !rollCallDate) return;
     if (existingSession === undefined) return;
     if (!existingSession && loadingClassStudents) return;
     if (existingSession) {
       if (!editMode) return;
-      // Initialize with existing session data when entering editMode
       const initialRows = existingSession.attendance.map((a, idx) => {
-        const studentInfo = students.find(s => s.studentId === a.studentId);
+        const studentInfo = students.find((s) => s.studentId === a.studentId);
         return {
           ...a,
           enrollmentIndex: idx,
@@ -187,81 +446,67 @@ export default function MorningRollCallPage() {
       });
       setStudentRows(initialRows);
     } else {
-      // Only initialize if user hasn't started marking yet, to prevent resetting marks
-      // when the query resolves after the user has already begun interacting.
-      setStudentRows(prev => prev.length === 0 ? studentsWithLeave : prev);
+      setStudentRows((prev) => (prev.length === 0 ? studentsWithLeave : prev));
     }
-  }, [selectedClassId, studentsWithLeave, existingSession, editMode, loadingClassStudents]);
+  }, [selectedClassId, rollCallDate, studentsWithLeave, existingSession, editMode, loadingClassStudents, students]);
 
   useEffect(() => {
-    if (!selectedClassId || existingSession || editMode) return;
+    if (!selectedClassId || !rollCallDate || existingSession || editMode) return;
     setStudentRows((prev) => {
       if (prev.length === 0) return studentsWithLeave;
-      return applyApprovedLeaveToMorningRollCallRows(prev, classStudents, leaveRequests, today);
+      return applyApprovedLeaveToMorningRollCallRows(prev, classStudents, leaveRequests, leaveDate);
     });
-  }, [leaveRequests, today, classStudents, selectedClassId, existingSession, editMode, studentsWithLeave]);
+  }, [leaveRequests, leaveDate, classStudents, selectedClassId, rollCallDate, existingSession, editMode, studentsWithLeave]);
 
-  // Initialize rows when students change or existing session is loaded
   const rowsToUse = useMemo<StudentRowData[]>(() => {
     let rows: StudentRowData[];
 
     if (existingSession && !editMode) {
-      rows = existingSession.attendance.map((a, idx) => {
-        const studentInfo = students.find(s => s.studentId === a.studentId);
-        return {
-          ...a,
-          enrollmentIndex: idx,
-          photoURL: a.photoURL || studentInfo?.photoURL,
-          gender: a.gender || studentInfo?.gender,
-        };
-      }).filter(row => Boolean((row.studentName || '').trim() || (row.studentCode || '').trim()));
+      rows = existingSession.attendance
+        .map((a, idx) => {
+          const studentInfo = students.find((s) => s.studentId === a.studentId);
+          return {
+            ...a,
+            enrollmentIndex: idx,
+            photoURL: a.photoURL || studentInfo?.photoURL,
+            gender: a.gender || studentInfo?.gender,
+          };
+        })
+        .filter((row) => Boolean((row.studentName || '').trim() || (row.studentCode || '').trim()));
     } else if (studentRows.length === 0 && studentsWithLeave.length > 0) {
       rows = studentsWithLeave;
     } else {
-      rows = studentRows.filter(row => Boolean((row.studentName || '').trim() || (row.studentCode || '').trim()));
+      rows = studentRows.filter((row) =>
+        Boolean((row.studentName || '').trim() || (row.studentCode || '').trim()),
+      );
     }
 
-    return applyApprovedLeaveToMorningRollCallRows(rows, classStudents, leaveRequests, today);
-  }, [studentRows, students, studentsWithLeave, classStudents, leaveRequests, today, existingSession, editMode]);
+    return applyApprovedLeaveToMorningRollCallRows(rows, classStudents, leaveRequests, leaveDate);
+  }, [studentRows, students, studentsWithLeave, classStudents, leaveRequests, leaveDate, existingSession, editMode]);
 
-  const summary = useMemo(() => {
-    const rows = rowsToUse;
-    return {
-      present: rows.filter(r => r.status === 'present').length,
-      absent: rows.filter(r => r.status === 'absent').length,
-      late: rows.filter(r => r.status === 'late').length,
-      leave: rows.filter(r => r.status === 'leave').length,
-      total: rows.length,
-    };
-  }, [rowsToUse]);
-
-  const homeroomTeacherName = useMemo(() => {
-    if (!selectedClass) return 'ไม่ระบุครูประจำชั้น';
-    const cls = selectedClass as any;
-    const fromCard = selectedClassCard?.homeroomTeacher?.name;
-    return (
-      fromCard
-      || cls.homeroomTeacherName
-      || cls.homeroomTeacherDisplayName
-      || cls.teacherName
-      || cls.homeroomTeacher
-      || cls.advisorName
-      || 'ไม่ระบุครูประจำชั้น'
-    );
-  }, [selectedClass, selectedClassCard]);
-  const isAllPresent = useMemo(() => {
-    return rowsToUse.length > 0 && rowsToUse.every(r => r.status === 'present');
-  }, [rowsToUse]);
-
-  const isReadyToSubmit = useMemo(() => {
-    return rowsToUse.length > 0 && rowsToUse.every(r => r.status !== 'unmarked');
-  }, [rowsToUse]);
+  const isAllPresent = useMemo(
+    () => rowsToUse.length > 0 && rowsToUse.every((r) => r.status === 'present'),
+    [rowsToUse],
+  );
 
   const handleToggleAllPresent = () => {
     if (isRollCallLocked) return;
     const targetStatus: RollCallStatus = isAllPresent ? 'unmarked' : 'present';
-    const updated = rowsToUse.map(r => ({ ...r, status: targetStatus }));
-    setStudentRows(updated);
+    setStudentRows(rowsToUse.map((r) => ({ ...r, status: targetStatus })));
+  };
+
+  const handleSelectDay = (day: Date) => {
+    const dateStr = toDateStr(day);
+    setSelectedDateStr(dateStr);
+    setDayDrawerOpen(true);
+  };
+
+  const handleDayDrawerOpenChange = (open: boolean) => {
+    setDayDrawerOpen(open);
+    if (!open) {
+      setEditMode(false);
+      setSaveError(null);
+    }
   };
 
   useEffect(() => {
@@ -281,8 +526,44 @@ export default function MorningRollCallPage() {
       }
     };
     void loadReportSessions();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [selectedClassId, year, showSuccessModal]);
+
+  // ปุ่มกลับ header → รายงานกลับปฏิทิน / ปฏิทินกลับเลือกรูม
+  useEffect(() => {
+    if (!selectedClassId) return;
+
+    const isPortalBackButton = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      const btn = target.closest('button');
+      if (!btn) return false;
+      if (btn.id === 'portal-default-mobile-back') return true;
+      const title = btn.getAttribute('title') ?? '';
+      const label = btn.getAttribute('aria-label') ?? '';
+      return title === 'กลับไปเมนู' || title === 'กลับเมนู' || label === 'กลับไปเมนู';
+    };
+
+    const onClick = (e: MouseEvent) => {
+      if (!isPortalBackButton(e.target)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (activeTab === 'report') {
+        setActiveTab('rollcall');
+        setReportFilterOpen(false);
+        return;
+      }
+      setSelectedClassId(null);
+      setEditMode(false);
+      setDayDrawerOpen(false);
+      setSelectedDateStr(null);
+      setActiveTab('rollcall');
+    };
+
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [selectedClassId, activeTab]);
 
   const filteredReportSessions = useMemo(() => {
     const from = reportFrom || '0000-01-01';
@@ -291,18 +572,21 @@ export default function MorningRollCallPage() {
   }, [reportSessions, reportFrom, reportTo]);
 
   const reportStudentSummaries = useMemo(() => {
-    const map = new Map<string, {
-      studentId: string;
-      studentName: string;
-      studentCode: string;
-      photoURL?: string;
-      gender?: 'male' | 'female';
-      present: number;
-      absent: number;
-      late: number;
-      leave: number;
-      total: number;
-    }>();
+    const map = new Map<
+      string,
+      {
+        studentId: string;
+        studentName: string;
+        studentCode: string;
+        photoURL?: string;
+        gender?: 'male' | 'female';
+        present: number;
+        absent: number;
+        late: number;
+        leave: number;
+        total: number;
+      }
+    >();
 
     filteredReportSessions.forEach((session) => {
       session.attendance.forEach((student) => {
@@ -333,10 +617,72 @@ export default function MorningRollCallPage() {
     return Array.from(map.values()).sort((a, b) => a.studentName.localeCompare(b.studentName, 'th'));
   }, [filteredReportSessions]);
 
-  if (!isLoaded) {
+  const doSave = () => {
+    if (!selectedClass || !year || activeSemester == null || !rollCallDate) return;
+    if (!isDateEditable) {
+      setSaveError(
+        rollCallDate > today
+          ? 'ยังไม่ถึงวัน ไม่สามารถเช็กชื่อเข้าแถวได้'
+          : rollCallDate < today
+            ? 'วันที่ผ่านมาแล้ว สามารถดูได้อย่างเดียว'
+            : isInterSemesterBreakDay
+              ? 'ช่วงปิดระหว่างเทอม ไม่สามารถเช็กชื่อเข้าแถวได้'
+              : isWeekend
+                ? 'วันนี้เป็นวันหยุดสุดสัปดาห์ ไม่สามารถเช็กชื่อเข้าแถวได้'
+                : `วันนี้เป็นวันหยุด${holidayTitle ? ` (${holidayTitle})` : ''} ไม่สามารถเช็กชื่อเข้าแถวได้`,
+      );
+      return;
+    }
+    if (existingSession && !editMode) {
+      setEditMode(true);
+      return;
+    }
+    const unmarkedStudents = rowsToUse.filter((r) => r.status === 'unmarked');
+    if (unmarkedStudents.length > 0) {
+      setShowWarningModal(true);
+      return;
+    }
+    setSaveError(null);
+    saveRollCall(
+      {
+        date: rollCallDate,
+        classId: selectedClass.id,
+        className: selectedClass.className,
+        departmentId: selectedClass.departmentId?.toString() || '',
+        academicYearId: year,
+        semester: activeSemester as 1 | 2,
+        recordedBy: user?.uid || '',
+        recordedByName: userData?.displayName || '',
+        attendance: rowsToUse,
+      },
+      {
+        onSuccess: (savedSession) => {
+          setOptimisticSession(savedSession);
+          setEditMode(false);
+          setShowSuccessModal(true);
+        },
+        onError: (err) => {
+          setSaveError(err instanceof Error ? err.message : 'บันทึกข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+        },
+      },
+    );
+  };
+
+  if (isPageLoading) {
     return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-slate-400 text-sm">กำลังโหลดข้อมูล...</div>
+      <div
+        className={cn(
+          'relative flex min-h-0 w-full flex-1 basis-0 flex-col overflow-hidden bg-transparent font-sukhumvit',
+          'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+        )}
+      >
+        <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
+          <div className="absolute -top-24 -left-16 w-72 h-72 rounded-full bg-sky-200/45 blur-3xl" />
+          <div className="absolute top-24 -right-20 w-80 h-80 rounded-full bg-cyan-200/40 blur-3xl" />
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-2 md:px-6">
+          <ClassPickerSkeleton />
+        </div>
       </div>
     );
   }
@@ -367,635 +713,420 @@ export default function MorningRollCallPage() {
     );
   }
 
-  const isReadOnly = existingSession && !editMode;
-  const isRollCallLocked = Boolean(isReadOnly || isRollCallBlocked);
+  const selectedDateLabel = selectedDateStr
+    ? toThaiFullDate(new Date(`${selectedDateStr}T12:00:00`))
+    : '';
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-transparent relative">
+    <div
+      className={cn(
+        'relative flex min-h-0 w-full flex-1 basis-0 flex-col overflow-hidden bg-transparent font-sukhumvit',
+        'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+      )}
+    >
       <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
         <div className="absolute -top-24 -left-16 w-72 h-72 rounded-full bg-sky-200/45 blur-3xl" />
         <div className="absolute top-24 -right-20 w-80 h-80 rounded-full bg-cyan-200/40 blur-3xl" />
       </div>
-      {headerRightPortalEl && !selectedClassId &&
-        createPortal(
-          <NativeSelect
-            value={filterDept}
-            onChange={(e) => setFilterDept(e.target.value as Department | 'all')}
-            aria-label="เลือกระดับชั้น"
-            className="pointer-events-auto min-w-[140px] w-auto [&_select]:h-9 [&_select]:rounded-xl [&_select]:border [&_select]:border-white [&_select]:bg-white/70 [&_select]:px-3 [&_select]:text-xs [&_select]:font-black [&_select]:text-slate-700"
-          >
-            <NativeSelectOption value="all">ทั้งหมด</NativeSelectOption>
-            {(['early', 'primary', 'secondary'] as Department[]).map((dept) => (
-              <NativeSelectOption key={dept} value={dept}>
-                {DEPARTMENT_CONFIG[dept].label}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>,
-          headerRightPortalEl,
-        )}
-      <div className="flex-1 overflow-y-auto flex flex-col">
-        {/* Class Selection Dropdown */}
-        {!selectedClassId && (
-          <div className="flex-1 pb-4 min-h-0">
-            <NativeSelect
-              value={filterDept}
-              onChange={(e) => setFilterDept(e.target.value as Department | 'all')}
-              aria-label="เลือกระดับชั้น"
-              className="lg:hidden mb-3 w-full [&_select]:h-9 [&_select]:rounded-xl [&_select]:border [&_select]:border-white [&_select]:bg-white/70 [&_select]:px-3 [&_select]:text-xs [&_select]:font-black [&_select]:text-slate-700"
-            >
-              <NativeSelectOption value="all">ทั้งหมด</NativeSelectOption>
-              {(['early', 'primary', 'secondary'] as Department[]).map((dept) => (
-                <NativeSelectOption key={dept} value={dept}>
-                  {DEPARTMENT_CONFIG[dept].label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-              {filteredHomeRoomClasses.map((cls: any) => {
-                const cardTeacher = classMgr.classCards?.find((card: any) => card.classRoom?.id === cls.id)?.homeroomTeacher;
-                const teacherRawName = cardTeacher?.name || 'ไม่ระบุครู';
-                const teacherName = stripThaiPrefix(teacherRawName);
-                const teacherInitial = teacherName.trim().charAt(0) || '?';
-                const formattedClassCode = cls.className
-                  .replace(/^ม\./, 'M')
-                  .replace('/', '-')
-                  .replace(/\s/g, '');
+      {selectedClassId && activeTab === 'rollcall' && (
+        <>
+          {headerRightPortalEl &&
+            createPortal(
+              <button
+                type="button"
+                onClick={() => setActiveTab('report')}
+                className={HEADER_ICON_BTN}
+                title="ดูรายงานการเช็กชื่อ"
+                aria-label="ดูรายงานการเช็กชื่อ"
+              >
+                <HiOutlineDocumentText size={16} />
+              </button>,
+              headerRightPortalEl,
+            )}
+          {headerMobileActionsEl &&
+            createPortal(
+              <button
+                type="button"
+                onClick={() => setActiveTab('report')}
+                className={HEADER_ICON_BTN}
+                title="ดูรายงานการเช็กชื่อ"
+                aria-label="ดูรายงานการเช็กชื่อ"
+              >
+                <HiOutlineDocumentText size={16} />
+              </button>,
+              headerMobileActionsEl,
+            )}
+        </>
+      )}
+      {selectedClassId && activeTab === 'report' && (
+        <>
+          {headerRightPortalEl &&
+            createPortal(
+              <ExamMobileFilterTriggerButton
+                onClick={() => setReportFilterOpen(true)}
+                hasActiveFilters={hasActiveReportFilter}
+              />,
+              headerRightPortalEl,
+            )}
+          {headerMobileActionsEl &&
+            createPortal(
+              <ExamMobileFilterTriggerButton
+                onClick={() => setReportFilterOpen(true)}
+                hasActiveFilters={hasActiveReportFilter}
+              />,
+              headerMobileActionsEl,
+            )}
+        </>
+      )}
+      <div className="flex min-h-0 flex-1 basis-0 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+        <div
+          className={cn(
+            'flex h-full min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden',
+            sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+            selectedClassId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+          )}
+        >
+          <GradeBookClassSidebar
+            selectedDept={filterDept === 'all' ? '' : filterDept}
+            selectedGrade={filterGradeLevel}
+            selectedClassId={selectedClassId ?? ''}
+            gradeOptions={sidebarGradeOptions}
+            classOptions={sidebarClassOptions}
+            onSelectDept={handleSidebarSelectDept}
+            onSelectGrade={handleSidebarSelectGrade}
+            onSelectClass={selectClassForRollCall}
+            collapsed={sidebarCollapsed}
+            headerAction={(
+              <SidebarCollapseButton
+                collapsed={sidebarCollapsed}
+                onToggle={() => setSidebarCollapsed((v) => !v)}
+              />
+            )}
+          />
+        </div>
 
-                return (
-                  <motion.button
-                    key={cls.id}
-                    whileHover={{ opacity: 0.95 }}
-                    whileTap={{ scale: 0.96 }}
-                    transition={{ type: 'spring', stiffness: 380, damping: 26 }}
-                    onClick={() => {
-                      setSelectedClassId(cls.id);
-                      setActiveTab('rollcall');
-                      setEditMode(false);
-                      setStudentRows([]);
-                    }}
-                    className="group relative w-full h-[110px] sm:h-[120px] lg:aspect-square overflow-hidden text-left"
-                    style={{
-                      borderRadius: 16,
-                      backgroundColor: SOLID_CLASS_CARD_COLOR,
-                    }}
-                  >
-                    <div className="absolute top-4 left-4 right-4">
-                      <span className="block w-full text-left text-[26px] sm:text-[30px] font-black tracking-tight leading-none text-white">
-                        {formattedClassCode}
-                      </span>
-                    </div>
-                    <div className="absolute bottom-2 right-2 flex items-center gap-2 pointer-events-none">
-                      <span className="text-[11px] font-semibold text-white text-right leading-tight whitespace-normal">
-                        {teacherName}
-                      </span>
-                      <div className="w-9 h-9 rounded-full overflow-hidden border border-white/70 bg-white/20 flex items-center justify-center">
-                        {cardTeacher?.photoURL ? (
-                          <img src={cardTeacher.photoURL} alt={teacherName} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-[11px] font-bold text-white">
-                            {teacherInitial}
+        <div
+          className={cn(
+            'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            !selectedClassId && 'hidden lg:flex',
+          )}
+        >
+          {!selectedClassId ? (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+              <HiHomeModern className="h-8 w-8 text-muted-foreground/40" />
+              <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
+                {filterDept === 'all'
+                  ? 'เลือกแผนกจากแถบด้านซ้าย'
+                  : !filterGradeLevel
+                    ? 'เลือกระดับชั้นเพื่อดูห้องเรียน'
+                    : 'เลือกห้องเรียนเพื่อเช็กชื่อเข้าแถว'}
+              </p>
+            </div>
+          ) : null}
+
+          {selectedClassId && selectedClass && (
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden pb-4">
+              {activeTab === 'rollcall' ? (
+                isLoadingReport ? (
+                  <MonthCalendarSkeleton />
+                ) : (
+                  <MorningRollCallMonthCalendar
+                    className="min-h-0 flex-1"
+                    sessionDates={sessionDates}
+                    rangeStart={academicYearRange.start}
+                    rangeEnd={academicYearRange.end}
+                    todayDate={today}
+                    interSemesterBreak={interSemesterBreak}
+                    onSelectDay={handleSelectDay}
+                  />
+                )
+              ) : (
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  {reportFrom && reportTo && (
+                    <p className="mb-2 px-0.5 text-[11px] font-bold text-slate-500">
+                      ช่วงวันที่ {formatThaiDateRangeFromIso(reportFrom, reportTo)}
+                    </p>
+                  )}
+                  {isLoadingReport ? (
+                    <ReportListSkeleton />
+                  ) : (
+                  <div className="space-y-2">
+                    {reportStudentSummaries.map((student) => (
+                      <div
+                        key={student.studentId || `${student.studentName}-${student.studentCode}`}
+                        className="rounded-xl border border-slate-100 bg-white/70 px-3 py-2.5"
+                      >
+                        <div className="flex items-center gap-2">
+                          <StudentAvatar
+                            photoURL={student.photoURL}
+                            studentId={student.studentId}
+                            name={student.studentName}
+                            gender={student.gender}
+                            className="h-8 w-8 shrink-0 rounded-lg"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[12px] font-semibold text-slate-800">
+                              {student.studentName}
+                            </p>
+                            <p className="truncate text-[10px] text-slate-500">{student.studentCode}</p>
                           </div>
-                        )}
+                        </div>
+
+                        <div className="mt-2 grid grid-cols-4 gap-1.5">
+                          <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1">
+                            <p className="text-[10px] font-bold text-emerald-700">มา</p>
+                            <p className="mt-1 text-sm leading-none font-black text-emerald-700">
+                              {student.present}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-rose-100 bg-rose-50 px-2 py-1">
+                            <p className="text-[10px] font-bold text-rose-700">ขาด</p>
+                            <p className="mt-1 text-sm leading-none font-black text-rose-700">
+                              {student.absent}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-amber-100 bg-amber-50 px-2 py-1">
+                            <p className="text-[10px] font-bold text-amber-700">สาย</p>
+                            <p className="mt-1 text-sm leading-none font-black text-amber-700">
+                              {student.late}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-blue-100 bg-blue-50 px-2 py-1">
+                            <p className="text-[10px] font-bold text-blue-700">ลา</p>
+                            <p className="mt-1 text-sm leading-none font-black text-blue-700">
+                              {student.leave}
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </motion.button>
-                );
-              })}
+                    ))}
+                    {!isLoadingReport && reportStudentSummaries.length === 0 && (
+                      <p className="text-xs text-slate-400">ไม่พบข้อมูลในช่วงวันที่ที่เลือก</p>
+                    )}
+                  </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+
+      <ExamMobileFilterDrawer
+        open={reportFilterOpen}
+        onOpenChange={setReportFilterOpen}
+        title="ตัวกรองรายงาน"
+        footer={
+          <div className="flex w-full flex-col gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-10 w-full rounded-xl text-xs font-bold"
+              onClick={resetReportDateFilter}
+            >
+              ล้างตัวกรอง
+            </Button>
+            <Button
+              type="button"
+              className="h-10 w-full rounded-xl font-bold"
+              onClick={() => setReportFilterOpen(false)}
+            >
+              แสดงผล
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4 px-1">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="pl-1 text-[10px] font-black uppercase tracking-wider text-slate-600">
+                ตั้งแต่วันที่
+              </label>
+              <Input
+                type="date"
+                value={reportFrom}
+                onChange={(e) => setReportFrom(e.target.value)}
+                className="h-10 rounded-xl border-none bg-slate-50/70 px-4 text-xs font-bold focus-visible:bg-slate-50/90 focus-visible:ring-2 focus-visible:ring-slate-900/20"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="pl-1 text-[10px] font-black uppercase tracking-wider text-slate-600">
+                ถึงวันที่
+              </label>
+              <Input
+                type="date"
+                value={reportTo}
+                onChange={(e) => setReportTo(e.target.value)}
+                className="h-10 rounded-xl border-none bg-slate-50/70 px-4 text-xs font-bold focus-visible:bg-slate-50/90 focus-visible:ring-2 focus-visible:ring-slate-900/20"
+              />
             </div>
           </div>
-        )}
+        </div>
+      </ExamMobileFilterDrawer>
 
-        {/* Roll Call Section */}
-        {selectedClassId && selectedClass && (
-          <div className="flex-1 flex flex-col pb-4 gap-4 min-h-0">
-            {activeTab === 'rollcall' ? (
-              <>
-            {/* Desktop Class Info & Summary */}
-            <div className="hidden md:flex bg-white/35 rounded-2xl p-3.5 border border-white/40 backdrop-blur-md flex-shrink-0 items-center justify-between gap-4">
-              {/* Left Group */}
-              <div className="flex items-center gap-3">
-                {/* Back Button */}
-                <button
-                  onClick={() => {
-                    setSelectedClassId(null);
-                    setEditMode(false);
-                  }}
-                  className="w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all text-slate-600 cursor-pointer"
-                  title="เปลี่ยนห้องเรียน"
-                >
-                  <ArrowLeft size={16} />
-                </button>
-
-                <div className="flex flex-col">
-                  <p className="text-[28px] leading-none font-semibold text-slate-800">
-                    {selectedClass.className}
-                  </p>
-                  <p className="text-[11px] text-slate-500 leading-tight mt-1.5">
-                    ครูประจำชั้น: {homeroomTeacherName}
-                  </p>
-                </div>
-
-                {/* Checkbox มาทั้งหมด */}
+      <Drawer open={dayDrawerOpen} onOpenChange={handleDayDrawerOpenChange} direction="right">
+        <DrawerContent className={DRAWER_CONTENT_CLASS}>
+          <div className={DRAWER_PANEL_CLASS}>
+            <DrawerHeader className="shrink-0 px-4 pb-2 pt-4">
+              <div className="relative flex min-h-10 items-center justify-center">
                 {!isRollCallLocked && (
-                  <label
-                    className="w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all cursor-pointer select-none shrink-0"
-                    title="เช็กมาเรียนทุกคน"
-                  >
+                  <label className="absolute left-0 top-1/2 inline-flex -translate-y-1/2 cursor-pointer items-center gap-2 select-none">
                     <input
                       type="checkbox"
                       checked={isAllPresent}
                       onChange={handleToggleAllPresent}
-                      className="w-3.5 h-3.5 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
+                      className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                     />
+                    <span className="text-[11px] font-black text-slate-700">เช็กทั้งหมด</span>
                   </label>
                 )}
-
-                {/* View Report Button */}
-                <button
-                  onClick={() => setActiveTab('report')}
-                  className="h-9 pl-2.5 pr-3 rounded-full bg-white shadow-sm flex items-center gap-1.5 border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all text-slate-600 cursor-pointer shrink-0"
-                  title="ดูรายงานการเช็กชื่อ"
-                >
-                  <FileText size={15} />
-                  <span className="text-xs font-bold">ดูรายงาน</span>
-                </button>
-              </div>
-
-              {/* Right Group: Summary Chips */}
-              {!isRollCallLocked && (
-              <div className="flex items-center gap-4">
-                <div className="h-[78px] px-1 py-1 flex flex-col justify-center min-w-[132px]">
-                  <p className="text-[28px] leading-none font-semibold text-slate-800">
-                    {now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                  <p className="text-[12px] text-slate-500 mt-1">
-                    {now.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}
-                  </p>
-                </div>
-                <div className="w-px h-12 bg-slate-300/60" />
-
-                {(() => {
-                  const total = Math.max(summary.total, 1);
-                  const presentDeg = (summary.present / total) * 360;
-                  const lateDeg = (summary.late / total) * 360;
-                  const leaveDeg = (summary.leave / total) * 360;
-                  const absentDeg = (summary.absent / total) * 360;
-
-                  const ringBg = (deg: number, color: string) =>
-                    `conic-gradient(${color} 0deg ${deg}deg, rgba(148,163,184,0.18) ${deg}deg 360deg)`;
-
-                  return (
-                <div className="h-[78px] px-1 py-1 flex items-stretch gap-3">
-                  <div className="grid grid-cols-5 divide-x divide-slate-200/80">
-                    {[
-                      { key: 'total', label: 'รวม', count: summary.total, color: 'text-slate-500', numberColor: 'text-slate-700' },
-                      { key: 'present', label: 'มา', count: summary.present, color: 'text-emerald-600', numberColor: 'text-emerald-700' },
-                      { key: 'absent', label: 'ขาด', count: summary.absent, color: 'text-rose-600', numberColor: 'text-rose-700' },
-                      { key: 'late', label: 'สาย', count: summary.late, color: 'text-amber-600', numberColor: 'text-amber-700' },
-                      { key: 'leave', label: 'ลา', count: summary.leave, color: 'text-violet-600', numberColor: 'text-violet-700' },
-                    ].map((item) => (
-                      <div key={item.key} className="px-3 min-w-[78px] flex flex-col justify-center">
-                        <p className={`text-[12px] font-bold leading-none ${item.color}`}>{item.label}</p>
-                        <div className="mt-1 flex items-end gap-1">
-                          <span className={`text-[32px] leading-none font-semibold ${item.numberColor}`}>{item.count}</span>
-                          <span className="text-[10px] leading-none text-slate-400 mb-1">คน</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="w-16 h-16 self-center relative shrink-0">
-                    <div className="absolute inset-0 rounded-full" style={{ background: ringBg(presentDeg, '#10b981') }} />
-                    <div className="absolute inset-[5px] rounded-full bg-white" />
-
-                    <div className="absolute inset-[5px] rounded-full" style={{ background: ringBg(lateDeg, '#f59e0b') }} />
-                    <div className="absolute inset-[10px] rounded-full bg-white" />
-
-                    <div className="absolute inset-[10px] rounded-full" style={{ background: ringBg(leaveDeg, '#8b5cf6') }} />
-                    <div className="absolute inset-[15px] rounded-full bg-white" />
-
-                    <div className="absolute inset-[15px] rounded-full" style={{ background: ringBg(absentDeg, '#f43f5e') }} />
-                    <div className="absolute inset-[20px] rounded-full bg-white/70" />
-                  </div>
-                </div>
-                  );
-                })()}
-
-                {/* Edit Button if read-only */}
-                {existingSession && !editMode && !isRollCallBlocked && (
+                {isDateEditable && existingSession && !editMode && (
                   <button
+                    type="button"
                     onClick={() => setEditMode(true)}
-                    className="ml-2 w-9 h-9 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100 hover:bg-slate-50 active:scale-95 transition-all text-slate-600 cursor-pointer shrink-0"
-                    title="แก้ไข"
+                    className="absolute left-0 top-1/2 inline-flex -translate-y-1/2 items-center gap-1.5 text-[11px] font-black text-blue-600 transition-colors hover:text-blue-700"
                   >
-                    <Edit2 size={14} />
+                    <HiPencilSquare className="h-4 w-4" />
+                    แก้ไข
                   </button>
                 )}
-              </div>
-              )}
-            </div>
-
-            {/* Mobile Class Info & Summary */}
-            <div className="md:hidden flex-shrink-0 rounded-[24px] border border-slate-100 bg-white p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setSelectedClassId(null);
-                      setEditMode(false);
-                    }}
-                    className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-200 hover:bg-slate-50 text-slate-600 cursor-pointer transition-all active:scale-95 shrink-0"
-                    title="เปลี่ยนห้องเรียน"
-                  >
-                    <ArrowLeft size={15} />
-                  </button>
-
-                  {existingSession && !editMode && !isRollCallBlocked ? (
-                    <button
-                      onClick={() => setEditMode(true)}
-                      className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-200 hover:bg-slate-50 text-slate-600 cursor-pointer transition-all active:scale-95 shrink-0"
-                      title="แก้ไข"
-                    >
-                      <Edit2 size={13} />
-                    </button>
-                  ) : (
-                    !isRollCallLocked && (
-                      <label
-                        className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-200 hover:bg-slate-50 active:scale-95 transition-all cursor-pointer select-none shrink-0"
-                        title="เช็กมาเรียนทุกคน"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isAllPresent}
-                          onChange={handleToggleAllPresent}
-                          className="w-3.5 h-3.5 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer accent-emerald-500"
-                        />
-                      </label>
-                    )
-                  )}
+                <div className="min-w-0 px-12 text-center">
+                  <DrawerTitle className="text-base font-black text-slate-800">
+                    เช็กชื่อเข้าแถว
+                  </DrawerTitle>
+                  <DrawerDescription className="truncate text-xs text-slate-500">
+                    {selectedClass?.className}
+                    {selectedDateLabel ? ` · ${selectedDateLabel}` : ''}
+                    {!isDateEditable && rollCallDate && rollCallDate < today
+                      ? ' · ดูอย่างเดียว'
+                      : !isDateEditable && rollCallDate && rollCallDate > today
+                        ? ' · ยังไม่ถึงวัน'
+                        : ''}
+                  </DrawerDescription>
+                </div>
+                <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
                   <button
                     type="button"
-                    onClick={() => setIsMobileSummaryCollapsed(prev => !prev)}
-                    className="w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm flex items-center justify-center active:scale-95 transition shrink-0"
-                    title={isMobileSummaryCollapsed ? 'แสดงสรุป' : 'หุบสรุป'}
-                    aria-label={isMobileSummaryCollapsed ? 'แสดงสรุปการมาเรียน' : 'หุบสรุปการมาเรียน'}
+                    onClick={() => handleDayDrawerOpenChange(false)}
+                    className={DRAWER_HEADER_ICON_BTN}
+                    aria-label="ปิด"
                   >
-                    {isMobileSummaryCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                    <HiXMark className="h-4 w-4" />
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('report')}
-                    className="w-8 h-8 rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm flex items-center justify-center active:scale-95 transition shrink-0"
-                    title="ดูรายงานการเช็กชื่อ"
-                    aria-label="ดูรายงานการเช็กชื่อ"
-                  >
-                    <FileText size={14} />
-                  </button>
-                </div>
-
-                <div className="text-right">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-                    Morning Roll Call
-                  </p>
-                  <p className="text-[12px] font-semibold text-slate-700">
-                    {selectedClass?.className ?? 'เช็กชื่อเข้าแถว'}
-                  </p>
                 </div>
               </div>
+            </DrawerHeader>
 
-              {!isMobileSummaryCollapsed && (
-                <>
-                <div className="mt-4 text-center">
-                  <div className="flex items-start justify-center gap-1">
-                    <span className="text-[38px] leading-none font-black text-slate-950">{summary.total}</span>
-                    <span className="mt-1 text-[11px] font-semibold text-slate-400">คน</span>
-                  </div>
-                  <p className="mt-0.5 text-sm font-semibold text-blue-600">สรุปการมาเรียน</p>
-                </div>
-
-              {(() => {
-                const total = Math.max(summary.total, 1);
-                const segments = [
-                  { key: 'present', label: 'มา', count: summary.present, color: 'bg-emerald-400', dot: 'bg-emerald-400', text: 'text-emerald-600' },
-                  { key: 'absent', label: 'ขาด', count: summary.absent, color: 'bg-rose-400', dot: 'bg-rose-400', text: 'text-rose-600' },
-                  { key: 'late', label: 'สาย', count: summary.late, color: 'bg-amber-400', dot: 'bg-amber-400', text: 'text-amber-600' },
-                  { key: 'leave', label: 'ลา', count: summary.leave, color: 'bg-violet-500', dot: 'bg-violet-500', text: 'text-violet-600' },
-                ];
-
-                return (
-                  <div className="mt-5 rounded-[24px] bg-slate-50 p-3 shadow-inner">
-                    <div className="flex h-10 gap-1 overflow-hidden rounded-xl">
-                      {segments.map((segment) => (
-                        <div
-                          key={segment.key}
-                          className={`${segment.color} min-w-[18px] rounded-2xl transition-all`}
-                          style={{ width: `${Math.max((segment.count / total) * 100, segment.count > 0 ? 12 : 8)}%` }}
-                        />
-                      ))}
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-4 gap-2">
-                      {segments.map((segment) => (
-                        <div key={segment.key} className="min-w-0">
-                          <div className="flex items-center gap-1">
-                            <span className={`w-2 h-2 rounded-full ${segment.dot}`} />
-                            <span className={`text-[11px] font-black ${segment.text}`}>{segment.label}</span>
-                          </div>
-                          <p className="mt-1 text-[15px] leading-none font-black text-slate-900">
-                            {segment.count}
-                            <span className="ml-0.5 text-[10px] font-bold text-slate-400">คน</span>
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
-                </>
-              )}
-            </div>
-
-            {/* Student List */}
-            <div className="flex-1 overflow-y-auto no-scrollbar min-h-0">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
               {loadingClassStudents && rowsToUse.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-sm font-semibold text-slate-500">
-                  กำลังโหลดรายชื่อนักเรียน...
+                <StudentRosterSkeleton />
+              ) : rowsToUse.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold text-slate-500">
+                  ไม่พบรายชื่อนักเรียนในห้องนี้
                 </div>
               ) : (
-              <AnimatePresence mode="popLayout">
-                {rowsToUse.map((row, i) => {
-                  const statusConfig = {
-                    present: {
-                      label: 'มา',
-                      activeClass: 'bg-emerald-500 text-white shadow-[0_2px_8px_rgba(16,185,129,0.3)]',
-                      inactiveClass: 'bg-emerald-50/50 text-emerald-600/80 hover:bg-emerald-100 border border-emerald-100/50',
-                      readOnlyInactiveClass: 'bg-slate-50/20 text-slate-300 border border-slate-100/30 opacity-40',
-                    },
-                    absent: {
-                      label: 'ขาด',
-                      activeClass: 'bg-rose-500 text-white shadow-[0_2px_8px_rgba(244,63,94,0.3)]',
-                      inactiveClass: 'bg-rose-50/50 text-rose-600/80 hover:bg-rose-100 border border-rose-100/50',
-                      readOnlyInactiveClass: 'bg-slate-50/20 text-slate-300 border border-slate-100/30 opacity-40',
-                    },
-                    late: {
-                      label: 'สาย',
-                      activeClass: 'bg-amber-500 text-white shadow-[0_2px_8px_rgba(245,158,11,0.3)]',
-                      inactiveClass: 'bg-amber-50/50 text-amber-600/80 hover:bg-amber-100 border border-amber-100/50',
-                      readOnlyInactiveClass: 'bg-slate-50/20 text-slate-300 border border-slate-100/30 opacity-40',
-                    },
-                    leave: {
-                      label: 'ลา',
-                      activeClass: 'bg-violet-500 text-white shadow-[0_2px_8px_rgba(139,92,246,0.3)]',
-                      inactiveClass: 'bg-violet-50/50 text-violet-600/80 hover:bg-violet-100 border border-violet-100/50',
-                      readOnlyInactiveClass: 'bg-slate-50/20 text-slate-300 border border-slate-100/30 opacity-40',
-                    },
-                  };
+                <div className="flex flex-col gap-2.5">
+                  {rowsToUse.map((row) => {
+                    const statusOption =
+                      row.status !== 'unmarked'
+                        ? ROLL_CALL_OPTIONS.find((opt) => opt.value === row.status)
+                        : null;
 
-                  const rowStatusStyle = row.status === 'present'
-                    ? 'bg-emerald-100/60 border-emerald-200'
-                    : row.status === 'absent'
-                      ? 'bg-rose-100/60 border-rose-200'
-                      : row.status === 'late'
-                        ? 'bg-amber-100/60 border-amber-200'
-                        : row.status === 'leave'
-                          ? 'bg-violet-100/60 border-violet-200'
-                          : i % 2 === 0
-                            ? 'bg-white border-slate-100 hover:bg-slate-50'
-                            : 'bg-slate-50/60 border-slate-100 hover:bg-slate-100/60';
-
-                  return (
-                    <motion.div
-                      key={`${row.studentId}-${i}`}
-                      layout
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -6 }}
-                      transition={{ delay: i * 0.01 }}
-                      className={`flex items-center justify-between py-3 px-4 rounded-xl border transition-all mb-1 ${rowStatusStyle}`}
-                    >
-                      <div className="flex-1 min-w-0 mr-3 flex items-center gap-3">
-                        <div className="hidden sm:block">
-                          <StudentAvatar
-                            photoURL={row.photoURL}
-                            studentId={row.studentId}
-                            name={row.studentName}
-                            gender={row.gender}
-                            className="w-10 h-10 rounded-xl shrink-0"
-                          />
+                    return (
+                      <div
+                        key={row.studentId}
+                        className={cn(
+                          'rounded-2xl border p-3 transition-colors duration-200',
+                          statusOption?.cardClassName ?? 'border-slate-200 bg-white',
+                        )}
+                      >
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-[13px] font-black text-slate-800">
+                              {row.studentName}
+                            </p>
+                            <p className="text-[11px] font-bold text-slate-400">{row.studentCode}</p>
+                          </div>
+                          <span
+                            className={cn(
+                              'rounded-lg px-2 py-1 text-[10px] font-black',
+                              statusOption?.badgeClassName ?? 'bg-slate-100 text-slate-500',
+                            )}
+                          >
+                            {statusOption?.label ?? 'ยังไม่เช็ก'}
+                          </span>
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-semibold text-slate-800 text-sm truncate">{row.studentName}</p>
-                          <p className="text-xs text-slate-400">{row.studentCode}</p>
+
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {ROLL_CALL_OPTIONS.map((opt) => {
+                            const isActive = row.status === opt.value;
+                            return (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                disabled={isRollCallLocked}
+                                onClick={() => {
+                                  const newStatus: RollCallStatus =
+                                    row.status === opt.value ? 'unmarked' : opt.value;
+                                  setStudentRows(
+                                    rowsToUse.map((r) =>
+                                      r.studentId === row.studentId ? { ...r, status: newStatus } : r,
+                                    ),
+                                  );
+                                }}
+                                className={cn(
+                                  'h-9 rounded-lg border text-[11px] font-black transition active:scale-[0.98]',
+                                  isActive ? opt.activeClassName : opt.className,
+                                  isRollCallLocked && 'cursor-not-allowed opacity-60',
+                                )}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
-
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {(['present', 'absent', 'late', 'leave'] as Exclude<RollCallStatus, 'unmarked'>[]).map((statusOption) => {
-                          const config = statusConfig[statusOption];
-                          const isActive = row.status === statusOption;
-                          
-                          let btnClass = '';
-                          if (isActive) {
-                            btnClass = config.activeClass;
-                          } else {
-                            btnClass = isReadOnly ? config.readOnlyInactiveClass : config.inactiveClass;
-                          }
-
-                          return (
-                            <button
-                              key={statusOption}
-                              disabled={isRollCallLocked}
-                              onClick={() => {
-                                const newStatus: RollCallStatus = row.status === statusOption ? 'unmarked' : statusOption;
-                                const updated = rowsToUse.map(r =>
-                                  r.studentId === row.studentId ? { ...r, status: newStatus } : r,
-                                );
-                                setStudentRows(updated);
-                              }}
-                              className={`w-10 h-7 rounded-full text-xs font-black transition-all flex items-center justify-center cursor-pointer ${btnClass} ${
-                                isRollCallLocked ? 'cursor-not-allowed pointer-events-none' : 'active:scale-90'
-                              }`}
-                            >
-                              {config.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
+                    );
+                  })}
+                </div>
               )}
             </div>
 
-            {/* Save Button */}
-            {!isRollCallLocked && (
-              <div className="flex-shrink-0 flex flex-col gap-2">
+            {isDateEditable && rowsToUse.length > 0 && (
+              <div className="shrink-0 space-y-2 border-t border-slate-100 bg-white px-4 pt-2 pb-4">
                 {saveError && (
-                  <div className="px-4 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-xs font-semibold flex items-center gap-2">
+                  <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-600">
                     <AlertTriangle size={14} className="shrink-0" />
                     {saveError}
                   </div>
                 )}
                 <button
+                  type="button"
                   disabled={isSaving}
-                  onClick={() => {
-                    if (existingSession && !editMode && !isRollCallBlocked) {
-                      setEditMode(true);
-                      return;
-                    }
-                    if (isRollCallBlocked) {
-                      setSaveError(
-                        isWeekend
-                          ? 'วันนี้เป็นวันหยุดสุดสัปดาห์ ไม่สามารถเช็กชื่อเข้าแถวได้'
-                          : `วันนี้เป็นวันหยุด${holidayTitle ? ` (${holidayTitle})` : ''} ไม่สามารถเช็กชื่อเข้าแถวได้`,
-                      );
-                      return;
-                    }
-                    const unmarkedStudents = rowsToUse.filter(r => r.status === 'unmarked');
-                    if (unmarkedStudents.length > 0) {
-                      setShowWarningModal(true);
-                      return;
-                    }
-                    if (!selectedClass || !year || activeSemester == null) return;
-                    setSaveError(null);
-                    saveRollCall(
-                      {
-                        date: today,
-                        classId: selectedClass.id,
-                        className: selectedClass.className,
-                        departmentId: selectedClass.departmentId?.toString() || '',
-                        academicYearId: year,
-                        semester: activeSemester as 1 | 2,
-                        recordedBy: user?.uid || '',
-                        recordedByName: userData?.displayName || '',
-                        attendance: rowsToUse,
-                      },
-                      {
-                        onSuccess: (savedSession) => {
-                          setOptimisticSession(savedSession);
-                          setEditMode(false);
-                          setShowSuccessModal(true);
-                        },
-                        onError: (err) => {
-                          setSaveError(err instanceof Error ? err.message : 'บันทึกข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
-                        },
-                      },
-                    );
-                  }}
-                  className={`w-full px-4 py-3 rounded-2xl font-black flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                  onClick={doSave}
+                  className={cn(
+                    'h-11 w-full rounded-xl text-sm font-black transition active:scale-[0.99] disabled:opacity-60',
                     existingSession && !editMode
-                      ? 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-[0_8px_18px_rgba(16,185,129,0.12)]'
-                      : isReadyToSubmit
-                        ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-[0_8px_18px_rgba(59,130,246,0.25)]'
-                        : 'bg-slate-900 text-white hover:bg-slate-700 shadow-[0_8px_18px_rgba(15,23,42,0.12)]'
-                  }`}
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                      : 'bg-slate-900 text-white hover:bg-slate-800',
+                  )}
                 >
-                  {existingSession && !editMode ? <Edit2 size={18} /> : <Save size={18} />}
-                  {existingSession && !editMode ? 'แก้ไขการเช็กชื่อ' : 'บันทึกการเช็คชื่อ'}
+                  {isSaving
+                    ? 'กำลังบันทึก...'
+                    : existingSession && !editMode
+                      ? 'แก้ไข'
+                      : `บันทึกเช็กชื่อ (${rowsToUse.length} คน)`}
                 </button>
               </div>
             )}
-              </>
-            ) : (
-              <div className="flex-1 min-h-0 flex flex-col gap-3">
-                <div className="bg-white/90 border border-slate-200 rounded-[26px] p-3 backdrop-blur-md flex flex-col gap-3 ring-1 ring-white/60">
-                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar w-full pb-1">
-                    <button
-                      onClick={() => setActiveTab('rollcall')}
-                      className="shrink-0 w-8 h-8 flex items-center justify-center rounded-xl bg-white/40 text-slate-500 hover:bg-white/70 transition-colors"
-                      title="กลับไปหน้าเช็กชื่อ"
-                      aria-label="กลับไปหน้าเช็กชื่อ"
-                    >
-                      <ArrowLeft size={14} />
-                    </button>
-                    <input
-                      type="date"
-                      value={reportFrom}
-                      onChange={(e) => setReportFrom(e.target.value)}
-                      className="flex-1 w-full min-w-[100px] h-8 rounded-xl border-none bg-slate-100 px-3 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                    />
-                    <span className="text-slate-400 text-xs px-1">ถึง</span>
-                    <input
-                      type="date"
-                      value={reportTo}
-                      onChange={(e) => setReportTo(e.target.value)}
-                      className="flex-1 w-full min-w-[100px] h-8 rounded-xl border-none bg-slate-100 px-3 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                    />
-                    <button
-                      onClick={() => {
-                        const to = new Date();
-                        const from = new Date();
-                        from.setDate(from.getDate() - 30);
-                        setReportTo(to.toISOString().slice(0, 10));
-                        setReportFrom(from.toISOString().slice(0, 10));
-                      }}
-                      className="shrink-0 w-8 h-8 ml-1 flex items-center justify-center rounded-xl bg-white/40 text-slate-500 hover:bg-white/70 transition-colors"
-                      title="ล้างตัวกรองวันที่"
-                    >
-                      <RotateCcw size={14} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex-1 min-h-0">
-                  <div className="rounded-xl bg-white/35 border border-white/40 p-3 backdrop-blur-md overflow-y-auto min-h-[280px]">
-                    <div className="space-y-2">
-                      {reportStudentSummaries.map((student) => (
-                        <div
-                          key={student.studentId || `${student.studentName}-${student.studentCode}`}
-                          className="rounded-xl border border-slate-100 bg-white/70 px-3 py-2.5"
-                        >
-                          <div className="flex items-center gap-2">
-                            <StudentAvatar
-                              photoURL={student.photoURL}
-                              studentId={student.studentId}
-                              name={student.studentName}
-                              gender={student.gender}
-                              className="w-8 h-8 rounded-lg shrink-0"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <p className="text-[12px] font-semibold text-slate-800 truncate">{student.studentName}</p>
-                              <p className="text-[10px] text-slate-500 truncate">{student.studentCode}</p>
-                            </div>
-                          </div>
-
-                          <div className="mt-2 grid grid-cols-4 gap-1.5">
-                            <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1">
-                              <p className="text-[10px] font-bold text-emerald-700">มา</p>
-                              <p className="text-sm leading-none font-black text-emerald-700 mt-1">{student.present}</p>
-                            </div>
-                            <div className="rounded-lg border border-rose-100 bg-rose-50 px-2 py-1">
-                              <p className="text-[10px] font-bold text-rose-700">ขาด</p>
-                              <p className="text-sm leading-none font-black text-rose-700 mt-1">{student.absent}</p>
-                            </div>
-                            <div className="rounded-lg border border-amber-100 bg-amber-50 px-2 py-1">
-                              <p className="text-[10px] font-bold text-amber-700">สาย</p>
-                              <p className="text-sm leading-none font-black text-amber-700 mt-1">{student.late}</p>
-                            </div>
-                            <div className="rounded-lg border border-violet-100 bg-violet-50 px-2 py-1">
-                              <p className="text-[10px] font-bold text-violet-700">ลา</p>
-                              <p className="text-sm leading-none font-black text-violet-700 mt-1">{student.leave}</p>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                      {!isLoadingReport && reportStudentSummaries.length === 0 && (
-                        <p className="text-xs text-slate-400">ไม่พบข้อมูลในช่วงวันที่ที่เลือก</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
-        )}
-      </div>
+        </DrawerContent>
+      </Drawer>
 
-      {/* Warning Modal */}
       <AnimatePresence>
         {showWarningModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            {/* Backdrop */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1003,48 +1134,41 @@ export default function MorningRollCallPage() {
               onClick={() => setShowWarningModal(false)}
               className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
             />
-            
-            {/* Modal Box */}
             <motion.div
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
               transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-              className="relative w-full max-w-sm bg-white/95 rounded-3xl p-6 shadow-2xl border border-white/20 backdrop-blur-md flex flex-col items-center text-center z-10"
+              className="relative z-10 flex w-full max-w-sm flex-col items-center rounded-3xl border border-white/20 bg-white/95 p-6 text-center shadow-2xl backdrop-blur-md"
             >
-              {/* Alert Icon */}
-              <div className="w-14 h-14 rounded-full bg-rose-50 flex items-center justify-center border border-rose-100 mb-4 text-rose-500 animate-bounce">
+              <div className="mb-4 flex h-14 w-14 animate-bounce items-center justify-center rounded-full border border-rose-100 bg-rose-50 text-rose-500">
                 <AlertTriangle size={24} />
               </div>
-              
-              {/* Heading */}
-              <h3 className="text-base font-black text-slate-800 mb-2">เช็กชื่อนักเรียนไม่ครบ</h3>
-              
-              {/* Description */}
-              <p className="text-xs text-slate-500 leading-relaxed mb-6">
-                พบนักเรียนจำนวน <span className="font-bold text-rose-500">{rowsToUse.filter(r => r.status === 'unmarked').length} คน</span> ที่ยังไม่ถูกเช็กสถานะ<br />
+              <h3 className="mb-2 text-base font-black text-slate-800">เช็กชื่อนักเรียนไม่ครบ</h3>
+              <p className="mb-6 text-xs leading-relaxed text-slate-500">
+                พบนักเรียนจำนวน{' '}
+                <span className="font-bold text-rose-500">
+                  {rowsToUse.filter((r) => r.status === 'unmarked').length} คน
+                </span>{' '}
+                ที่ยังไม่ถูกเช็กสถานะ
+                <br />
                 กรุณาตรวจสอบสถานะของนักเรียนทุกคนให้ครบถ้วนก่อนบันทึกข้อมูล
               </p>
-              
-              {/* Action Buttons */}
-              <div className="w-full flex gap-3">
-                <button
-                  onClick={() => setShowWarningModal(false)}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-slate-950 hover:bg-slate-800 text-white text-xs font-black transition cursor-pointer shadow-md shadow-slate-900/10"
-                >
-                  กลับไปตรวจสอบใหม่
-                </button>
-              </div>
+              <Button
+                type="button"
+                onClick={() => setShowWarningModal(false)}
+                className="h-10 w-full rounded-xl text-xs font-black"
+              >
+                กลับไปตรวจสอบใหม่
+              </Button>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
-      {/* Success Modal */}
       <AnimatePresence>
         {showSuccessModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            {/* Backdrop */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1052,37 +1176,29 @@ export default function MorningRollCallPage() {
               onClick={() => setShowSuccessModal(false)}
               className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
             />
-            
-            {/* Modal Box */}
             <motion.div
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
               transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-              className="relative w-full max-w-sm bg-white/95 rounded-3xl p-6 shadow-2xl border border-white/20 backdrop-blur-md flex flex-col items-center text-center z-10"
+              className="relative z-10 flex w-full max-w-sm flex-col items-center rounded-3xl border border-white/20 bg-white/95 p-6 text-center shadow-2xl backdrop-blur-md"
             >
-              {/* Success Icon */}
-              <div className="w-14 h-14 rounded-full bg-emerald-50 flex items-center justify-center border border-emerald-100 mb-4 text-emerald-500 animate-pulse">
+              <div className="mb-4 flex h-14 w-14 animate-pulse items-center justify-center rounded-full border border-emerald-100 bg-emerald-50 text-emerald-500">
                 <CheckCircle size={28} />
               </div>
-              
-              {/* Heading */}
-              <h3 className="text-base font-black text-slate-800 mb-2">บันทึกข้อมูลสำเร็จ</h3>
-              
-              {/* Description */}
-              <p className="text-xs text-slate-500 leading-relaxed mb-6">
-                ระบบได้ทำการบันทึกข้อมูลการเช็กชื่อของห้อง <span className="font-bold text-slate-700">{selectedClass?.className}</span> ประจำวันนี้เรียบร้อยแล้ว
+              <h3 className="mb-2 text-base font-black text-slate-800">บันทึกข้อมูลสำเร็จ</h3>
+              <p className="mb-6 text-xs leading-relaxed text-slate-500">
+                ระบบได้ทำการบันทึกข้อมูลการเช็กชื่อของห้อง{' '}
+                <span className="font-bold text-slate-700">{selectedClass?.className}</span>
+                {selectedDateLabel ? ` (${selectedDateLabel})` : ''} เรียบร้อยแล้ว
               </p>
-              
-              {/* Action Buttons */}
-              <div className="w-full flex gap-3">
-                <button
-                  onClick={() => setShowSuccessModal(false)}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black transition cursor-pointer shadow-md shadow-emerald-500/10"
-                >
-                  ตกลง
-                </button>
-              </div>
+              <Button
+                type="button"
+                onClick={() => setShowSuccessModal(false)}
+                className="h-10 w-full rounded-xl bg-emerald-600 text-xs font-black text-white hover:bg-emerald-700"
+              >
+                ตกลง
+              </Button>
             </motion.div>
           </div>
         )}

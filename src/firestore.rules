@@ -66,6 +66,17 @@ service cloud.firestore {
     }
 
     // ── Global Rule ──────────────────────────────────────────────────────────
+    // TODO(security): `allow read: if isAuth()` here grants read on EVERY collection to
+    // any authenticated user (student/parent included) — Firestore ORs across all matching
+    // `match` blocks, so a narrower `match /grade_records/{id}` rule below CANNOT restrict
+    // this; only editing this wildcard can. Fixing properly requires a full collection
+    // whitelist audit (grep for collection names is unreliable — several hooks store the
+    // collection name in a `COLLECTION`/`COL` constant instead of a string literal, e.g.
+    // usePaymentTransactions.ts, useStudentFees.ts, useFuturePlan.ts, useStudentFeedback.ts).
+    // Do not narrow this without a full audit + manual per-role test pass (no test runner
+    // in this repo). See: sensitive collections currently exposed include grade_records,
+    // exam_scores, staff_attendance, morning_rollcall, student_feedback (breaks 'anonymous'
+    // mode intent), logs.
     match /{document=**} {
       allow read: if isAuth();
       allow write: if canManage();

@@ -70,6 +70,21 @@ export function isAtOrAfterNoon(date: Date): boolean {
   return date.getHours() >= 12;
 }
 
+/** ถึงเวลาเลิกงาน (shiftEnd) ขึ้นไป — เปิดให้เช็คเอาต์ด้วยมือ */
+export function isAtOrAfterShiftEnd(
+  date: Date,
+  cfg: Pick<AttendanceConfig, 'shiftEndHour' | 'shiftEndMinute'> = DEFAULT_CONFIG,
+): boolean {
+  const nowMins = date.getHours() * 60 + date.getMinutes();
+  return nowMins >= cfg.shiftEndHour * 60 + cfg.shiftEndMinute;
+}
+
+export function formatShiftEndLabel(
+  cfg: Pick<AttendanceConfig, 'shiftEndHour' | 'shiftEndMinute'> = DEFAULT_CONFIG,
+): string {
+  return `${String(cfg.shiftEndHour).padStart(2, '0')}:${String(cfg.shiftEndMinute).padStart(2, '0')}`;
+}
+
 export function timestampToLocalDate(ts: unknown): Date | null {
   if (ts == null) return null;
   if (ts instanceof Date) return Number.isNaN(ts.getTime()) ? null : ts;
@@ -285,10 +300,16 @@ export async function fetchStaffAttendanceRecordsForUser(userId: string): Promis
     byDate.set(record.date, record);
   };
 
-  try {
-    const groupQ = query(collectionGroup(db, 'entries'), where('userId', '==', userId));
-    const groupSnap = await getDocs(groupQ);
-    groupSnap.docs.forEach((d) => {
+  const groupQ = query(collectionGroup(db, 'entries'), where('userId', '==', userId));
+  const legacyQ = query(collection(db, 'staff_attendance'), where('userId', '==', userId));
+  // 1.5 Promise.all — new schema + legacy in parallel
+  const [groupResult, legacyResult] = await Promise.allSettled([
+    getDocs(groupQ),
+    getDocs(legacyQ),
+  ]);
+
+  if (groupResult.status === 'fulfilled') {
+    groupResult.value.docs.forEach((d) => {
       if (d.ref.parent.parent?.parent?.id !== 'staff_attendance_by_date') return;
       const parentDate = d.ref.parent.parent?.id ?? '';
       const data = d.data() as Omit<StaffAttendanceRecord, 'id'>;
@@ -299,21 +320,17 @@ export async function fetchStaffAttendanceRecordsForUser(userId: string): Promis
         date: data.date || parentDate,
       });
     });
-  } catch (err) {
-    console.warn('[fetchStaffAttendanceRecordsForUser] collectionGroup failed, falling back to legacy only', err);
+  } else {
+    console.warn('[fetchStaffAttendanceRecordsForUser] collectionGroup failed, falling back to legacy only', groupResult.reason);
   }
 
-  try {
-    const legacyQ = query(collection(db, 'staff_attendance'), where('userId', '==', userId));
-    const legacySnap = await getDocs(legacyQ);
-    legacySnap.docs.forEach((d) => {
+  if (legacyResult.status === 'fulfilled') {
+    legacyResult.value.docs.forEach((d) => {
       const data = d.data() as Omit<StaffAttendanceRecord, 'id'>;
       if (!byDate.has(data.date)) {
         addRecord({ id: d.id, ...data });
       }
     });
-  } catch {
-    // ignore legacy read errors
   }
 
   return Array.from(byDate.values());
@@ -327,20 +344,23 @@ async function getLegacyRecordsForUserDate(
 
   const deterministicId = makeStaffAttendanceDocId(userId, date);
   const deterministicRef = doc(db, 'staff_attendance', deterministicId);
-  const deterministicSnap = await getDoc(deterministicRef);
+  const q = query(
+    collection(db, 'staff_attendance'),
+    where('userId', '==', userId),
+    where('date', '==', date),
+  );
+  // 1.5 Promise.all — deterministic doc + query together
+  const [deterministicSnap, snap] = await Promise.all([
+    getDoc(deterministicRef),
+    getDocs(q),
+  ]);
+
   if (deterministicSnap.exists()) {
     byId.set(deterministicSnap.id, {
       id: deterministicSnap.id,
       ...(deterministicSnap.data() as Omit<StaffAttendanceRecord, 'id'>),
     });
   }
-
-  const q = query(
-    collection(db, 'staff_attendance'),
-    where('userId', '==', userId),
-    where('date', '==', date),
-  );
-  const snap = await getDocs(q);
   snap.docs.forEach((d) => {
     byId.set(d.id, {
       id: d.id,
@@ -417,7 +437,9 @@ async function migrateLegacyDateRecordsToNewSchema(
 const noopSubscribe = () => () => {};
 const nullTodaySnapshot = (): StaffAttendanceRecord | null => null;
 const readySnapshot = () => true;
-const emptyCalendarEvents = (): CalendarEvent[] => [];
+// ค่าอ้างอิงเดียวคงที่ ห้ามสร้าง [] ใหม่ทุกครั้ง ไม่งั้น useSyncExternalStore วน re-render ไม่จบ
+const EMPTY_CALENDAR_EVENTS: CalendarEvent[] = [];
+const emptyCalendarEvents = () => EMPTY_CALENDAR_EVENTS;
 
 
 async function applyAutoCheckoutInternal(
@@ -455,7 +477,10 @@ export function useStaffAttendance(
   extraHolidays: CalendarEvent[] = [],
   academicYearId?: string,
   isSpecialTeacher = false,
+  /** 1.2 Defer — week history costs ~7 reads; only load when a consumer needs it */
+  options?: { loadHistory?: boolean },
 ) {
+  const loadHistory = options?.loadHistory === true;
   const [legacyRecord, setLegacyRecord] = useState<StaffAttendanceRecord | null | undefined>(undefined);
   const [history, setHistory] = useState<StaffAttendanceRecord[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
@@ -552,8 +577,12 @@ export function useStaffAttendance(
   }, [userId]);
 
   useEffect(() => {
+    if (!loadHistory) {
+      setHistory([]);
+      return;
+    }
     void reloadHistory(false);
-  }, [reloadHistory]);
+  }, [loadHistory, reloadHistory]);
 
   const baseTodayRecord = storeRecord ?? (legacyRecord === undefined ? null : legacyRecord);
 
@@ -687,7 +716,7 @@ export function useStaffAttendance(
         lng,
       }, { merge: true });
       await batch.commit();
-      await reloadHistory(true);
+      if (loadHistory) await reloadHistory(true);
     } catch (e: unknown) {
       const code = getErrorCode(e);
       if (code === 1) setError('กรุณาอนุญาตการเข้าถึงพิกัด (Location Permission)');
@@ -697,7 +726,7 @@ export function useStaffAttendance(
     } finally {
       setActionLoading(false);
     }
-  }, [userId, displayName, todayStr, config, isHoliday, holidayTitle, todayRecord, reloadHistory, isSpecialTeacher]);
+  }, [userId, displayName, todayStr, config, isHoliday, holidayTitle, todayRecord, reloadHistory, loadHistory, isSpecialTeacher]);
 
   const checkOut = useCallback(async () => {
     if (!todayRecord || !userId) return;
@@ -706,6 +735,10 @@ export function useStaffAttendance(
     try {
       if (isHoliday) {
         setError(`วันนี้เป็นวันหยุด (${holidayTitle}) ไม่สามารถลงเวลาทำงานได้`);
+        return;
+      }
+      if (!isAtOrAfterShiftEnd(new Date(), config)) {
+        setError(`ยังไม่ถึงเวลาเลิกงาน (${formatShiftEndLabel(config)}) ไม่สามารถเช็คเอาต์ได้`);
         return;
       }
 
@@ -733,13 +766,13 @@ export function useStaffAttendance(
         checkOutTime: serverTimestamp(),
       }, { merge: true });
       await batch.commit();
-      await reloadHistory(true);
+      if (loadHistory) await reloadHistory(true);
     } catch (e: unknown) {
       setError(getErrorMessage(e));
     } finally {
       setActionLoading(false);
     }
-  }, [todayRecord, userId, todayStr, isHoliday, holidayTitle, reloadHistory]);
+  }, [todayRecord, userId, todayStr, isHoliday, holidayTitle, config, reloadHistory, loadHistory]);
 
   return {
     todayRecord,
@@ -749,7 +782,7 @@ export function useStaffAttendance(
     error,
     checkIn,
     checkOut,
-    refresh: () => { void reloadHistory(true); },
+    refresh: () => { if (loadHistory) void reloadHistory(true); },
     isHoliday,
     holidayTitle,
   };
@@ -763,19 +796,22 @@ export function useAdminStaffAttendance(date: string) {
   const fetch = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Fetch attendance records (new shape: day -> entries)
-      const dayDocs = await loadStaffAttendanceDayDocs(date);
+      // 1.5 Promise.all — day docs + legacy + staff profiles start together
+      const legacyQ = query(
+        collection(db, 'staff_attendance'),
+        where('date', '==', date),
+      );
+      const [dayDocs, legacySnap, staffUsers] = await Promise.all([
+        loadStaffAttendanceDayDocs(date),
+        getDocs(legacyQ),
+        waitStaffUsersStore(),
+      ]);
+
       let dedupedAttendanceData = dayDocs.map((d) => ({
         id: d.id,
         ...(d as unknown as Omit<StaffAttendanceRecord, 'id'>),
       }));
 
-      // 1.1 Also scan legacy flat collection and auto-migrate leftovers
-      const legacyQ = query(
-        collection(db, 'staff_attendance'),
-        where('date', '==', date),
-      );
-      const legacySnap = await getDocs(legacyQ);
       const legacyData = legacySnap.docs.map(d => ({
         id: d.id,
         ...(d.data() as Omit<StaffAttendanceRecord, 'id'>),
@@ -811,9 +847,7 @@ export function useAdminStaffAttendance(date: string) {
         dedupedAttendanceData = Array.from(mergedByUser.values());
       }
 
-      // 2. Merge staff profiles (shared store — teacher/staff only)
       const profiles: Record<string, { name: string; photoURL?: string; department?: string }> = {};
-      const staffUsers = await waitStaffUsersStore();
       staffUsers.forEach((u) => {
         profiles[u.userId] = {
           name: u.displayName,
@@ -828,7 +862,6 @@ export function useAdminStaffAttendance(date: string) {
         department: profiles[r.userId]?.department
       }));
 
-      // sort by checkInTime in JS
       recs.sort((a, b) => {
         const ta = timestampToLocalDate(a.checkInTime)?.getTime() ?? 0;
         const tb = timestampToLocalDate(b.checkInTime)?.getTime() ?? 0;

@@ -7,7 +7,7 @@ import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import type { ScheduleEntry, SchoolDay } from '@/types/schedule';
-import { SCHOOL_DAYS, PERIOD_COUNT, LUNCH_PERIOD } from '@/types/schedule';
+import { SCHOOL_DAYS, PERIOD_COUNT } from '@/types/schedule';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 import {
@@ -128,7 +128,12 @@ export function useScheduleManager() {
     : '';
 
   const settingsId = viewMode === 'teacher' ? selectedTeacherId : resolvedClassId;
-  const { periodTimes } = useScheduleSettings(settingsId);
+  const { periodTimes, lunchPeriods, breakPeriods } = useScheduleSettings(settingsId);
+  // คาบพัก/คาบพักกลางวันตั้งค่าได้ต่อห้อง (class_settings) — ไม่ใช่ตัวเลขตายตัวเสมอ (LUNCH_PERIOD=6 คือ default เฉยๆ)
+  const nonTeachingPeriods = useMemo(
+    () => new Set([...lunchPeriods, ...breakPeriods]),
+    [lunchPeriods, breakPeriods],
+  );
 
   const setSelectedClassId = (id: string) => setSelectedClassIdRaw(id);
 
@@ -151,7 +156,7 @@ export function useScheduleManager() {
   });
 
   const openSlotModal = (day: SchoolDay, period: number, editingEntry: ScheduleEntry | null = null) => {
-    if (period === LUNCH_PERIOD) return; // คาบพักไม่สามารถแก้ไขได้
+    if (nonTeachingPeriods.has(period)) return; // คาบพัก/คาบพักกลางวัน (ตามค่าตั้งของห้องนี้) แก้ไขไม่ได้
     setSlotModal({ open: true, day, period, editingEntry });
   };
 
@@ -544,6 +549,12 @@ export function useScheduleManager() {
   // ── Drag & Drop ──────────────────────────────────────────────────────────────
   const handleSubjectDrop = useCallback(async (day: SchoolDay, period: number, subjectId: string, teacherId: string, classId?: string) => {
     if (!isEditMode) return;
+    if (nonTeachingPeriods.has(period)) {
+      toast.error('วางวิชาที่คาบพักไม่ได้', {
+        description: 'คาบนี้เป็นคาบพัก/คาบพักกลางวันของห้องนี้ ไม่สามารถผูกวิชาเข้าคาบนี้ได้',
+      });
+      return;
+    }
 
     const subject = availableSubjects.find(s => {
       const idMatch = s.id === subjectId || s.code === subjectId;
@@ -606,7 +617,7 @@ export function useScheduleManager() {
         toast.success('บันทึกแล้ว');
       }
     }
-  }, [isEditMode, availableSubjects, teacherManager.scheduleTeachers, resolvedClassId, activeYear, semester, grid, openSlotModal, schedule]);
+  }, [isEditMode, nonTeachingPeriods, availableSubjects, teacherManager.scheduleTeachers, resolvedClassId, activeYear, semester, grid, openSlotModal, schedule]);
 
   // ── Handle Edit Mode Toggle ──────────────────────────────────────────────────
   const handleSetIsEditMode = useCallback((newValue: boolean) => {
@@ -615,6 +626,8 @@ export function useScheduleManager() {
       toast.success('เข้าโหมดแก้ไข', {
         description: 'ลากรายวิชาลงในตารางเพื่อเพิ่ม หรือลบรายวิชาออก',
       });
+    } else {
+      toast.message('ปิดโหมดแก้ไข');
     }
   }, []);
 

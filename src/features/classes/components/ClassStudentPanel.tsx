@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  HiArrowLeft,
   HiStar,
   HiUserGroup,
   HiBookOpen,
@@ -16,7 +15,6 @@ import { collection, query, where, onSnapshot, getDocs, doc, writeBatch } from '
 import { db } from '@/lib/firebase';
 import { fetchStudentsByIds } from '@/lib/firestoreShared/fetchStudentsByIds';
 import type { ClassRoom } from '@/types/class';
-import type { Department } from '@/types/curriculum';
 import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import {
@@ -39,56 +37,85 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import StudentAvatar from '@/features/students/components/StudentAvatar';
+import { cn } from '@/lib/utils';
 
 const LONG_PRESS_MS = 500;
 
-interface ClassStudentPanelProps {
-  classRoom: ClassRoom;
-  onBack: () => void;
-}
+const TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden';
+const TABLE_HEADER_CELL = 'text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap';
+const TABLE_GRID =
+  'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) minmax(0, 1fr) minmax(5rem, 0.85fr) minmax(3rem, 0.5fr)';
 
-const DEPT_THEMES: Record<Department, { gradient: string; label: string; accent: string; avatarBg: string }> = {
-  early: {
-    gradient: 'from-rose-400 to-pink-500',
-    label: 'ปฐมวัย',
-    accent: 'text-rose-600',
-    avatarBg: 'bg-rose-100 text-rose-600',
-  },
-  primary: {
-    gradient: 'from-sky-400 to-blue-500',
-    label: 'ประถมศึกษา',
-    accent: 'text-sky-600',
-    avatarBg: 'bg-sky-100 text-sky-600',
-  },
-  secondary: {
-    gradient: 'from-violet-500 to-indigo-600',
-    label: 'มัธยมศึกษา',
-    accent: 'text-violet-600',
-    avatarBg: 'bg-violet-100 text-violet-600',
-  },
+type ClassStudentRow = {
+  id: string;
+  prefix?: string;
+  firstName?: string;
+  lastName?: string;
+  nickname?: string;
+  studentCode?: string;
+  photoURL?: string;
+  gender?: string;
+  isPresident?: boolean;
 };
 
-export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPanelProps) {
+function resolveStudentGender(student: ClassStudentRow): 'male' | 'female' | undefined {
+  if (student.gender === 'male' || student.gender === 'female') return student.gender;
+  if (['เด็กชาย', 'นาย', 'ด.ช.'].includes(student.prefix ?? '')) return 'male';
+  if (['เด็กหญิง', 'นางสาว', 'นาง', 'ด.ญ.'].includes(student.prefix ?? '')) return 'female';
+  return undefined;
+}
+
+function studentDisplayName(student: ClassStudentRow) {
+  return `${student.prefix ?? ''}${student.firstName ?? ''} ${student.lastName ?? ''}`.trim();
+}
+
+function GenderBadge({ gender }: { gender: 'male' | 'female' | undefined }) {
+  if (gender === 'male') {
+    return (
+      <span className="inline-flex rounded-full bg-sky-500/10 px-2.5 py-0.5 text-[10px] font-bold text-sky-600 font-sukhumvit">
+        ชาย
+      </span>
+    );
+  }
+  if (gender === 'female') {
+    return (
+      <span className="inline-flex rounded-full bg-pink-500/10 px-2.5 py-0.5 text-[10px] font-bold text-pink-600 font-sukhumvit">
+        หญิง
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-bold text-muted-foreground font-sukhumvit">
+      —
+    </span>
+  );
+}
+
+interface ClassStudentPanelProps {
+  classRoom: ClassRoom;
+  /** Desktop right-pane header host — info bar portals here on lg+ */
+  desktopHeaderHost?: HTMLElement | null;
+}
+
+export default function ClassStudentPanel({
+  classRoom,
+  desktopHeaderHost = null,
+}: ClassStudentPanelProps) {
   const [activeTab, setActiveTab] = useState<'roster' | 'courses'>('roster');
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [mobileTitlePortalTarget, setMobileTitlePortalTarget] = useState<HTMLElement | null>(null);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() => window.innerWidth < 1024);
   useEffect(() => {
-    if (isMdOrBelow) {
-      setPortalTarget(null);
-      setMobileTitlePortalTarget(document.getElementById('header-portal-center-mobile'));
-      return;
-    }
-    setPortalTarget(document.getElementById('header-portal-center'));
-    setMobileTitlePortalTarget(null);
+    setMobileTitlePortalTarget(
+      isMdOrBelow ? document.getElementById('header-portal-center-mobile') : null,
+    );
   }, [isMdOrBelow]);
   useEffect(() => {
     const handleResize = () => setIsMdOrBelow(window.innerWidth < 1024);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
-  const [classStudents, setClassStudents] = useState<any[]>([]);
+  const [classStudents, setClassStudents] = useState<ClassStudentRow[]>([]);
 
   // Real-time Class Details and Teachers
   const { classes, updateClass } = useClassroomManager();
@@ -102,8 +129,6 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
   const [isRemovingTeacher, setIsRemovingTeacher] = useState(false);
   const teacherPickerRef = useRef<HTMLDivElement>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const theme = DEPT_THEMES[currentClassRoom.departmentId as Department] ?? DEPT_THEMES.secondary;
 
   const activeTeachers = useMemo(
     () => teachers.filter((t) => t.status === 'active'),
@@ -269,10 +294,10 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
 
   const totalCount = classStudents.length;
   const maleCount = classStudents.filter(
-    s => s.gender === 'male' || ['เด็กชาย', 'นาย', 'ด.ช.'].includes(s.prefix)
+    s => s.gender === 'male' || ['เด็กชาย', 'นาย', 'ด.ช.'].includes(s.prefix ?? '')
   ).length;
   const femaleCount = classStudents.filter(
-    s => s.gender === 'female' || ['เด็กหญิง', 'นางสาว', 'นาง', 'ด.ญ.'].includes(s.prefix)
+    s => s.gender === 'female' || ['เด็กหญิง', 'นางสาว', 'นาง', 'ด.ญ.'].includes(s.prefix ?? '')
   ).length;
 
   const tabs = [
@@ -284,7 +309,7 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="flex items-center h-10 bg-slate-50 p-1 rounded-full pointer-events-auto w-full md:w-fit justify-center"
+      className="flex h-10 w-full items-center justify-center rounded-xl bg-slate-50 p-1 pointer-events-auto md:w-fit"
     >
       {tabs.map(tab => {
         const active = activeTab === tab.id;
@@ -292,10 +317,10 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as typeof activeTab)}
-            className={`flex-1 md:flex-initial min-w-0 flex items-center justify-center h-full px-6 rounded-full text-[11px] font-black transition-all whitespace-nowrap gap-1.5 cursor-pointer ${
+            className={`flex h-full min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-6 text-[11px] font-black transition-all md:flex-initial ${
               active
                 ? 'bg-slate-900 text-white'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
+                : 'text-slate-500 hover:bg-black/5 hover:text-slate-800'
             }`}
           >
             {tab.label}
@@ -318,46 +343,18 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
         mobileTitlePortalTarget
       )}
 
-      {/* ── Header Portal: Tab Switcher ── */}
-      {!isMdOrBelow && portalTarget && createPortal(
-        switcherElement,
-        portalTarget
-      )}
+      {/* ── Class info bar (desktop → right header; mobile → inline) ── */}
+      {(() => {
+        const infoBar = (
+      <div className="relative flex h-10 w-full shrink-0 items-center justify-between gap-3">
+          {/* Left: tabs + teachers */}
+          <div className="flex min-w-0 items-center gap-3 md:gap-4">
+            {switcherElement}
 
-      {/* ── Class info panel (separated top panel) ── */}
-      <div className="rounded-[1.25rem] bg-white px-5 md:px-6 py-4 md:py-5 shrink-0">
-
-        {/* ── Class info bar ── */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 w-full relative">
-          
-          {/* Top section: Title, badge, back button AND Homeroom teachers */}
-          <div className="flex items-center justify-between w-full md:w-auto md:justify-start gap-4 md:gap-8">
-            
-            {/* Title, badge, back button */}
-            <div className="flex items-center gap-3">
-              {/* Back button */}
-              <button
-                onClick={onBack}
-                className="w-9 h-9 rounded-full flex items-center justify-center text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-all shrink-0 active:scale-95 cursor-pointer"
-                title="ย้อนกลับ"
-              >
-                <HiArrowLeft className="w-4 h-4" />
-              </button>
-
-              {/* Class Name & Dept */}
-              <div className="min-w-0">
-                <h2 className="text-base font-black text-slate-900 leading-tight">
-                  ห้อง {currentClassRoom.className}
-                </h2>
-                <p className="text-[11px] text-slate-400 font-bold mt-0.5">{theme.label}</p>
-              </div>
-            </div>
-
-            {/* Homeroom teachers */}
-            <div className="flex items-center gap-2 relative z-30" ref={teacherPickerRef}>
-              <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-2xl transition-all">
+            <div className="relative z-30 flex shrink-0 items-center gap-2" ref={teacherPickerRef}>
+              <div className="flex items-center gap-1.5 rounded-xl bg-slate-50 p-1.5 transition-all">
                 {selectedTeachers.length === 0 ? (
-                  <span className="text-[10px] font-black text-slate-400 px-2 py-0.5">ยังไม่มีครูประจำชั้น</span>
+                  <span className="px-2 py-0.5 text-[10px] font-black text-slate-400">ยังไม่มีครูประจำชั้น</span>
                 ) : (
                   <div className="flex items-center gap-2 px-1">
                     <div className="flex -space-x-1.5 overflow-hidden">
@@ -365,11 +362,11 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
                         <div
                           key={t.id}
                           {...bindTeacherLongPress(t)}
-                          className="w-6 h-6 rounded-full bg-slate-200 overflow-hidden flex items-center justify-center shrink-0 touch-none select-none cursor-pointer"
+                          className="flex h-6 w-6 shrink-0 cursor-pointer touch-none select-none items-center justify-center overflow-hidden rounded-full bg-slate-200"
                           title={`${t.name} — กดค้างเพื่อถอดครูประจำชั้น`}
                         >
                           {t.photoURL ? (
-                            <img src={t.photoURL} alt={t.name} className="w-full h-full object-cover" />
+                            <img src={t.photoURL} alt={t.name} className="h-full w-full object-cover" />
                           ) : (
                             <span className="text-[8px] font-black text-slate-600">{t.name.charAt(0)}</span>
                           )}
@@ -377,25 +374,24 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
                       ))}
                     </div>
                     <div className="flex flex-col">
-                      <span className="text-[9.5px] font-black text-slate-700 max-w-[120px] truncate leading-none">
+                      <span className="max-w-[120px] truncate text-[9.5px] font-black leading-none text-slate-700">
                         {selectedTeachers.map(t => t.name.replace(/^(นาย|นางสาว|นาง|ครู|ครูประจำชั้น)/, '').trim().split(' ')[0]).join(', ')}
                       </span>
-                      <span className="text-[7.5px] font-bold text-slate-400 mt-0.5 leading-none">ครูประจำชั้น</span>
+                      <span className="mt-0.5 text-[7.5px] font-bold leading-none text-slate-400">ครูประจำชั้น</span>
                     </div>
                   </div>
                 )}
 
-                {/* The + Button */}
                 <button
+                  type="button"
                   onClick={() => setShowTeacherPicker(!showTeacherPicker)}
-                  className="w-6.5 h-6.5 rounded-full flex items-center justify-center bg-slate-900 hover:bg-slate-800 text-white transition-all active:scale-95 cursor-pointer shrink-0"
+                  className="flex h-6.5 w-6.5 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-slate-900 text-white transition-all hover:bg-slate-800 active:scale-95"
                   title="จัดการครูประจำชั้น"
                 >
-                  <HiPlus className="w-3.5 h-3.5" />
+                  <HiPlus className="h-3.5 w-3.5" />
                 </button>
               </div>
 
-              {/* Premium dropdown list */}
               <AnimatePresence>
                 {showTeacherPicker && (
                   <motion.div
@@ -403,33 +399,32 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
                     transition={{ duration: 0.15 }}
-                    className="absolute right-0 top-full mt-2 w-72 max-h-[300px] overflow-hidden flex flex-col bg-white/95 backdrop-blur-md border border-slate-200/60 rounded-2xl shadow-xl z-50 p-3 gap-2"
+                    className="absolute left-0 top-full z-50 mt-2 flex max-h-[300px] w-72 flex-col gap-2 overflow-hidden rounded-2xl border border-slate-200/60 bg-white/95 p-3 shadow-xl backdrop-blur-md"
                   >
-                    <div className="flex items-center justify-between shrink-0 px-1 pt-0.5">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">เลือกครูประจำชั้น (สูงสุด 2 คน)</span>
+                    <div className="flex shrink-0 items-center justify-between px-1 pt-0.5">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">เลือกครูประจำชั้น (สูงสุด 2 คน)</span>
                       <button
+                        type="button"
                         onClick={() => { setShowTeacherPicker(false); setTeacherQuery(''); }}
-                        className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                        className="cursor-pointer text-slate-400 hover:text-slate-600"
                       >
-                        <HiXMark className="w-3.5 h-3.5" />
+                        <HiXMark className="h-3.5 w-3.5" />
                       </button>
                     </div>
 
-                    {/* Search Bar */}
                     <div className="relative shrink-0">
                       <input
                         type="text"
                         value={teacherQuery}
                         onChange={e => setTeacherQuery(e.target.value)}
                         placeholder="ค้นหาชื่อครู..."
-                        className="w-full pl-3 pr-8 py-1.5 text-[11px] rounded-xl bg-slate-50 border border-black/5 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent transition-all font-bold placeholder-slate-400 text-slate-800"
+                        className="w-full rounded-xl border border-black/5 bg-slate-50 py-1.5 pl-3 pr-8 text-[11px] font-bold text-slate-800 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
                     </div>
 
-                    {/* Scrollable list */}
-                    <div className="flex-1 overflow-y-auto pr-0.5 space-y-1 scrollbar-thin scrollbar-thumb-slate-200">
+                    <div className="flex-1 space-y-1 overflow-y-auto pr-0.5 scrollbar-thin scrollbar-thumb-slate-200">
                       {filteredTeachers.length === 0 ? (
-                        <div className="py-6 text-center text-slate-400 text-[10px] font-bold">
+                        <div className="py-6 text-center text-[10px] font-bold text-slate-400">
                           ไม่พบรายชื่อครู
                         </div>
                       ) : (
@@ -439,39 +434,39 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
                             <div
                               key={t.id}
                               onClick={() => toggleHomeroomTeacher(t.id)}
-                              className={`flex items-center justify-between p-1.5 rounded-xl transition-all cursor-pointer ${
+                              className={`flex cursor-pointer items-center justify-between rounded-xl p-1.5 transition-all ${
                                 isSelected
-                                  ? 'bg-blue-50 text-blue-600 font-black'
-                                  : 'hover:bg-slate-50 text-slate-700 font-bold'
+                                  ? 'bg-blue-50 font-black text-blue-600'
+                                  : 'font-bold text-slate-700 hover:bg-slate-50'
                               }`}
                             >
-                              <div className="flex items-center gap-2 min-w-0">
+                              <div className="flex min-w-0 items-center gap-2">
                                 <div
                                   {...(isSelected ? bindTeacherLongPress(t) : {})}
                                   onClick={isSelected ? (e) => e.stopPropagation() : undefined}
-                                  className={`w-7 h-7 rounded-lg bg-slate-100 overflow-hidden flex items-center justify-center shrink-0 border border-black/[0.04] ${
-                                    isSelected ? 'touch-none select-none cursor-pointer' : ''
+                                  className={`flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-black/[0.04] bg-slate-100 ${
+                                    isSelected ? 'cursor-pointer touch-none select-none' : ''
                                   }`}
                                   title={isSelected ? `${t.name} — กดค้างเพื่อถอดครูประจำชั้น` : t.name}
                                 >
                                   {t.photoURL ? (
-                                    <img src={t.photoURL} alt={t.name} className="w-full h-full object-cover" />
+                                    <img src={t.photoURL} alt={t.name} className="h-full w-full object-cover" />
                                   ) : (
                                     <span className="text-[9px] font-black text-slate-500">{t.name.charAt(0)}</span>
                                   )}
                                 </div>
                                 <div className="min-w-0">
-                                  <p className="text-[11px] truncate leading-tight">{t.name}</p>
-                                  <p className="text-[8.5px] text-slate-400 truncate mt-0.5">
+                                  <p className="truncate text-[11px] leading-tight">{t.name}</p>
+                                  <p className="mt-0.5 truncate text-[8.5px] text-slate-400">
                                     {t.position || 'ครูผู้สอน'}
                                   </p>
                                 </div>
                               </div>
 
                               {isSelected ? (
-                                <HiCheck className="w-3.5 h-3.5 text-blue-600 shrink-0 mr-1" />
+                                <HiCheck className="mr-1 h-3.5 w-3.5 shrink-0 text-blue-600" />
                               ) : (
-                                <div className="w-3.5 h-3.5 rounded-full border border-slate-200 shrink-0 mr-1" />
+                                <div className="mr-1 h-3.5 w-3.5 shrink-0 rounded-full border border-slate-200" />
                               )}
                             </div>
                           );
@@ -482,51 +477,58 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
                 )}
               </AnimatePresence>
             </div>
-
           </div>
 
-          {/* Right section: Stat pills */}
-          <div className="flex flex-col gap-3 w-full md:w-auto md:flex md:items-center shrink-0">
-            {isMdOrBelow && (
-              <div className="md:hidden flex justify-end w-full">
-                {switcherElement}
+          {/* Right: roster stats (courses controls portal stays mounted) */}
+          <div className="relative flex h-10 shrink-0 items-center justify-end">
+            <div
+              className={cn(
+                'flex items-center gap-3',
+                activeTab !== 'roster' && 'invisible pointer-events-none absolute',
+              )}
+            >
+              <div className="flex items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2">
+                <span className="text-[11px] font-black text-slate-700">{totalCount} นักเรียน</span>
               </div>
-            )}
-            {activeTab === 'roster' ? (
-              <div className="grid grid-cols-3 gap-3 w-full md:w-auto md:flex md:items-center shrink-0">
-                <div className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-2xl bg-white">
-                  <HiUsers className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="text-[11px] font-black text-slate-700">{totalCount} นักเรียน</span>
-                </div>
-                <div className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-2xl bg-sky-50">
-                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />
-                  <span className="text-[11px] font-black text-sky-600">{maleCount} ชาย</span>
-                </div>
-                <div className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-2xl bg-pink-50">
-                  <span className="w-1.5 h-1.5 rounded-full bg-pink-400 shrink-0" />
-                  <span className="text-[11px] font-black text-pink-500">{femaleCount} หญิง</span>
-                </div>
+              <div className="flex items-center justify-center gap-1.5 rounded-xl bg-sky-50 px-3 py-2">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />
+                <span className="text-[11px] font-black text-sky-600">{maleCount} ชาย</span>
               </div>
-            ) : (
-              <div id="course-header-portal" className="flex flex-wrap items-center gap-2 md:gap-3 justify-start md:justify-end flex-1 min-w-0" />
-            )}
+              <div className="flex items-center justify-center gap-1.5 rounded-xl bg-pink-50 px-3 py-2">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-pink-400" />
+                <span className="text-[11px] font-black text-pink-500">{femaleCount} หญิง</span>
+              </div>
+            </div>
+            <div
+              id="course-header-portal"
+              className={cn(
+                'flex min-w-0 flex-wrap items-center justify-end gap-2 md:gap-3',
+                activeTab !== 'courses' && 'hidden',
+              )}
+            />
           </div>
-        </div>
-
       </div>
+        );
+        if (!isMdOrBelow) {
+          return desktopHeaderHost
+            ? createPortal(infoBar, desktopHeaderHost)
+            : null;
+        }
+        return infoBar;
+      })()}
 
-      {/* ── Main content glass panel (separated bottom panel) ── */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden md:p-5 bg-transparent border-0 p-0 shadow-none">
+      {/* ── Main content ── */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 
         {/* ── Tab content ── */}
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={activeTab}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.15 }}
-            className="flex-1 min-h-0 flex flex-col"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.12 }}
+            className="flex min-h-0 flex-1 flex-col"
           >
             {activeTab === 'roster' && (
               <div className="flex flex-col flex-1 min-h-0 bg-transparent border-0 overflow-hidden">
@@ -539,108 +541,150 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
                     <p className="text-sm font-medium">ไม่พบรายชื่อนักเรียนในห้องนี้</p>
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-y-auto scrollbar-hide px-0 py-3 md:p-0">
-                    {/* Responsive Student Cards Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-2 md:p-4">
-                      {classStudents.map((student, index) => {
-                        const isSelected = selectedStudentId === student.id;
-                        const initial = (student.firstName ?? '?').charAt(0);
-                        const isMale = student.gender === 'male' || ['เด็กชาย', 'นาย', 'ด.ช.'].includes(student.prefix);
-                        const genderLabel = isMale ? 'ชาย' : 'หญิง';
+                  <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide">
+                    <div className="flex flex-col gap-3">
+                    {/* Mobile */}
+                    <div className="flex flex-col gap-2.5 px-0.5 md:hidden">
+                      {classStudents.map((student, i) => {
+                        const gender = resolveStudentGender(student);
+                        const fullName = studentDisplayName(student);
+                        const isPresident = !!student.isPresident;
 
                         return (
                           <motion.div
                             key={student.id}
-                            layout
-                            onClick={() => setSelectedStudentId(isSelected ? null : student.id)}
-                            whileTap={{ scale: 0.98 }}
-                            className={`relative overflow-hidden py-3 px-4 rounded-2xl transition-all cursor-pointer flex items-center justify-between gap-4 ${
-                              isSelected
-                                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
-                                : 'bg-white shadow-[0_4px_14px_rgba(15,23,42,0.08)] hover:shadow-[0_6px_18px_rgba(15,23,42,0.12)] text-slate-800'
-                            }`}
+                            initial={{ opacity: 0, y: 8 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: i * 0.02 }}
+                            className="px-0.5 py-0.5"
                           >
-                            {/* Left: Avatar & Rank */}
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div className="relative shrink-0">
-                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-[12px] font-black shrink-0 overflow-hidden ${
-                                  isSelected ? 'bg-white/20 text-white' : theme.avatarBg
-                                }`}>
-                                  {student.photoURL ? (
-                                    <img src={student.photoURL} alt={student.firstName} className="w-full h-full object-cover" />
-                                  ) : (
-                                    initial
-                                  )}
+                            <div className="rounded-2xl border border-border bg-card p-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex min-w-0 flex-1 items-start gap-3">
+                                  <StudentAvatar
+                                    photoURL={student.photoURL}
+                                    studentId={student.id}
+                                    name={fullName}
+                                    gender={gender}
+                                    className="h-9 w-9 shrink-0 rounded-full"
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit" title={fullName}>
+                                      {fullName}
+                                    </p>
+                                    <p className="mt-0.5 text-[12px] font-semibold text-muted-foreground font-sukhumvit tabular-nums">
+                                      {student.studentCode || '—'}
+                                    </p>
+                                  </div>
                                 </div>
-                                <span className={`absolute -top-1.5 -left-1.5 text-[8.5px] font-mono font-black w-4.5 h-4.5 rounded-full flex items-center justify-center border ${
-                                  isSelected
-                                    ? 'bg-white text-blue-600 border-blue-500'
-                                    : 'bg-slate-900 text-white border-white shadow-sm'
-                                }`}>
-                                  {index + 1}
-                                </span>
+                                <GenderBadge gender={gender} />
                               </div>
-
-                              {/* Center: Info */}
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <h3 className={`text-[12.5px] font-black truncate ${isSelected ? 'text-white' : 'text-slate-800'}`}>
-                                    {student.prefix}{student.firstName} {student.lastName}
-                                  </h3>
-                                  {(student as any).isPresident && (
-                                    <HiStar className={`w-3.5 h-3.5 ${
-                                      isSelected ? 'text-yellow-300 fill-yellow-300' : 'text-yellow-400 fill-yellow-400'
-                                    }`} />
-                                  )}
+                              <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
+                                <div>
+                                  <p className="text-[11px] font-bold text-muted-foreground font-sukhumvit">ชื่อเล่น</p>
+                                  <p className="text-[13px] font-semibold text-foreground font-sukhumvit">
+                                    {student.nickname || '—'}
+                                  </p>
                                 </div>
-
-                                <div className="flex items-center gap-2 mt-0.5 text-[10px] font-bold">
-                                  <span className={isSelected ? 'text-white/80' : 'text-slate-500'}>
-                                    ช.เล่น: <span className={isSelected ? 'text-white' : 'text-slate-700'}>{student.nickname || '—'}</span>
-                                  </span>
-                                  <span className={isSelected ? 'text-white/40' : 'text-slate-300'}>|</span>
-                                  <span className={`font-mono ${isSelected ? 'text-white/80' : 'text-slate-500'}`}>
-                                    รหัส: {student.studentCode || '—'}
-                                  </span>
-                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => togglePresident(student.id, isPresident)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-amber-50"
+                                  title={isPresident ? 'ยกเลิกหัวหน้าห้อง' : 'ตั้งเป็นหัวหน้าห้อง'}
+                                >
+                                  <HiStar
+                                    className={cn(
+                                      'h-4 w-4 transition-colors',
+                                      isPresident
+                                        ? 'fill-yellow-400 text-yellow-400'
+                                        : 'text-muted-foreground/40 hover:text-yellow-400',
+                                    )}
+                                  />
+                                </button>
                               </div>
-                            </div>
-
-                            {/* Right: Gender badge & Star */}
-                            <div className="flex items-center gap-2 shrink-0">
-                              <span className={`text-[9.5px] font-black px-2 py-0.5 rounded-md ${
-                                isSelected
-                                  ? 'bg-white/20 text-white'
-                                  : isMale
-                                    ? 'bg-sky-50 text-sky-600 border border-sky-100/50'
-                                    : 'bg-pink-50 text-pink-600 border border-pink-100/50'
-                              }`}>
-                                {genderLabel}
-                              </span>
-
-                              <button
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  togglePresident(student.id, !!(student as any).isPresident);
-                                }}
-                                className={`flex items-center justify-center w-7 h-7 rounded-full transition-all ${
-                                  isSelected ? 'hover:bg-white/20' : 'hover:bg-yellow-50'
-                                }`}
-                                title={(student as any).isPresident ? 'ยกเลิกหัวหน้าห้อง' : 'ตั้งเป็นหัวหน้าห้อง'}
-                              >
-                                <HiStar
-                                  className={`w-4 h-4 transition-colors ${(student as any).isPresident
-                                      ? 'text-yellow-400 fill-yellow-400'
-                                      : isSelected
-                                        ? 'text-white/30'
-                                        : 'text-slate-300 hover:text-yellow-400'
-                                    }`}
-                                />
-                              </button>
                             </div>
                           </motion.div>
                         );
                       })}
+                    </div>
+
+                    {/* Desktop */}
+                    <div className={cn('hidden w-full md:block', TABLE_SHELL)}>
+                      <div
+                        className="grid w-full gap-3 border-b border-border bg-background px-4 py-3"
+                        style={{ gridTemplateColumns: TABLE_GRID }}
+                      >
+                        <span className={TABLE_HEADER_CELL}>รหัส</span>
+                        <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                        <span className={TABLE_HEADER_CELL}>ช.เล่น</span>
+                        <span className={cn(TABLE_HEADER_CELL, 'text-center')}>เพศ</span>
+                        <span className={cn(TABLE_HEADER_CELL, 'text-center')}>★</span>
+                      </div>
+                      <div className="flex flex-col">
+                        {classStudents.map((student, i) => {
+                          const gender = resolveStudentGender(student);
+                          const fullName = studentDisplayName(student);
+                          const isPresident = !!student.isPresident;
+
+                          return (
+                            <motion.div
+                              key={student.id}
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              transition={{ delay: i * 0.015 }}
+                              className="grid w-full items-center gap-3 border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-muted/40"
+                              style={{ gridTemplateColumns: TABLE_GRID }}
+                            >
+                              <span className="truncate text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+                                {student.studentCode || '—'}
+                              </span>
+                              <div className="flex min-w-0 items-center gap-3">
+                                <StudentAvatar
+                                  photoURL={student.photoURL}
+                                  studentId={student.id}
+                                  name={fullName}
+                                  gender={gender}
+                                  className="h-9 w-9 shrink-0 rounded-full"
+                                />
+                                <div className="min-w-0">
+                                  <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                    {fullName}
+                                  </p>
+                                  {isPresident && (
+                                    <p className="mt-0.5 text-[10px] font-bold text-amber-600 font-sukhumvit">
+                                      หัวหน้าห้อง
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <span className="truncate text-[13px] font-semibold text-foreground font-sukhumvit">
+                                {student.nickname || '—'}
+                              </span>
+                              <div className="flex justify-center">
+                                <GenderBadge gender={gender} />
+                              </div>
+                              <div className="flex justify-center">
+                                <button
+                                  type="button"
+                                  onClick={() => togglePresident(student.id, isPresident)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-amber-50"
+                                  title={isPresident ? 'ยกเลิกหัวหน้าห้อง' : 'ตั้งเป็นหัวหน้าห้อง'}
+                                >
+                                  <HiStar
+                                    className={cn(
+                                      'h-4 w-4 transition-colors',
+                                      isPresident
+                                        ? 'fill-yellow-400 text-yellow-400'
+                                        : 'text-muted-foreground/40 hover:text-yellow-400',
+                                    )}
+                                  />
+                                </button>
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+                    </div>
                     </div>
                   </div>
                 )}
@@ -648,14 +692,9 @@ export default function ClassStudentPanel({ classRoom, onBack }: ClassStudentPan
             )}
 
             {activeTab === 'courses' && (
-              <ClassCourseTab
-                classRoom={currentClassRoom}
-                cfg={{
-                  bg: 'rgba(59,130,246,0.08)',
-                  color: '#3b82f6',
-                  label: 'วิชาเรียน',
-                }}
-              />
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <ClassCourseTab classRoom={currentClassRoom} />
+              </div>
             )}
           </motion.div>
         </AnimatePresence>

@@ -256,7 +256,7 @@ function StudentScoreSummaryModal({
 import { useExamRoom } from '@/hooks/useExamRoom';
 import { useAuth } from '@/hooks/useAuth';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
-import type { ExamRoom, ExamAttempt, ExamScoreOverrideRequest, GradeScoreType, GradeBookSubjectLink } from '@/types/exam';
+import type { ExamRoom, ExamAttempt, ExamScoreOverrideRequest, GradeScoreType, GradeBookSubjectLink, ScoreCollectionType } from '@/types/exam';
 import { rawPointsToPercent } from '@/types/grades';
 import { resolveAttemptScoreDisplay } from '@/lib/exam/examRoomScoring';
 import { Button } from '@/components/ui/button';
@@ -2739,6 +2739,14 @@ function ScoreSettingsPanel({ room, onSave, onRegisterMobileSave }: {
   );
 }
 
+// ── Score collection type (shared: card badge + score-config panel) ───────────
+const SCORE_COLLECTION_CONFIG: Record<ScoreCollectionType, { label: string; desc: string; color: string; bg: string; border: string }> = {
+  classwork: { label: 'ประเมินผล', desc: 'คะแนนเก็บระหว่างเรียน', color: '#6366f1', bg: 'rgba(99,102,241,0.08)', border: 'rgba(99,102,241,0.25)' },
+  quiz: { label: 'สอบย่อย', desc: 'ทดสอบย่อยในชั้นเรียน', color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.3)' },
+  midterm: { label: 'กลางภาค', desc: 'สอบกลางภาคเรียน', color: '#0ea5e9', bg: 'rgba(14,165,233,0.08)', border: 'rgba(14,165,233,0.25)' },
+  final: { label: 'ปลายภาค', desc: 'สอบปลายภาคเรียน', color: '#059669', bg: 'rgba(5,150,105,0.08)', border: 'rgba(5,150,105,0.25)' },
+};
+
 // ── Room Card ─────────────────────────────────────────────────────────────────
 function RoomCard({
   room, onProctor, onChangeStatus, onFinish, onDelete, onEdit, onOpenSettings, isStudent, onTakeExam,
@@ -2760,6 +2768,7 @@ function RoomCard({
   /** ตรวจพบนักเรียนสลับหน้าจอ — การ์ดจะเปลี่ยนหน้าแสดงชื่อชั่วคราว (ไม่ใช้กับมุมมองนักเรียน) */
   alert?: { studentName: string; key: number } | null;
 }) {
+  const { role } = useAuth();
   const [showActions, setShowActions] = useState(false);
   const needsQuestionSetup = Boolean(!isStudent && canEdit && !isExamRoomQuestionsConfigured(room));
   // Unlimited-round rooms (maxAttempts === 0) cycle active <-> upcoming forever —
@@ -2790,6 +2799,9 @@ function RoomCard({
     (room.settings?.gradeBookSubjects && room.settings.gradeBookSubjects.length > 0) ||
     room.settings?.gradeBookSubjectId
   );
+  const scoreCollectionEnabled = room.settings?.scoreCollectionEnabled === true;
+  const scoreCollectionType = (room.settings?.scoreCollectionType ?? 'classwork') as ScoreCollectionType;
+  const scoreTypeCfg = SCORE_COLLECTION_CONFIG[scoreCollectionType] ?? SCORE_COLLECTION_CONFIG.classwork;
 
   const createdDateStr = useMemo(() => {
     if (!room.createdAt) return '';
@@ -2924,6 +2936,14 @@ function RoomCard({
               >
                 {room.title}
               </h3>
+              {role === 'sysadmin' && (
+                <p
+                  className="text-[9px] font-mono text-slate-400 truncate"
+                  title={room.id}
+                >
+                  {room.id}
+                </p>
+              )}
             </div>
 
             <div className="flex flex-nowrap items-center gap-1 min-w-0 overflow-hidden min-h-[1.5rem]">
@@ -2970,6 +2990,22 @@ function RoomCard({
                 )}
                 </>
               ) : null}
+              {scoreCollectionEnabled && (
+                <>
+                  {classBadgeLabel ? <span className="text-[10px] text-slate-300"> · </span> : null}
+                  <span
+                    className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit leading-none shrink-0"
+                    style={{
+                      color: scoreTypeCfg.color,
+                      backgroundColor: scoreTypeCfg.bg,
+                      border: `1px solid ${scoreTypeCfg.border}`,
+                    }}
+                    title={`ประเภทการเก็บคะแนน: ${scoreTypeCfg.label}`}
+                  >
+                    {scoreTypeCfg.label}
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="flex items-center gap-1.5 min-w-0 min-h-[1.25rem]">
@@ -3094,15 +3130,6 @@ function RoomCard({
 
 // ── Score Config Panel ────────────────────────────────────────────────────────
 
-type ScoreCollectionTypeLocal = 'classwork' | 'quiz' | 'midterm' | 'final';
-
-const SCORE_COLLECTION_CONFIG: Record<ScoreCollectionTypeLocal, { label: string; desc: string; color: string; bg: string; border: string }> = {
-  classwork: { label: 'ประเมินผล', desc: 'คะแนนเก็บระหว่างเรียน', color: '#6366f1', bg: 'rgba(99,102,241,0.08)', border: 'rgba(99,102,241,0.25)' },
-  quiz: { label: 'สอบย่อย', desc: 'ทดสอบย่อยในชั้นเรียน', color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.3)' },
-  midterm: { label: 'กลางภาค', desc: 'สอบกลางภาคเรียน', color: '#0ea5e9', bg: 'rgba(14,165,233,0.08)', border: 'rgba(14,165,233,0.25)' },
-  final: { label: 'ปลายภาค', desc: 'สอบปลายภาคเรียน', color: '#059669', bg: 'rgba(5,150,105,0.08)', border: 'rgba(5,150,105,0.25)' },
-};
-
 function ScoreConfigPanel({ room, onSave, onRegisterMobileSave }: {
   room: ExamRoom;
   onSave: (data: Partial<ExamRoom['settings']>) => Promise<void>;
@@ -3111,8 +3138,8 @@ function ScoreConfigPanel({ room, onSave, onRegisterMobileSave }: {
   const [enabled, setEnabled] = useState<boolean>(
     room.settings?.scoreCollectionEnabled ?? false,
   );
-  const [scoreType, setScoreType] = useState<ScoreCollectionTypeLocal>(
-    (room.settings?.scoreCollectionType as ScoreCollectionTypeLocal) ?? 'classwork',
+  const [scoreType, setScoreType] = useState<ScoreCollectionType>(
+    (room.settings?.scoreCollectionType as ScoreCollectionType) ?? 'classwork',
   );
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -3186,7 +3213,7 @@ function ScoreConfigPanel({ room, onSave, onRegisterMobileSave }: {
                 ประเภทการเก็บคะแนน
               </p>
               <div className="flex flex-col gap-2">
-                {(Object.entries(SCORE_COLLECTION_CONFIG) as [ScoreCollectionTypeLocal, typeof SCORE_COLLECTION_CONFIG[ScoreCollectionTypeLocal]][]).map(([type, c]) => {
+                {(Object.entries(SCORE_COLLECTION_CONFIG) as [ScoreCollectionType, typeof SCORE_COLLECTION_CONFIG[ScoreCollectionType]][]).map(([type, c]) => {
                   const isActive = scoreType === type;
                   return (
                     <motion.button
@@ -5049,7 +5076,10 @@ export default function ExamManager() {
   const { canEdit: canEditExam, canDelete: canDeleteExam } = useMyPermissions();
   const canEdit = canEditExam('exams');
   const canDelete = canDeleteExam('exams');
-  const { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, finishRoom, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores } = useExamRoom();
+  const { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, finishRoom, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores } = useExamRoom({
+    // Students only need own attempts; staff keep smart `all` (full once + active poll)
+    loadAttempts: isStudent ? 'mine' : 'all',
+  });
   // Roster lookup for resolving a student's real name (not their login email) on the
   // suspicious-activity card alert below — same resolver ProctoringModal/RoomDetailView use.
   const canViewAllSubjects = role === 'admin' || role === 'sysadmin';

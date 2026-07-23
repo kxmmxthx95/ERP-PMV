@@ -1,13 +1,12 @@
-import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useRef, type DragEvent, type MouseEvent, type PointerEvent, type TouchEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Coffee, Timer, X, Check, PlusCircle, Clock, Pencil, Trash2, BookOpen, User, MapPin, ArrowRight, Users, Layout, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Plus, Coffee, Timer, X, Check, PlusCircle, Clock, Pencil, Trash2, BookOpen, User, MapPin, ArrowRight, Users, Layout, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   SCHOOL_DAYS, DAY_LABELS, DAY_SHORT,
   type SchoolDay, type ScheduleEntry,
 } from '@/types/schedule';
 import { useScheduleSettings, DEFAULT_SETTINGS } from '@/hooks/useScheduleSettings';
-import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
 import { subjectColorByName, subjectGradient, withAlpha } from '../constants/colors';
 import { isJointClassGroup, formatClassLabels } from '../utils/jointClass';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -18,11 +17,15 @@ import {
   CarouselNext,
   CarouselPrevious,
 } from '@/components/ui/carousel';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ExamMobileFilterDrawer } from '@/features/exam/components/ExamMobileFilterMenuButton';
+import { cn } from '@/lib/utils';
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 
 
-// ── Current period detection ─────────────────────────────────────────────────
+
+
 function parseTimeRange(timeStr: string): { startMin: number; endMin: number } | null {
   const parts = timeStr.split(' - ');
   if (parts.length < 2) return null;
@@ -32,49 +35,12 @@ function parseTimeRange(timeStr: string): { startMin: number; endMin: number } |
   return { startMin: sh * 60 + sm, endMin: eh * 60 + em };
 }
 
-function useCurrentPeriod(periodTimes: Record<number, string>) {
-  const [currentPeriod, setCurrentPeriod] = useState<number | null>(null);
-
-  useEffect(() => {
-    const check = () => {
-      const now = new Date();
-      const nowMin = now.getHours() * 60 + now.getMinutes();
-      let found: number | null = null;
-      for (const [k, v] of Object.entries(periodTimes)) {
-        const range = parseTimeRange(v);
-        if (range && nowMin >= range.startMin && nowMin < range.endMin) {
-          found = Number(k);
-          break;
-        }
-      }
-      setCurrentPeriod(found);
-    };
-    check();
-    const id = setInterval(check, 30_000);
-    return () => clearInterval(id);
-  }, [periodTimes]);
-
-  return currentPeriod;
-}
-
-const MOBILE_DAY_LABELS: Record<SchoolDay, string> = {
-  1: 'Mon',
-  2: 'Tue',
-  3: 'Wed',
-  4: 'Thu',
-  5: 'Fri',
-};
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ScheduleGridProps {
   grid: Record<number, Record<number, ScheduleEntry[]>>;
   viewMode: 'class' | 'teacher';
   classId?: string;
   filterDept?: 'all' | 'early' | 'primary' | 'secondary';
-  setFilterDept?: (v: 'all' | 'early' | 'primary' | 'secondary') => void;
-  filterGrade?: string;
-  setFilterGrade?: (v: string) => void;
-  filteredClasses?: { id: string; gradeLevel: string; department: string; label: string }[];
   settingsId?: string;
   readOnly?: boolean;
   onSlotClick: (day: SchoolDay, period: number, entry: ScheduleEntry | null) => void;
@@ -86,7 +52,6 @@ interface ScheduleGridProps {
   allClasses?: { id: string; gradeLevel: string; department: string; label: string }[];
   teachers?: { id: string; department: string; name: string; photoURL?: string }[];
   excessEntryIds?: Set<string>;
-  onClassSelect?: (classId: string) => void;
   draggableSubjects?: {
     id: string;
     code: string;
@@ -98,9 +63,7 @@ interface ScheduleGridProps {
     classId?: string;
   }[];
   dragTeacherId?: string;
-  mobileHeaderContent?: ReactNode;
   selectedTeacherId?: string;
-  setSelectedTeacherId?: (id: string) => void;
   jointClassEntryIds?: Set<string>;
   jointClassPartnersByEntryId?: Map<string, string[]>;
 }
@@ -157,16 +120,23 @@ function restGradient(isEditing: boolean): string {
   ].join(', ');
 }
 
+function teacherAvatarUrl(
+  teachers: { id: string; name: string; photoURL?: string }[] | undefined,
+  entry: Pick<ScheduleEntry, 'teacherId' | 'teacherName'>,
+) {
+  const teacherObj = teachers?.find((t) => t.id === entry.teacherId || t.name === entry.teacherName);
+  return (
+    teacherObj?.photoURL ||
+    `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(entry.teacherId || entry.teacherName || 'teacher')}`
+  );
+}
+
 // ── Main Grid ─────────────────────────────────────────────────────────────────
 export default function ScheduleGrid({
   grid: gridProp,
   viewMode,
   classId,
   filterDept = 'all',
-  setFilterDept,
-  filterGrade = 'all',
-  setFilterGrade,
-  filteredClasses,
   settingsId,
   readOnly = false,
   onSlotClick,
@@ -180,10 +150,7 @@ export default function ScheduleGrid({
   excessEntryIds,
   draggableSubjects = [],
   dragTeacherId = '',
-  onClassSelect,
-  mobileHeaderContent,
   selectedTeacherId = '',
-  setSelectedTeacherId,
   jointClassEntryIds,
   jointClassPartnersByEntryId,
 }: ScheduleGridProps) {
@@ -338,47 +305,12 @@ export default function ScheduleGrid({
   const [dragOverSlot, setDragOverSlot] = useState<{ day: SchoolDay; period: number } | null>(null);
   const [touchDragData, setTouchDragData] = useState<{ subjectId: string; teacherId: string; classId?: string } | null>(null);
 
-  const currentPeriod = useCurrentPeriod(displayPeriodTimes);
   const [detailEntry, setDetailEntry] = useState<ScheduleEntry | null>(null);
   const [mobileDay, setMobileDay] = useState<SchoolDay>(1);
   const [mobileSubjectPickerSlot, setMobileSubjectPickerSlot] = useState<{ day: SchoolDay; period: number } | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
-
-  const filterDepts = useMemo(() => {
-    if (!allClasses) return [];
-    return Array.from(new Set(allClasses.map(c => c.department))).sort();
-  }, [allClasses]);
-
-  const filterGrades = useMemo(() => {
-    if (!allClasses) return [];
-    const base = filterDept !== 'all' ? allClasses.filter(c => c.department === filterDept) : allClasses;
-    return Array.from(new Set(base.map(c => c.gradeLevel))).sort();
-  }, [allClasses, filterDept]);
-
-  const filterClasses = useMemo(() => {
-    const baseSource = filteredClasses && filteredClasses.length > 0 ? filteredClasses : (allClasses || []);
-    let base = baseSource;
-    if (filterDept !== 'all') base = base.filter(c => c.department === filterDept);
-    if (filterGrade !== 'all') base = base.filter(c => c.gradeLevel === filterGrade);
-    const seen = new Set<string>();
-    return base.filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
-  }, [allClasses, filteredClasses, filterDept, filterGrade]);
-
-  const filterTeacherDepts = useMemo(() => {
-    if (!teachers) return [];
-    return Array.from(new Set(teachers.map(t => t.department).filter(Boolean))).sort();
-  }, [teachers]);
-
-  const filterTeachers = useMemo(() => {
-    if (!teachers) return [];
-    const base = filterDept !== 'all'
-      ? teachers.filter(t => t.department === filterDept)
-      : teachers;
-    return [...base].sort((a, b) => a.name.localeCompare(b.name, 'th'));
-  }, [teachers, filterDept]);
-
-  const showClassFilter = viewMode === 'class' && !!allClasses && allClasses.length > 1;
-  const showTeacherFilter = viewMode === 'teacher';
+  const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressFiredRef = useRef(false);
 
   const periods = Array.from({ length: effectivePeriodCount }, (_, i) => i + 1);
   const canEdit = !readOnly && (!!classId || viewMode === 'teacher');
@@ -416,19 +348,71 @@ export default function ScheduleGrid({
     }
   };
 
-  const startMobileLongPress = (day: SchoolDay, period: number, disabled: boolean) => {
-    if (disabled) return;
-    clearLongPressTimer();
-    longPressTimerRef.current = window.setTimeout(() => {
-      setMobileSubjectPickerSlot({ day, period });
-      clearLongPressTimer();
-    }, 450);
+  const openMobileSubjectDrawer = (day: SchoolDay, period: number) => {
+    if (!isEditMode) setIsEditMode?.(true);
+    setMobileSubjectPickerSlot({ day, period });
   };
+
+  // Long-press card → toggle edit mode. Enter opens subject drawer; exit closes it.
+  const startMobileLongPress = (day: SchoolDay, period: number, e: PointerEvent) => {
+    if (!setIsEditMode) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    longPressFiredRef.current = false;
+    longPressOriginRef.current = { x: e.clientX, y: e.clientY };
+    clearLongPressTimer();
+    const wasEditing = isEditMode;
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressFiredRef.current = true;
+      if (wasEditing) {
+        setIsEditMode(false);
+        setMobileSubjectPickerSlot(null);
+      } else {
+        setIsEditMode(true);
+        setMobileSubjectPickerSlot({ day, period });
+      }
+      try {
+        navigator.vibrate?.(12);
+      } catch {
+        /* ignore */
+      }
+      clearLongPressTimer();
+    }, 480);
+  };
+
+  const onMobileLongPressMove = (e: PointerEvent) => {
+    const origin = longPressOriginRef.current;
+    if (!origin || !longPressTimerRef.current) return;
+    const dx = e.clientX - origin.x;
+    const dy = e.clientY - origin.y;
+    // cancel only if finger moved > ~12px (scroll), not micro-jitter
+    if (dx * dx + dy * dy > 144) {
+      clearLongPressTimer();
+      longPressOriginRef.current = null;
+    }
+  };
+
+  const endMobileLongPress = () => {
+    clearLongPressTimer();
+    longPressOriginRef.current = null;
+  };
+
+  const mobileCardLongPressProps = (day: SchoolDay, period: number) =>
+    setIsEditMode
+      ? {
+          onPointerDown: (e: PointerEvent<HTMLButtonElement>) => startMobileLongPress(day, period, e),
+          onPointerMove: onMobileLongPressMove,
+          onPointerUp: endMobileLongPress,
+          onPointerCancel: endMobileLongPress,
+          onContextMenu: (e: MouseEvent) => {
+            e.preventDefault();
+          },
+        }
+      : {};
 
   return (
     <>
       {showSubjectCarousel && (
-        <div className="hidden md:block sticky top-0 z-30 mb-3 w-full overflow-hidden py-1 bg-white/80 backdrop-blur-sm rounded-xl shadow-sm">
+        <div className="hidden md:block sticky top-0 z-30 mb-3 w-full overflow-hidden py-1">
 
           {draggableSubjects.length > 0 ? (
             <Carousel opts={{ align: 'start', dragFree: true, watchDrag: false }} className="px-9">
@@ -515,486 +499,444 @@ export default function ScheduleGrid({
         </div>
       )}
 
-      {/* Mobile: Sticky filter + day selector panels */}
-      <div className="md:hidden sticky top-0 z-40 -mx-3 px-3 mb-2.5 pt-1 pb-2 bg-background">
-        <div className="rounded-2xl border border-black/[0.06] bg-white/60 p-2.5 animate-in fade-in slide-in-from-top-2 duration-300">
-          {mobileHeaderContent && (
-            <div className="pb-2.5">
-              {mobileHeaderContent}
-            </div>
-          )}
-
-          {showClassFilter && (
-            <div className={`px-0.5 pb-2.5 ${mobileHeaderContent ? 'border-t border-black/[0.06] pt-2.5' : ''}`}>
-              <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2">
-                {/* แผนก */}
-                <div className="flex flex-col gap-1">
-                  <div className="relative">
-                    <select
-                      value={filterDept}
-                      onChange={e => {
-                        const next = (e.target.value || 'all') as 'all' | 'early' | 'primary' | 'secondary';
-                        setFilterDept?.(next);
-                        setFilterGrade?.('all');
-                      }}
-                      className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-blue-400 focus:bg-white transition-all cursor-pointer"
-                    >
-                      <option value="all">แผนก</option>
-                      {filterDepts.map(dept => (
-                        <option key={dept} value={dept}>
-                          {DEPARTMENT_CONFIG[dept as Department]?.label ?? dept}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
-                  </div>
-                </div>
-
-                {/* ระดับชั้น */}
-                <div className="flex flex-col gap-1">
-                  <div className="relative">
-                    <select
-                      value={filterGrade}
-                      onChange={e => setFilterGrade?.(e.target.value || 'all')}
-                      disabled={filterGrades.length === 0}
-                      className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-indigo-400 focus:bg-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <option value="all">ระดับชั้น</option>
-                      {filterGrades.map(grade => (
-                        <option key={grade} value={grade}>{grade}</option>
-                      ))}
-                    </select>
-                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
-                  </div>
-                </div>
-
-                {/* ห้อง */}
-                <div className="flex flex-col gap-1">
-                  <div className="relative">
-                    <select
-                      value={classId ?? ''}
-                      onChange={e => { if (e.target.value) onClassSelect?.(e.target.value); }}
-                      disabled={filterClasses.length === 0}
-                      className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-emerald-400 focus:bg-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <option value="">ห้อง</option>
-                      {filterClasses.map(cls => (
-                        <option key={cls.id} value={cls.id}>{cls.label}</option>
-                      ))}
-                    </select>
-                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => {
-                    setFilterDept?.('all');
-                    setFilterGrade?.('all');
-                    onClassSelect?.('');
-                  }}
-                  className="h-full min-h-[38px] w-10 rounded-xl border border-black/[0.08] bg-black/[0.03] text-black/45 flex items-center justify-center hover:bg-black/[0.06] hover:text-black/65 transition-all"
-                  title="ล้างฟิลเตอร์"
-                >
-                  <RotateCcw size={13} />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {showTeacherFilter && (
-            <div className={`px-0.5 pb-2.5 ${mobileHeaderContent ? 'border-t border-black/[0.06] pt-2.5' : ''}`}>
-              <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
-                <div className="relative min-w-0">
-                  <select
-                    value={filterDept}
-                    onChange={(e) => {
-                      const next = (e.target.value || 'all') as 'all' | 'early' | 'primary' | 'secondary';
-                      setFilterDept?.(next);
-                      setSelectedTeacherId?.('');
-                    }}
-                    className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-blue-400 focus:bg-white transition-all cursor-pointer"
-                  >
-                    <option value="all">แผนก</option>
-                    {filterTeacherDepts.map((dept) => (
-                      <option key={dept} value={dept}>
-                        {DEPARTMENT_CONFIG[dept as Department]?.label ?? dept}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
-                </div>
-
-                <div className="relative min-w-0">
-                  <select
-                    value={selectedTeacherId}
-                    onChange={(e) => setSelectedTeacherId?.(e.target.value || '')}
-                    disabled={filterDept === 'all'}
-                    className="w-full appearance-none rounded-xl border border-black/[0.08] bg-black/[0.03] px-2.5 py-2 pr-6 text-[11px] font-bold text-black/70 outline-none focus:border-indigo-400 focus:bg-white transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <option value="">ครู</option>
-                    {filterTeachers.map((teacher) => (
-                      <option key={teacher.id} value={teacher.id}>
-                        {teacher.name}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-[9px]">▾</span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFilterDept?.('all');
-                    setSelectedTeacherId?.('');
-                  }}
-                  className="h-full min-h-[38px] w-10 rounded-xl border border-black/[0.08] bg-black/[0.03] text-black/45 flex items-center justify-center hover:bg-black/[0.06] hover:text-black/65 transition-all shrink-0"
-                  title="ล้างฟิลเตอร์"
-                >
-                  <RotateCcw size={13} />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {!shouldHideGrid && (
-          <div id="schedule-day-selector-mobile" className={showClassFilter || showTeacherFilter ? 'border-t border-black/[0.06] pt-2.5' : ''}>
-            <div className="grid grid-cols-5 gap-1 rounded-xl bg-black/[0.04] p-1">
-              {SCHOOL_DAYS.map((day) => {
-                const active = mobileDay === day;
-                return (
-                  <button
-                    key={day}
-                    onClick={() => setMobileDay(day)}
-                    className={`h-9 rounded-lg text-xs font-black transition-all duration-200 ${
-                      active
-                        ? 'bg-blue-600 text-white shadow-md scale-[1.02]'
-                        : 'text-black/55 hover:bg-white/50 active:scale-95'
-                    }`}
-                  >
-                    {MOBILE_DAY_LABELS[day]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          )}
-        </div>
-      </div>
-
       {/* Mobile: Schedule List / Subject Picker */}
-      <div className="md:hidden mb-4" id="schedule-grid-export-mobile">
+      <div
+        className={cn(
+          'md:hidden mb-4',
+          shouldHideGrid && 'flex min-h-[calc(100dvh-12rem)] items-center justify-center',
+        )}
+        id="schedule-grid-export-mobile"
+      >
         {shouldHideGrid ? (
-          <div className="rounded-2xl border border-black/[0.08] bg-white/85 px-4 py-6 text-center">
+          <div className="w-full rounded-2xl border border-black/[0.08] bg-white/85 px-4 py-6 text-center">
             <p className="text-[12px] font-black text-red-600">{hideGridTitle}</p>
             <p className="mt-1 text-[10px] font-medium text-red-500">{hideGridHint}</p>
           </div>
-        ) : mobileSubjectPickerSlot ? (
-          <div className="space-y-2.5">
-            <div className="rounded-2xl border border-black/[0.06] bg-white p-3 shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[12px] font-black text-black/80">เลือกรายวิชาที่ต้องการใส่</p>
-                  <p className="mt-0.5 text-[10px] font-medium text-black/45">
-                    {MOBILE_DAY_LABELS[mobileSubjectPickerSlot.day]} • คาบ {displayNumbers[mobileSubjectPickerSlot.period] ?? mobileSubjectPickerSlot.period}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setMobileSubjectPickerSlot(null)}
-                  className="h-8 px-3 rounded-lg text-[10px] font-black text-black/55 bg-black/[0.04] hover:bg-black/[0.07]"
-                >
-                  ยกเลิก
-                </button>
-              </div>
-            </div>
-
-            {draggableSubjects.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-rose-200 bg-white px-3 py-6 text-center text-[11px] font-bold text-rose-500/80">
-                ยังไม่มีรายวิชาที่พร้อมเลือกในมุมมองนี้
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-2.5">
-                {draggableSubjects.map((subject) => {
-                  const color = subjectColorByName(subject.name || subject.id, subject.subjectGroup);
-                  const teacherId = subject.assignedTeacherId || dragTeacherId;
-                  const badge = categoryBadgeStyle((subject as any).category);
-                  const handleAdd = () => {
-                    if (!teacherId) {
-                      toast.error('ยังไม่สามารถใส่วิชาได้ เพราะไม่พบครูผู้สอนของวิชานี้');
-                      return;
-                    }
-                    onDropSubject?.(
-                      mobileSubjectPickerSlot.day,
-                      mobileSubjectPickerSlot.period,
-                      subject.id,
-                      teacherId,
-                      subject.classId ?? undefined,
-                    );
-                    setMobileSubjectPickerSlot(null);
-                  };
-                  return (
-                    <div
-                      key={`picker-${subject.id}-${subject.className ?? ''}`}
-                      className="w-full rounded-xl p-3 flex items-center gap-3"
-                      style={{
-                        background: subjectGradient(color),
-                        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.82), 0 12px 18px -18px ${withAlpha(color.accent, 0.58)}`,
-                      }}
-                    >
-                      {/* Subject info (tappable) */}
-                      <button onClick={handleAdd} className="flex-1 min-w-0 text-left">
-                        <div className="mb-1.5 flex items-center gap-1 flex-wrap">
-                          <span
-                            className="rounded-md border px-1.5 py-0.5 text-[9px] font-black shrink-0"
-                            style={{
-                              borderColor: 'rgba(255,255,255,0.26)',
-                              background: 'rgba(0,0,0,0.14)',
-                              color: 'rgba(255,255,255,0.96)',
-                            }}
-                          >
-                            {subject.code}
-                          </span>
-                          {viewMode === 'teacher' && subject.className && (
-                            <span
-                              className="rounded-md border px-1 py-0.5 text-[8px] font-black bg-white/20 text-white shrink-0"
-                              style={{ borderColor: 'rgba(255,255,255,0.2)' }}
-                            >
-                              {subject.className}
-                            </span>
-                          )}
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[8px] font-black shrink-0 ${badge.className}`}
-                          >
-                            <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClassName}`} />
-                            {badge.label}
-                          </span>
-                          <span
-                            className="ml-auto text-[9px] font-bold text-white shrink-0"
-                            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                          >
-                            {subject.hoursPerWeek ?? 0} คาบ
-                          </span>
-                        </div>
-                        <p
-                          className="line-clamp-2 text-[11px] font-extrabold leading-snug text-white"
-                          style={{ textShadow: '0 1px 2.5px rgba(0,0,0,0.45)' }}
-                        >
-                          {subject.name}
-                        </p>
-                      </button>
-
-                      {/* + Add button */}
-                      <button
-                        onClick={handleAdd}
-                        className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-transform active:scale-90"
-                        style={{
-                          background: 'rgba(255,255,255,0.22)',
-                          border: '1.5px solid rgba(255,255,255,0.5)',
-                        }}
-                        title="เพิ่มรายวิชานี้"
-                      >
-                        <Plus size={16} className="text-white drop-shadow" />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         ) : (
-          <div className="flex flex-col gap-2.5">
+          <>
+        <Tabs
+          value={String(mobileDay)}
+          onValueChange={(v) => {
+            setMobileDay(Number(v) as SchoolDay);
+            setMobileSubjectPickerSlot(null);
+          }}
+          className="mb-2.5 gap-0"
+        >
+          <TabsList className="grid h-9 w-full grid-cols-5 rounded-xl p-1">
+            {SCHOOL_DAYS.map((day) => (
+              <TabsTrigger
+                key={day}
+                value={String(day)}
+                className="rounded-lg px-1 text-xs font-black data-active:bg-blue-600 data-active:text-white dark:data-active:bg-blue-600 dark:data-active:text-white"
+              >
+                {DAY_SHORT[day]}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+
+          <div className="flex flex-col gap-3">
             {periods.map((period) => {
           const isLunch = lunchPeriods.includes(period);
           const isBreak = breakPeriods.includes(period);
-          const isAnyBreak = isLunch || isBreak;
-          const isCurrent = currentPeriod === period && !isAnyBreak;
           const entries = grid[mobileDay]?.[period] ?? [];
           const isOver = dragOverSlot?.day === mobileDay && dragOverSlot?.period === period;
+          const periodNum = displayNumbers[period] ?? period;
+          const timeLabel = displayPeriodTimes[period];
+
+          const cardShell = cn(
+            'relative flex overflow-hidden rounded-2xl bg-white transition-all duration-200',
+            'shadow-[0_4px_24px_rgba(15,23,42,0.06)] border border-black/[0.04]',
+            isOver && 'ring-2 ring-blue-600',
+            isEditing && !isOver && 'border-rose-200/70',
+          );
+
+          if (isLunch || isBreak) {
+            return (
+              <motion.div
+                key={`mobile-${mobileDay}-${period}`}
+                layoutId={`card-${mobileDay}-${period}`}
+                className={cn(cardShell, 'min-h-[96px]')}
+              >
+                <div className="relative flex flex-1 flex-col items-center justify-center gap-1.5 px-4 py-5 text-center">
+                  <p
+                    className={cn(
+                      'text-[28px] font-black leading-none tracking-tight',
+                      isLunch ? 'text-emerald-500' : 'text-amber-500',
+                    )}
+                  >
+                    {isLunch ? 'พักเที่ยง' : 'พัก'}
+                  </p>
+                  <p className="text-[13px] font-bold text-muted-foreground">{timeLabel}</p>
+                  <div className="pointer-events-none absolute bottom-3 right-3 opacity-70">
+                    {isLunch ? (
+                      <Coffee size={28} className="text-emerald-400/70" />
+                    ) : (
+                      <Timer size={26} className="text-amber-400/70" />
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            );
+          }
+
+          const bindDrop = {
+            onDragOver: (e: DragEvent) => {
+              e.preventDefault();
+              if (dragOverSlot?.day !== mobileDay || dragOverSlot?.period !== period) {
+                setDragOverSlot({ day: mobileDay, period });
+              }
+            },
+            onDragLeave: () => setDragOverSlot(null),
+            onTouchMove: (touchE: TouchEvent) => {
+              if (!touchDragData) return;
+              const rect = touchE.currentTarget.getBoundingClientRect();
+              const touch = touchE.touches[0];
+              const isInside =
+                touch.clientX >= rect.left &&
+                touch.clientX <= rect.right &&
+                touch.clientY >= rect.top &&
+                touch.clientY <= rect.bottom;
+              if (isInside && (dragOverSlot?.day !== mobileDay || dragOverSlot?.period !== period)) {
+                setDragOverSlot({ day: mobileDay, period });
+              } else if (!isInside) {
+                setDragOverSlot(null);
+              }
+            },
+            onDrop: (dropE: DragEvent) => {
+              setDragOverSlot(null);
+              setTouchDragData(null);
+              if (!isEditMode) {
+                toast.error('กรุณาเปิดโหมดแก้ไขก่อนแล้วจึงลากวิชา', {
+                  description: 'คลิกปุ่มแก้ไข (Edit) ที่หัวตารางเพื่อเปิดโหมด',
+                });
+                return;
+              }
+              const subjectJson = dropE.dataTransfer.getData('application/subject-card');
+              if (subjectJson && onDropSubject) {
+                try {
+                  const { subjectId, teacherId, classId: droppedClassId } = JSON.parse(subjectJson);
+                  onDropSubject(mobileDay, period, subjectId, teacherId, droppedClassId || undefined);
+                } catch {
+                  toast.error('ไม่สามารถอ่านข้อมูลรายวิชาเพื่อวางในตารางได้');
+                }
+                return;
+              }
+              if (!onMoveEntry) return;
+              const entryId = dropE.dataTransfer.getData('text/plain');
+              if (entryId) onMoveEntry(entryId, mobileDay, period);
+            },
+            onTouchEnd: () => {
+              if (touchDragData && dragOverSlot?.day === mobileDay && dragOverSlot?.period === period) {
+                if (!isEditMode) {
+                  toast.error('กรุณาเปิดโหมดแก้ไขก่อนแล้วจึงลากวิชา', {
+                    description: 'คลิกปุ่มแก้ไข (Edit) ที่หัวตารางเพื่อเปิดโหมด',
+                  });
+                  setTouchDragData(null);
+                  setDragOverSlot(null);
+                  return;
+                }
+                onDropSubject?.(
+                  mobileDay,
+                  period,
+                  touchDragData.subjectId,
+                  touchDragData.teacherId,
+                  touchDragData.classId || undefined,
+                );
+              }
+              setTouchDragData(null);
+              setDragOverSlot(null);
+            },
+          };
+
+          if (entries.length === 0) {
+            return (
+              <motion.div
+                key={`mobile-${mobileDay}-${period}`}
+                layoutId={`card-${mobileDay}-${period}`}
+                className={cardShell}
+                onDragOver={bindDrop.onDragOver}
+                onDragLeave={bindDrop.onDragLeave}
+                onDrop={bindDrop.onDrop}
+                onTouchMove={bindDrop.onTouchMove}
+                onTouchEnd={bindDrop.onTouchEnd}
+              >
+                <button
+                  type="button"
+                  {...mobileCardLongPressProps(mobileDay, period)}
+                  onClick={() => {
+                    if (longPressFiredRef.current) {
+                      longPressFiredRef.current = false;
+                      return;
+                    }
+                    if (isEditing) openMobileSubjectDrawer(mobileDay, period);
+                  }}
+                  disabled={!canEdit && !setIsEditMode}
+                  className="relative flex min-h-[96px] flex-1 touch-manipulation select-none items-stretch text-left disabled:cursor-default [-webkit-touch-callout:none]"
+                >
+                  <div className="flex min-w-0 flex-1 flex-col justify-center gap-1 px-4 py-4">
+                    <p className="flex items-baseline gap-2 font-black leading-none tracking-tight">
+                      <span className="text-[36px] text-destructive">{periodNum}</span>
+                      <span className="text-[13px] font-bold text-muted-foreground">{timeLabel}</span>
+                    </p>
+                    <p className="text-[14px] font-bold text-muted-foreground">
+                      {canEdit ? 'แตะเพื่อเพิ่มวิชา · กดค้างเพื่อปิด' : 'กดค้างเพื่อแก้ไข'}
+                    </p>
+                  </div>
+                  {canEdit && (
+                    <div className="absolute bottom-2 right-3 z-20 flex gap-1">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/50 bg-white/45 text-foreground/70 shadow-sm backdrop-blur-md">
+                        <Pencil size={12} />
+                      </span>
+                    </div>
+                  )}
+                </button>
+              </motion.div>
+            );
+          }
 
           return (
-            <motion.div
-              key={`mobile-${mobileDay}-${period}`}
-              layoutId={`card-${mobileDay}-${period}`}
-              className="rounded-2xl border overflow-hidden shadow-[0_2px_12px_rgba(0,0,0,0.06)] transition-all duration-200"
-              onTouchStart={() => startMobileLongPress(mobileDay, period, isAnyBreak)}
-              onTouchEnd={clearLongPressTimer}
-              onTouchCancel={clearLongPressTimer}
-              onTouchMove={clearLongPressTimer}
-              style={{
-                background: isCurrent
-                  ? 'rgba(251,191,36,0.07)'
-                  : '#ffffff',
-                borderColor: isCurrent
-                  ? 'rgba(251,191,36,0.38)'
-                  : isOver
-                    ? '#2563eb'
-                    : isEditing
-                      ? 'rgba(225,29,72,0.18)'
-                      : 'rgba(0,0,0,0.07)',
-                outline: isOver ? '2px solid #2563eb' : undefined,
-              }}
-            >
-              <div className="flex" style={{ minHeight: isAnyBreak ? 56 : 86 }}>
-                {/* Left period column */}
-                <div className={`w-14 shrink-0 flex flex-col items-center justify-center py-3 gap-0.5 border-r ${
-                  isCurrent
-                    ? 'bg-amber-50 border-amber-100'
-                    : isLunch
-                      ? 'bg-emerald-50 border-emerald-100'
-                      : isBreak
-                        ? 'bg-yellow-50 border-yellow-100'
-                        : isEditing
-                          ? 'bg-rose-50/40 border-rose-100/60'
-                          : 'bg-black/[0.02] border-black/[0.04]'
-                }`}>
-                  {isLunch ? (
-                    <Coffee size={15} className={isEditing ? 'text-rose-500' : 'text-emerald-600'} />
-                  ) : isBreak ? (
-                    <Timer size={13} className={isEditing ? 'text-rose-400' : 'text-yellow-600'} />
-                  ) : (
-                    <>
-                      <span className={`text-lg font-black leading-none ${
-                        isCurrent ? 'text-amber-700' : isEditing ? 'text-rose-600' : 'text-black/70'
-                      }`}>
-                        {displayNumbers[period]}
-                      </span>
-                      <span className={`text-[8px] font-bold leading-none mt-0.5 ${
-                        isCurrent ? 'text-amber-500' : isEditing ? 'text-rose-400' : 'text-black/25'
-                      }`}>
-                        คาบ
-                      </span>
-                      {isCurrent && (
-                        <span className="flex h-1.5 w-1.5 mt-1 relative">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
-                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500" />
-                        </span>
+            <div key={`mobile-${mobileDay}-${period}`} className="flex flex-col gap-3">
+              {entries.map((entry) => {
+                const classLabel =
+                  allClasses?.find((c) => c.id === entry.classId)?.label || entry.classId;
+                const topLabel = entry.subjectName || entry.subjectCode || timeLabel;
+                const bottomLabel =
+                  viewMode === 'teacher' ? `ห้อง ${classLabel}` : entry.teacherName || '–';
+                const avatarUrl = teacherAvatarUrl(teachers, entry);
+                const isExcess = excessEntryIds?.has(entry.id) ?? false;
+                const isJoint = jointClassEntryIds?.has(entry.id) ?? false;
+                const subjectColor = subjectColorByName(
+                  entry.subjectName || entry.subjectId,
+                  entry.subjectGroup,
+                );
+
+                return (
+                  <motion.div
+                    key={entry.id}
+                    layoutId={`card-${mobileDay}-${period}-${entry.id}`}
+                    className={cardShell}
+                    onDragOver={bindDrop.onDragOver}
+                    onDragLeave={bindDrop.onDragLeave}
+                    onDrop={bindDrop.onDrop}
+                    onTouchMove={bindDrop.onTouchMove}
+                    onTouchEnd={bindDrop.onTouchEnd}
+                  >
+                    <button
+                      type="button"
+                      {...mobileCardLongPressProps(mobileDay, period)}
+                      onClick={() => {
+                        if (longPressFiredRef.current) {
+                          longPressFiredRef.current = false;
+                          return;
+                        }
+                        if (isEditing) openMobileSubjectDrawer(mobileDay, period);
+                        else handleSlotClick(mobileDay, period, entry);
+                      }}
+                      className="relative flex min-h-[104px] flex-1 touch-manipulation select-none items-stretch overflow-hidden text-left [-webkit-touch-callout:none]"
+                      draggable={canEdit}
+                      onDragStartCapture={(e) => {
+                        if (!canEdit) return;
+                        e.dataTransfer.setData('text/plain', entry.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                    >
+                      <div className="flex flex-1 flex-col justify-center gap-1 py-4 pl-4 pr-2 min-w-0 z-10">
+                        <p
+                          className="line-clamp-2 min-h-[2.5em] text-[12px] font-bold leading-tight"
+                          style={{ color: subjectColor.text }}
+                        >
+                          {topLabel}
+                        </p>
+                        <p className="flex items-baseline gap-2 font-black leading-none tracking-tight">
+                          <span className="text-[36px] text-destructive">{periodNum}</span>
+                          <span className="text-[13px] font-bold text-muted-foreground">{timeLabel}</span>
+                        </p>
+                        <p className="text-[15px] font-bold text-foreground truncate">{bottomLabel}</p>
+                      </div>
+
+                      <div className="relative w-[108px] shrink-0 self-stretch overflow-hidden">
+                        <img
+                          src={avatarUrl}
+                          alt={entry.teacherName || 'ครู'}
+                          className="absolute top-2 bottom-0 right-0 h-[calc(100%-0.5rem)] w-auto max-w-none object-cover object-top pointer-events-none select-none"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(entry.teacherId || entry.teacherName || 'teacher')}`;
+                          }}
+                        />
+                      </div>
+
+                      {(isExcess || isJoint) && (
+                        <div className="absolute right-2 top-2 z-20 flex gap-1">
+                          {isExcess && (
+                            <span className="inline-flex items-center gap-0.5 rounded-md bg-amber-500 px-1.5 py-0.5 text-[9px] font-black text-white">
+                              <AlertTriangle size={9} /> เกิน
+                            </span>
+                          )}
+                          {isJoint && (
+                            <span className="inline-flex items-center gap-0.5 rounded-md bg-blue-600/90 px-1.5 py-0.5 text-[9px] font-black text-white">
+                              <Users size={9} /> รวม
+                            </span>
+                          )}
+                        </div>
                       )}
-                    </>
-                  )}
-                </div>
+                    </button>
 
-                {/* Right content */}
-                <div className="flex-1 flex flex-col p-3">
-                  {/* Time row */}
-                  <div className="flex items-center gap-1 text-[9px] font-bold text-black/38 mb-2">
-                    <Clock size={9} />
-                    <span>{displayPeriodTimes[period]}</span>
-                  </div>
-
-                  {/* Content */}
-                  {isLunch ? (
-                    <div
-                      className="flex-1 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black text-white uppercase tracking-wider py-2"
-                      style={{
-                        background: restGradient(isEditing),
-                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3)',
-                      }}
-                    >
-                      <Coffee size={13} className="text-white animate-bounce" />
-                      <span>LUNCH BREAK</span>
-                    </div>
-                  ) : isBreak ? (
-                    <div
-                      className="flex-1 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black text-white uppercase tracking-wider py-2"
-                      style={{
-                        background: restGradient(isEditing),
-                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3)',
-                      }}
-                    >
-                      <Timer size={12} className="text-white animate-pulse" />
-                      <span>BREAK</span>
-                    </div>
-                  ) : (
-                    <div
-                      className="flex-1 rounded-xl overflow-hidden"
-                      style={{ minHeight: 56 }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        if (dragOverSlot?.day !== mobileDay || dragOverSlot?.period !== period) {
-                          setDragOverSlot({ day: mobileDay, period });
-                        }
-                      }}
-                      onDragLeave={() => setDragOverSlot(null)}
-                      onTouchMove={(touchE) => {
-                        if (touchDragData) {
-                          const rect = touchE.currentTarget.getBoundingClientRect();
-                          const touch = touchE.touches[0];
-                          const isInside = touch.clientX >= rect.left && touch.clientX <= rect.right &&
-                                          touch.clientY >= rect.top && touch.clientY <= rect.bottom;
-                          if (isInside && (dragOverSlot?.day !== mobileDay || dragOverSlot?.period !== period)) {
-                            setDragOverSlot({ day: mobileDay, period });
-                          } else if (!isInside) {
-                            setDragOverSlot(null);
-                          }
-                        }
-                      }}
-                      onDrop={(dropE) => {
-                        setDragOverSlot(null);
-                        setTouchDragData(null);
-
-                        if (!isEditMode) {
-                          toast.error('กรุณาเปิดโหมดแก้ไขก่อนแล้วจึงลากวิชา', {
-                            description: 'คลิกปุ่มแก้ไข (Edit) ที่หัวตารางเพื่อเปิดโหมด',
-                          });
-                          return;
-                        }
-
-                        const subjectJson = dropE.dataTransfer.getData('application/subject-card');
-                        if (subjectJson && onDropSubject) {
-                          try {
-                            const { subjectId, teacherId, classId: droppedClassId } = JSON.parse(subjectJson);
-                            onDropSubject(mobileDay, period, subjectId, teacherId, droppedClassId || undefined);
-                          } catch {
-                            toast.error('ไม่สามารถอ่านข้อมูลรายวิชาเพื่อวางในตารางได้');
-                          }
-                          return;
-                        }
-                        if (!onMoveEntry) return;
-                        const entryId = dropE.dataTransfer.getData('text/plain');
-                        if (entryId) onMoveEntry(entryId, mobileDay, period);
-                      }}
-                      onTouchEnd={() => {
-                        if (touchDragData && dragOverSlot?.day === mobileDay && dragOverSlot?.period === period) {
-                          if (!isEditMode) {
-                            toast.error('กรุณาเปิดโหมดแก้ไขก่อนแล้วจึงลากวิชา', {
-                              description: 'คลิกปุ่มแก้ไข (Edit) ที่หัวตารางเพื่อเปิดโหมด',
-                            });
-                            setTouchDragData(null);
-                            setDragOverSlot(null);
-                            return;
-                          }
-                          onDropSubject?.(mobileDay, period, touchDragData.subjectId, touchDragData.teacherId, touchDragData.classId || undefined);
-                        }
-                        setTouchDragData(null);
-                        setDragOverSlot(null);
-                      }}
-                    >
-                      <SlotCell
-                        entries={entries}
-                        viewMode={viewMode}
-                        readOnly={!canEdit}
-                        isCurrent={isCurrent}
-                        allClasses={allClasses}
-                        excessEntryIds={excessEntryIds}
-                        teachers={teachers}
-                        jointClassEntryIds={jointClassEntryIds}
-                        jointClassPartnersByEntryId={jointClassPartnersByEntryId}
-                        onClick={(e) => handleSlotClick(mobileDay, period, e)}
-                        onDelete={(id) => onDeleteEntry(id)}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            </motion.div>
-            );
+                    {canEdit && (
+                      <div className="absolute bottom-2 right-3 z-20 flex gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openMobileSubjectDrawer(mobileDay, period);
+                          }}
+                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/50 bg-white/45 text-foreground/70 shadow-sm backdrop-blur-md hover:bg-white/60"
+                          title="แก้ไข"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteEntry(entry.id);
+                          }}
+                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/50 bg-white/45 text-foreground/70 shadow-sm backdrop-blur-md hover:bg-white/60"
+                          title="ลบ"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
+            </div>
+          );
           })}
           </div>
+
+        <ExamMobileFilterDrawer
+          open={!!mobileSubjectPickerSlot}
+          onOpenChange={(open) => {
+            if (!open) setMobileSubjectPickerSlot(null);
+          }}
+          direction="right"
+          title="เลือกรายวิชา"
+          description={
+            mobileSubjectPickerSlot
+              ? `${DAY_LABELS[mobileSubjectPickerSlot.day]} • คาบ ${displayNumbers[mobileSubjectPickerSlot.period] ?? mobileSubjectPickerSlot.period}`
+              : undefined
+          }
+        >
+          {draggableSubjects.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-rose-200 bg-white px-3 py-6 text-center text-[11px] font-bold text-rose-500/80">
+              ยังไม่มีรายวิชาที่พร้อมเลือกในมุมมองนี้
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-2.5 pb-4">
+              {draggableSubjects.map((subject) => {
+                const color = subjectColorByName(subject.name || subject.id, subject.subjectGroup);
+                const teacherId = subject.assignedTeacherId || dragTeacherId;
+                const badge = categoryBadgeStyle((subject as any).category);
+                const handleAdd = () => {
+                  if (!mobileSubjectPickerSlot) return;
+                  if (!teacherId) {
+                    toast.error('ยังไม่สามารถใส่วิชาได้ เพราะไม่พบครูผู้สอนของวิชานี้');
+                    return;
+                  }
+                  onDropSubject?.(
+                    mobileSubjectPickerSlot.day,
+                    mobileSubjectPickerSlot.period,
+                    subject.id,
+                    teacherId,
+                    subject.classId ?? undefined,
+                  );
+                  setMobileSubjectPickerSlot(null);
+                };
+                return (
+                  <div
+                    key={`picker-${subject.id}-${subject.className ?? ''}`}
+                    className="flex w-full items-center gap-3 rounded-xl p-3"
+                    style={{
+                      background: subjectGradient(color),
+                      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.82), 0 12px 18px -18px ${withAlpha(color.accent, 0.58)}`,
+                    }}
+                  >
+                    <button type="button" onClick={handleAdd} className="min-w-0 flex-1 text-left">
+                      <div className="mb-1.5 flex flex-wrap items-center gap-1">
+                        <span
+                          className="shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-black"
+                          style={{
+                            borderColor: 'rgba(255,255,255,0.26)',
+                            background: 'rgba(0,0,0,0.14)',
+                            color: 'rgba(255,255,255,0.96)',
+                          }}
+                        >
+                          {subject.code}
+                        </span>
+                        {viewMode === 'teacher' && subject.className && (
+                          <span
+                            className="shrink-0 rounded-md border bg-white/20 px-1 py-0.5 text-[8px] font-black text-white"
+                            style={{ borderColor: 'rgba(255,255,255,0.2)' }}
+                          >
+                            {subject.className}
+                          </span>
+                        )}
+                        <span
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[8px] font-black ${badge.className}`}
+                        >
+                          <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClassName}`} />
+                          {badge.label}
+                        </span>
+                        <span
+                          className="ml-auto shrink-0 text-[9px] font-bold text-white"
+                          style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
+                        >
+                          {subject.hoursPerWeek ?? 0} คาบ
+                        </span>
+                      </div>
+                      <p
+                        className="line-clamp-2 text-[11px] font-extrabold leading-snug text-white"
+                        style={{ textShadow: '0 1px 2.5px rgba(0,0,0,0.45)' }}
+                      >
+                        {subject.name}
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAdd}
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
+                      style={{
+                        background: 'rgba(255,255,255,0.22)',
+                        border: '1.5px solid rgba(255,255,255,0.5)',
+                      }}
+                      title="เพิ่มรายวิชานี้"
+                    >
+                      <Plus size={16} className="text-white drop-shadow" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </ExamMobileFilterDrawer>
+
+          </>
         )}
       </div>
 
-      <div className="hidden md:block overflow-x-auto pb-1" id="schedule-grid-export">
+      <div
+        className={cn(
+          'hidden overflow-x-auto pb-1',
+          shouldHideGrid
+            ? 'md:flex min-h-[calc(100dvh-12rem)] items-center justify-center'
+            : 'md:block',
+        )}
+        id="schedule-grid-export"
+      >
         {shouldHideGrid ? (
-          <div className="rounded-2xl border border-black/[0.08] bg-white/85 px-5 py-8 text-center">
+          <div className="w-full px-5 py-8 text-center">
             <p className="text-[13px] font-black text-red-600">{hideGridTitle}</p>
             <p className="mt-1 text-[11px] font-medium text-red-500">{hideGridHint}</p>
           </div>
@@ -1006,7 +948,7 @@ export default function ScheduleGrid({
             backdropFilter: 'blur(28px) saturate(160%)',
             WebkitBackdropFilter: 'blur(28px) saturate(160%)',
             border: `1px solid ${isEditing ? 'rgba(225,29,72,0.3)' : 'rgba(0,0,0,0.08)'}`,
-            boxShadow: 'none',
+            boxShadow: '0 4px 24px rgba(15,23,42,0.08), 0 1px 3px rgba(15,23,42,0.04)',
             minWidth: 700,
           }}
         >
@@ -1041,8 +983,8 @@ export default function ScheduleGrid({
                 className="py-3 px-2 text-center"
                 style={{ borderLeft: `1px solid ${isEditing ? 'rgba(225,29,72,0.2)' : 'rgba(0,0,0,0.06)'}` }}
               >
-                <p className={`text-[12px] font-black hidden md:block ${isEditing ? 'text-rose-600' : 'text-blue-700/90'}`}>{DAY_LABELS[day]}</p>
-                <p className={`text-[12px] font-black md:hidden ${isEditing ? 'text-rose-600' : 'text-blue-700/90'}`}>{DAY_SHORT[day]}</p>
+                <p className={`text-[12px] font-black hidden md:block ${isEditing ? 'text-rose-600' : 'text-foreground'}`}>{DAY_LABELS[day]}</p>
+                <p className={`text-[12px] font-black md:hidden ${isEditing ? 'text-rose-600' : 'text-foreground'}`}>{DAY_SHORT[day]}</p>
               </div>
             ))}
           </div>
@@ -1052,7 +994,6 @@ export default function ScheduleGrid({
             const isLunch = lunchPeriods.includes(period);
             const isBreak = breakPeriods.includes(period);
             const isAnyBreak = isLunch || isBreak;
-            const isCurrent = currentPeriod === period && !isAnyBreak;
 
             return (
               <div
@@ -1062,15 +1003,11 @@ export default function ScheduleGrid({
                   gridTemplateColumns: `${canEdit ? 90 : 76}px repeat(5, minmax(0, 1fr))`,
                   minHeight: canEdit ? 80 : (isAnyBreak ? 36 : 70),
                   borderTop: `1px solid ${isEditing ? 'rgba(225,29,72,0.2)' : 'rgba(0,0,0,0.06)'}`,
-                  background: isCurrent
-                    ? 'rgba(251,191,36,0.06)'
-                    : isLunch
-                      ? 'rgba(16,185,129,0.04)'
-                      : isBreak
-                        ? 'rgba(234,179,8,0.04)'
-                        : undefined,
-                  outline: isCurrent ? '2px solid rgba(251,191,36,0.30)' : undefined,
-                  outlineOffset: '-1px',
+                  background: isLunch
+                    ? 'rgba(16,185,129,0.04)'
+                    : isBreak
+                      ? 'rgba(234,179,8,0.04)'
+                      : undefined,
                 }}
               >
                 <PeriodLabel
@@ -1078,7 +1015,6 @@ export default function ScheduleGrid({
                   displayNum={displayNumbers[period]}
                   isLunch={isLunch}
                   isBreak={isBreak}
-                  isCurrent={isCurrent}
                   time={displayPeriodTimes[period] ?? ''}
                   canEdit={canEdit}
                   isEditMode={isEditMode}
@@ -1090,14 +1026,27 @@ export default function ScheduleGrid({
                 {isLunch ? (
                   <div className="col-span-5 p-[3px]">
                     <div
-                      className="w-full h-full rounded-xl flex items-center justify-center gap-2"
-                      style={{ 
-                        background: restGradient(isEditing),
-                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.34)',
-                      }}
+                      className="relative w-full h-full min-h-[50px] overflow-hidden rounded-xl flex items-center justify-center gap-2"
+                      style={
+                        isEditing
+                          ? {
+                              background: restGradient(true),
+                              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.34)',
+                            }
+                          : {
+                              backgroundImage: 'url(/schedule/lunch-sky.png)',
+                              backgroundSize: 'cover',
+                              backgroundPosition: 'center',
+                            }
+                      }
                     >
-                      <Coffee size={14} className="text-white" />
-                      <span className="text-[10px] font-black uppercase tracking-widest text-white">พักกลางวัน — Lunch Break</span>
+                      {!isEditing && (
+                        <div className="pointer-events-none absolute inset-0 bg-sky-900/15" aria-hidden />
+                      )}
+                      <Coffee size={14} className="relative z-10 text-white drop-shadow" />
+                      <span className="relative z-10 text-[10px] font-black uppercase tracking-widest text-white drop-shadow">
+                        พักกลางวัน — Lunch Break
+                      </span>
                     </div>
                   </div>
                 ) : isBreak ? (
@@ -1193,7 +1142,6 @@ export default function ScheduleGrid({
                           entries={entries}
                           viewMode={viewMode}
                           readOnly={!canEdit}
-                          isCurrent={isCurrent}
                           allClasses={allClasses}
                           excessEntryIds={excessEntryIds}
                           teachers={teachers}
@@ -1455,7 +1403,6 @@ function PeriodLabel({
   displayNum,
   isLunch,
   isBreak,
-  isCurrent,
   time,
   canEdit,
   isEditMode,
@@ -1467,7 +1414,6 @@ function PeriodLabel({
   displayNum?: number;
   isLunch: boolean;
   isBreak: boolean;
-  isCurrent: boolean;
   time: string;
   isEditMode: boolean;
   canEdit: boolean;
@@ -1515,9 +1461,7 @@ function PeriodLabel({
             borderBottom: isAnyBreak ? `1px solid ${isEditing ? 'rgba(225,29,72,0.15)' : 'rgba(0,0,0,0.06)'}` : undefined,
             minHeight: isLunch ? 56 : isBreak ? 28 : 76,
             cursor: isEditing ? 'pointer' : 'default',
-            background: isCurrent
-              ? 'rgba(251,191,36,0.15)'
-              : isLunch
+            background: isLunch
                 ? (isEditing ? 'rgba(225,29,72,0.08)' : 'rgba(37,99,235,0.08)')
                 : isBreak
                   ? (isEditing ? 'rgba(225,29,72,0.06)' : 'rgba(59,130,246,0.06)')
@@ -1546,16 +1490,11 @@ function PeriodLabel({
             <Timer size={11} className={isEditing ? 'text-rose-500' : 'text-blue-500'} />
           ) : (
             <>
-              <span className={`text-[11px] font-black leading-none ${isCurrent ? 'text-amber-700' : isEditing ? 'text-rose-700' : 'text-black/85'}`}>
+              <span className={`text-[11px] font-black leading-none ${isEditing ? 'text-rose-700' : 'text-black/85'}`}>
                 {displayNum ?? period}
               </span>
-              {isCurrent && (
-                <span className="text-[7px] font-black text-amber-600 uppercase tracking-tight leading-none mt-0.5">
-                  ●NOW
-                </span>
-              )}
               <span className={`text-[9px] text-center font-bold leading-none mt-1 ${
-                isCurrent ? 'text-amber-600' : isEditing ? 'text-rose-600' : 'text-black/60'
+                isEditing ? 'text-rose-600' : 'text-black/60'
               } transition-colors`}>
                 {time || '—'}
               </span>
@@ -1633,11 +1572,137 @@ function PeriodLabel({
 }
 
 // ── Slot Cell ─────────────────────────────────────────────────────────────────
+/** Desktop grid card — same layout language as mobile schedule cards */
+function DesktopScheduleCard({
+  entry,
+  viewMode,
+  readOnly,
+  isExcess,
+  isJoint,
+  subtitle,
+  teachers,
+  allClasses,
+  onClick,
+  onDelete,
+  compact,
+}: {
+  entry: ScheduleEntry;
+  viewMode: 'class' | 'teacher';
+  readOnly?: boolean;
+  isExcess?: boolean;
+  isJoint?: boolean;
+  subtitle?: string;
+  teachers?: { id: string; department: string; name: string; photoURL?: string }[];
+  allClasses?: { id: string; gradeLevel: string; department: string; label: string }[];
+  onClick: (entry?: ScheduleEntry) => void;
+  onDelete?: (id: string) => void;
+  compact?: boolean;
+}) {
+  const subjectColor = subjectColorByName(entry.subjectName || entry.subjectId, entry.subjectGroup);
+  const avatarUrl = teacherAvatarUrl(teachers, entry);
+  const classLabel = allClasses?.find((c) => c.id === entry.classId)?.label || entry.classId;
+  const topLabel = entry.subjectName || entry.subjectCode;
+  const bottomLabel =
+    viewMode === 'teacher' ? `ห้อง ${classLabel}` : entry.teacherName || '–';
+
+  return (
+    <motion.div
+      key={entry.id}
+      initial={{ opacity: 0, scale: 0.93 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.93 }}
+      transition={{ duration: 0.13 }}
+      className={cn(
+        'group relative w-full h-full overflow-hidden rounded-xl cursor-pointer transition-all duration-150',
+        'bg-white border border-black/[0.04]',
+        'shadow-[0_4px_16px_rgba(15,23,42,0.06)]',
+        isExcess && 'ring-2 ring-amber-400/40',
+      )}
+      style={{ minHeight: compact ? 44 : 70 }}
+      onClick={() => onClick(entry)}
+      draggable={!readOnly}
+      onDragStartCapture={(e) => {
+        if (readOnly) return;
+        e.dataTransfer.setData('text/plain', entry.id);
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+    >
+      <div className={cn('relative flex h-full items-stretch', compact ? 'min-h-[44px]' : 'min-h-[70px]')}>
+        <div className={cn('flex flex-1 flex-col justify-center min-w-0 z-10', compact ? 'gap-0 py-1.5 pl-2 pr-1' : 'gap-0.5 py-2 pl-2.5 pr-1')}>
+          <p
+            className={cn(
+              'font-bold leading-tight line-clamp-2 min-h-[2.5em]',
+              compact ? 'text-[9px]' : 'text-[10px]',
+            )}
+            style={{ color: subjectColor.text }}
+          >
+            {topLabel}
+          </p>
+          {subtitle && (
+            <p className="text-[8px] font-bold text-muted-foreground line-clamp-1">{subtitle}</p>
+          )}
+          <p className={cn('font-bold text-foreground truncate', compact ? 'text-[8px]' : 'text-[9px]')}>
+            {bottomLabel}
+          </p>
+        </div>
+
+        <div className={cn('relative shrink-0 self-stretch overflow-hidden', compact ? 'w-10' : 'w-14')}>
+          <img
+            src={avatarUrl}
+            alt={entry.teacherName || 'ครู'}
+            className="absolute top-1 bottom-0 right-0 h-[calc(100%-0.25rem)] w-auto max-w-none object-cover object-top pointer-events-none select-none"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(entry.teacherId || entry.teacherName || 'teacher')}`;
+            }}
+          />
+        </div>
+
+        {(isExcess || isJoint) && (
+          <div className="absolute right-1 bottom-1 z-20 flex gap-0.5">
+            {isExcess && (
+              <span className="inline-flex items-center gap-0.5 rounded-md bg-amber-500 px-1 py-0.5 text-[8px] font-black text-white">
+                <AlertTriangle size={8} /> เกิน
+              </span>
+            )}
+            {isJoint && (
+              <span className="inline-flex items-center gap-0.5 rounded-md bg-blue-600/90 px-1 py-0.5 text-[8px] font-black text-white">
+                <Users size={8} /> รวม
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {!readOnly && !compact && (
+        <div className="absolute left-1.5 bottom-1.5 z-20 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onClick(entry); }}
+            className="flex h-6 w-6 items-center justify-center rounded-md bg-black/10 text-foreground/70 hover:bg-black/15"
+            title="แก้ไข"
+          >
+            <Pencil size={11} />
+          </button>
+          {onDelete && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
+              className="flex h-6 w-6 items-center justify-center rounded-md bg-black/10 text-foreground/70 hover:bg-black/15"
+              title="ลบ"
+            >
+              <Trash2 size={11} />
+            </button>
+          )}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 function SlotCell({
   entries,
   viewMode,
   readOnly,
-  isCurrent,
   onClick,
   onDelete,
   allClasses,
@@ -1649,7 +1714,6 @@ function SlotCell({
   entries: ScheduleEntry[];
   viewMode: 'class' | 'teacher';
   readOnly?: boolean;
-  isCurrent?: boolean;
   onClick: (entry?: ScheduleEntry) => void;
   onDelete?: (id: string) => void;
   allClasses?: { id: string; gradeLevel: string; department: string; label: string }[];
@@ -1679,114 +1743,41 @@ function SlotCell({
   // Joint class: same teacher + same subject + same slot across multiple rooms
   if (isJointClassGroup(entries)) {
     const entry = entries[0];
-    const color = subjectColorByName(entry.subjectName || entry.subjectId, entry.subjectGroup);
-    const isExcess = entries.some((e) => excessEntryIds?.has(e.id));
     const roomLabels = formatClassLabels(
       entries.map((e) => e.classId),
       allClasses,
     );
+    const partnerLabels = formatClassLabels(
+      jointClassPartnersByEntryId?.get(entry.id) ?? entries.slice(1).map((e) => e.classId),
+      allClasses,
+    );
+    const subtitle =
+      viewMode === 'teacher'
+        ? `ห้อง ${roomLabels}`
+        : partnerLabels
+          ? `กับ ${partnerLabels}`
+          : undefined;
 
     return (
       <AnimatePresence mode="wait">
-        <motion.div
-          key={`joint-${entry.id}`}
-          initial={{ opacity: 0, scale: 0.93 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.93 }}
-          transition={{ duration: 0.13 }}
-          className="group relative w-full h-full overflow-hidden rounded-xl p-2.5 cursor-pointer transition-all duration-150 flex flex-col justify-between"
-          style={{
-            background: subjectGradient(color, isCurrent),
-            minHeight: 70,
-            boxShadow: isExcess
-              ? '0 0 0 2px rgba(245,158,11,0.18)'
-              : isCurrent
-              ? `0 0 0 2px ${withAlpha(color.accent, 0.26)}, inset 0 1px 0 rgba(255,255,255,0.42), 0 12px 20px -18px ${withAlpha(color.accent, 0.68)}`
-              : `inset 0 1px 0 rgba(255,255,255,0.34), 0 12px 20px -18px ${withAlpha(color.accent, 0.52)}`,
-          }}
-          onClick={() => onClick(entry)}
-          draggable={!readOnly}
-          onDragStartCapture={(e) => {
-            if (readOnly) return;
-            e.dataTransfer.setData('text/plain', entry.id);
-            e.dataTransfer.effectAllowed = 'move';
-          }}
-        >
-          <div className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-white/22 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm backdrop-blur-sm">
-            <Users size={9} />
-            เรียนรวม
-          </div>
-          {isExcess && (
-            <div className="absolute right-2 top-8 inline-flex items-center gap-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm">
-              <AlertTriangle size={9} />
-              เกิน
-            </div>
-          )}
-          <div className="select-none flex items-start justify-between gap-1.5 w-full flex-1 pt-4">
-            <div className="min-w-0 flex-1">
-              <p
-                className="text-[9px] font-black leading-none mb-1 text-white"
-                style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-              >
-                {entry.subjectCode}
-              </p>
-              <p
-                className="text-[10.5px] font-extrabold text-white leading-tight line-clamp-2"
-                style={{ textShadow: '0 1px 2.5px rgba(0,0,0,0.45)' }}
-              >
-                {entry.subjectName}
-              </p>
-              <p
-                className="text-[8.5px] font-bold text-white/90 mt-1 leading-tight line-clamp-2"
-                style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-              >
-                {viewMode === 'teacher' ? `ห้อง ${roomLabels}` : `กับ ${formatClassLabels(
-                  jointClassPartnersByEntryId?.get(entry.id) ?? entries.slice(1).map((e) => e.classId),
-                  allClasses,
-                )}`}
-              </p>
-            </div>
-            {viewMode === 'class' && (
-              <div className="shrink-0 text-right flex items-center gap-2 self-end mb-0.5 pl-1.5">
-                <span
-                  className="text-[8.5px] font-bold text-white leading-tight whitespace-nowrap block"
-                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                >
-                  {entry.teacherName || '-'}
-                </span>
-              </div>
-            )}
-          </div>
-          <div className="absolute left-2 bottom-2 flex items-center gap-1 z-10">
-            {!readOnly && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onClick(entry); }}
-                className="w-6 h-6 rounded-lg flex items-center justify-center text-white/90 hover:text-white transition-colors bg-black/25 hover:bg-black/40 active:bg-black/50 backdrop-blur-md shadow-sm"
-                title="แก้ไข"
-              >
-                <Pencil size={11} />
-              </button>
-            )}
-            {!readOnly && onDelete && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
-                className="w-6 h-6 rounded-lg flex items-center justify-center text-white/90 hover:text-white transition-colors bg-black/25 hover:bg-black/40 active:bg-black/50 backdrop-blur-md shadow-sm"
-                title="ลบ"
-              >
-                <Trash2 size={11} />
-              </button>
-            )}
-          </div>
-        </motion.div>
+        <DesktopScheduleCard
+          entry={entry}
+          viewMode={viewMode}
+          readOnly={readOnly}
+          isExcess={entries.some((e) => excessEntryIds?.has(e.id))}
+          isJoint
+          subtitle={viewMode === 'class' ? subtitle : undefined}
+          teachers={teachers}
+          allClasses={allClasses}
+          onClick={onClick}
+          onDelete={onDelete}
+        />
       </AnimatePresence>
     );
   }
 
-  // If there's only one entry, keep the original look
   if (entries.length === 1) {
     const entry = entries[0];
-    const color = subjectColorByName(entry.subjectName || entry.subjectId, entry.subjectGroup);
-    const isExcess = excessEntryIds?.has(entry.id) ?? false;
     const isJoint = jointClassEntryIds?.has(entry.id) ?? false;
     const partnerLabels = isJoint
       ? formatClassLabels(jointClassPartnersByEntryId?.get(entry.id) ?? [], allClasses)
@@ -1794,239 +1785,45 @@ function SlotCell({
 
     return (
       <AnimatePresence mode="wait">
-        <motion.div
-          key={entry.id}
-          initial={{ opacity: 0, scale: 0.93 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.93 }}
-          transition={{ duration: 0.13 }}
-          className="group relative w-full h-full overflow-hidden rounded-xl p-2.5 cursor-pointer transition-all duration-150 flex flex-col justify-between"
-          style={{
-            background: subjectGradient(color, isCurrent),
-            minHeight: 70,
-            boxShadow: isExcess
-              ? '0 0 0 2px rgba(245,158,11,0.18)'
-              : isCurrent
-              ? `0 0 0 2px ${withAlpha(color.accent, 0.26)}, inset 0 1px 0 rgba(255,255,255,0.42), 0 12px 20px -18px ${withAlpha(color.accent, 0.68)}`
-              : `inset 0 1px 0 rgba(255,255,255,0.34), 0 12px 20px -18px ${withAlpha(color.accent, 0.52)}`,
-          }}
-          onClick={() => onClick(entry)}
-          draggable={!readOnly}
-          onDragStartCapture={(e) => {
-            if (readOnly) return;
-            e.dataTransfer.setData('text/plain', entry.id);
-            e.dataTransfer.effectAllowed = 'move';
-          }}
-        >
-          <div
-            className="pointer-events-none absolute -right-7 -top-7 h-16 w-16 rounded-full"
-            style={{
-              background: `radial-gradient(circle, ${withAlpha(color.accent, 0.24)} 0%, ${withAlpha(color.accent, 0.04)} 68%, transparent 100%)`,
-            }}
-          />
-          <div
-            className="pointer-events-none absolute -bottom-8 right-5 h-14 w-14 rounded-full"
-            style={{
-              background: `radial-gradient(circle, ${withAlpha(color.accent, 0.16)} 0%, ${withAlpha(color.accent, 0.03)} 62%, transparent 100%)`,
-            }}
-          />
-          {isExcess && (
-            <div className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm">
-              <AlertTriangle size={9} />
-              เกิน
-            </div>
-          )}
-          {isJoint && !isExcess && (
-            <div className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-white/22 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm backdrop-blur-sm">
-              <Users size={9} />
-              เรียนรวม
-            </div>
-          )}
-          {isJoint && isExcess && (
-            <div className="absolute right-2 top-8 inline-flex items-center gap-1 rounded-full bg-white/22 px-1.5 py-0.5 text-[8px] font-black text-white shadow-sm backdrop-blur-sm">
-              <Users size={9} />
-              เรียนรวม
-            </div>
-          )}
-          <div className="select-none flex items-start justify-between gap-1.5 w-full flex-1">
-            <div className="min-w-0 flex-1">
-              <p
-                className="text-[9px] font-black leading-none mb-1 text-white"
-                style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-              >
-                {entry.subjectCode}
-              </p>
-              <p
-                className="text-[10.5px] font-extrabold text-white leading-tight line-clamp-2"
-                style={{ textShadow: '0 1px 2.5px rgba(0,0,0,0.45)' }}
-              >
-                {entry.subjectName}
-              </p>
-              {isJoint && partnerLabels && (
-                <p
-                  className="text-[8px] font-bold text-white/85 mt-0.5 leading-tight line-clamp-1"
-                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                >
-                  กับ {partnerLabels}
-                </p>
-              )}
-            </div>
-            
-            <div className="shrink-0 text-right flex items-center gap-2 self-end mb-0.5 pl-1.5">
-              {viewMode === 'class' ? (
-                (() => {
-                  const parts = entry.teacherName ? entry.teacherName.trim().split(/\s+/) : [];
-                  const teacherObj = teachers?.find(t => t.id === entry.teacherId || t.name === entry.teacherName);
-                  const avatarUrl = teacherObj?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${entry.teacherId || entry.teacherName || 'teacher'}`;
-
-                  if (parts.length >= 2) {
-                    const firstName = parts.slice(0, -1).join(' ');
-                    const lastName = parts[parts.length - 1];
-                    return (
-                      <>
-                        <div className="flex flex-col items-end leading-tight">
-                          <span 
-                            className="text-[8.5px] font-bold text-white leading-tight whitespace-nowrap block"
-                            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                          >
-                            {firstName}
-                          </span>
-                          <span 
-                            className="text-[8.5px] font-bold text-white/90 leading-tight whitespace-nowrap block"
-                            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                          >
-                            {lastName}
-                          </span>
-                        </div>
-                        <img 
-                          src={avatarUrl} 
-                          alt={entry.teacherName}
-                          className="w-7 h-7 rounded-full object-cover border border-white/40 shadow-sm shrink-0" 
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${entry.teacherId || entry.teacherName || 'teacher'}`;
-                          }}
-                        />
-                      </>
-                    );
-                  }
-                  return (
-                    <>
-                      <span 
-                        className="text-[8.5px] font-bold text-white leading-tight whitespace-nowrap block"
-                        style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                      >
-                        {entry.teacherName || '-'}
-                      </span>
-                      <img 
-                        src={avatarUrl} 
-                        alt={entry.teacherName}
-                        className="w-7 h-7 rounded-full object-cover border border-white/40 shadow-sm shrink-0" 
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${entry.teacherId || entry.teacherName || 'teacher'}`;
-                        }}
-                      />
-                    </>
-                  );
-                })()
-              ) : (
-                <span 
-                  className="text-[8.5px] font-bold text-white leading-tight whitespace-nowrap block"
-                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                >
-                  {`ห้อง ${allClasses?.find(c => c.id === entry.classId)?.label || entry.classId}`}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="absolute left-2 bottom-2 flex items-center gap-1 z-10">
-            {!readOnly && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onClick(entry); }}
-                className="w-6 h-6 rounded-lg flex items-center justify-center text-white/90 hover:text-white transition-colors bg-black/25 hover:bg-black/40 active:bg-black/50 backdrop-blur-md shadow-sm"
-                title="แก้ไข"
-              >
-                <Pencil size={11} />
-              </button>
-            )}
-            {!readOnly && onDelete && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
-                className="w-6 h-6 rounded-lg flex items-center justify-center text-white/90 hover:text-white transition-colors bg-black/25 hover:bg-black/40 active:bg-black/50 backdrop-blur-md shadow-sm"
-                title="ลบ"
-              >
-                <Trash2 size={11} />
-              </button>
-            )}
-          </div>
-        </motion.div>
+        <DesktopScheduleCard
+          entry={entry}
+          viewMode={viewMode}
+          readOnly={readOnly}
+          isExcess={excessEntryIds?.has(entry.id) ?? false}
+          isJoint={isJoint}
+          subtitle={isJoint && partnerLabels ? `กับ ${partnerLabels}` : undefined}
+          teachers={teachers}
+          allClasses={allClasses}
+          onClick={onClick}
+          onDelete={onDelete}
+        />
       </AnimatePresence>
     );
   }
 
-  // For multiple entries (Joint Classes), show a special stacked view
+  // Multiple non-joint entries — stacked compact cards
   return (
-    <div className="w-full h-full min-h-[70px] flex flex-col gap-1">
-      {entries.map(entry => {
-        const color = subjectColorByName(entry.subjectName || entry.subjectId, entry.subjectGroup);
-        const isExcess = excessEntryIds?.has(entry.id) ?? false;
-        return (
-          <div
-            key={entry.id}
-            className="group relative flex-1 rounded-lg p-1.5 cursor-pointer transition-all"
-            style={{
-              background: subjectGradient(color),
-              boxShadow: isExcess
-                ? 'inset 0 0 0 1px rgba(245,158,11,0.14), inset 0 1px 0 rgba(255,255,255,0.78)'
-                : `inset 0 1px 0 rgba(255,255,255,0.76), 0 8px 16px -16px ${withAlpha(color.accent, 0.52)}`,
-            }}
-            onClick={() => onClick(entry)}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p
-                  className="text-[8px] font-black leading-none mb-0.5 text-white"
-                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                >
-                  {entry.subjectCode}
-                </p>
-                <p
-                  className="text-[9px] font-extrabold text-white leading-tight line-clamp-1"
-                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.45)' }}
-                >
-                  {entry.subjectName}
-                </p>
-                <p
-                  className="text-[8px] font-bold text-white mt-0.5 leading-none truncate"
-                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
-                >
-                  {viewMode === 'class'
-                    ? entry.teacherName
-                    : `ห้อง ${allClasses?.find(c => c.id === entry.classId)?.label || entry.classId}`}
-                </p>
-              </div>
-              {isExcess && (
-                <div className="shrink-0 inline-flex items-center justify-center rounded-full bg-amber-500 p-1 text-white shadow-sm">
-                  <AlertTriangle size={9} />
-                </div>
-              )}
-              <div className="flex items-center gap-0.5">
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDelete?.(entry.id); }}
-                  className="p-1.5 rounded-md text-white/90 hover:text-white bg-black/20 hover:bg-black/30 transition-all backdrop-blur-md shadow-sm"
-                  title="ลบ"
-                >
-                  <X size={10} strokeWidth={3} />
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })}
+    <div className="flex h-full min-h-[70px] w-full flex-col gap-1">
+      {entries.map((entry) => (
+        <DesktopScheduleCard
+          key={entry.id}
+          entry={entry}
+          viewMode={viewMode}
+          readOnly={readOnly}
+          isExcess={excessEntryIds?.has(entry.id) ?? false}
+          isJoint={jointClassEntryIds?.has(entry.id) ?? false}
+          teachers={teachers}
+          allClasses={allClasses}
+          onClick={onClick}
+          onDelete={onDelete}
+          compact
+        />
+      ))}
       {!readOnly && (
         <button
+          type="button"
           onClick={() => onClick()}
-          className="w-full py-1 rounded-lg border border-dashed border-black/10 flex items-center justify-center text-black/20 hover:text-black/40 hover:bg-black/5 transition-all"
+          className="flex w-full items-center justify-center rounded-lg border border-dashed border-black/10 py-1 text-black/20 transition-all hover:bg-black/5 hover:text-black/40"
         >
           <Plus size={12} />
         </button>

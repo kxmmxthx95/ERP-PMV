@@ -1,12 +1,25 @@
-import { useEffect, useMemo, useState, lazy, Suspense } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import { deleteField } from 'firebase/firestore';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, FileSpreadsheet, FileText, Plus } from 'lucide-react';
-import { HiBars3 } from 'react-icons/hi2';
+import { FileSpreadsheet, FileText, Plus } from 'lucide-react';
+import { HiChevronLeft, HiChevronRight } from 'react-icons/hi2';
 import { useSetQuestions } from '@/hooks/useSetQuestions';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { findActiveRoomsUsingQuestionSet } from '@/lib/exam/findActiveRoomsUsingQuestionSet';
+import type { ExamRoom } from '@/types/exam';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
 import type { Question, QuestionSet, NewQuestion } from '@/types/questionBank';
 import {
   buildPdfExamQuestions,
@@ -21,6 +34,7 @@ import {
 import QuestionList from './QuestionList';
 import QuestionBuilder from './QuestionBuilder';
 import { cn } from '@/lib/utils';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
 
 const QuestionImportModal = lazy(() => import('./QuestionImportModal'));
 const QuestionSimulatorModal = lazy(() => import('./QuestionSimulatorModal'));
@@ -32,9 +46,25 @@ interface Props {
   onBack: () => void;
   onSetUpdated: (updated: QuestionSet) => void;
   updateQuestionSet: (id: string, patch: Partial<QuestionSet>) => Promise<void>;
+  /** Parent already renders browse nav (home/back). */
+  hideDesktopBack?: boolean;
+  /** Host for + / import actions in parent browse header (desktop). */
+  desktopActionsHost?: HTMLElement | null;
+  /** Open PDF / Sheets / CSV once after creating a set from browse +. */
+  launchAction?: 'pdf' | 'sheets' | 'csv' | null;
+  onLaunchActionConsumed?: () => void;
 }
 
-export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, updateQuestionSet }: Props) {
+export default function QuestionSetQuestionManager({
+  set,
+  onBack,
+  onSetUpdated,
+  updateQuestionSet,
+  hideDesktopBack = false,
+  desktopActionsHost = null,
+  launchAction = null,
+  onLaunchActionConsumed,
+}: Props) {
   const { user } = useAuth();
   const { year } = useActiveAcademicYear();
   const {
@@ -48,16 +78,6 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
     replaceAllQuestions,
   } = useSetQuestions(set.id);
 
-  const stats = useMemo(() => {
-    return questions.reduce(
-      (acc, q) => {
-        acc[q.difficulty] = (acc[q.difficulty] || 0) + 1;
-        return acc;
-      },
-      { easy: 0, medium: 0, hard: 0 } as Record<string, number>,
-    );
-  }, [questions]);
-
   const [builderOpen, setBuilderOpen] = useState(false);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -70,6 +90,10 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
   const [simulatingQuestion, setSimulatingQuestion] = useState<Question | null>(null);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const [activeRoomWarning, setActiveRoomWarning] = useState<{
+    rooms: ExamRoom[];
+    resolve: (proceed: boolean) => void;
+  } | null>(null);
   const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
   const [isLgUp, setIsLgUp] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 1024 : true,
@@ -91,6 +115,21 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
     window.addEventListener('scroll', close, true);
     return () => window.removeEventListener('scroll', close, true);
   }, [actionsMenuOpen]);
+
+  useEffect(() => {
+    if (!launchAction) return;
+    if (launchAction === 'pdf') {
+      setPdfModalMounted(true);
+      setPdfModalOpen(true);
+    } else if (launchAction === 'sheets') {
+      setGoogleSheetModalMounted(true);
+      setGoogleSheetModalOpen(true);
+    } else if (launchAction === 'csv') {
+      setImportModalMounted(true);
+      setImportModalOpen(true);
+    }
+    onLaunchActionConsumed?.();
+  }, [launchAction, onLaunchActionConsumed]);
 
   const closeActionsMenu = () => setActionsMenuOpen(false);
 
@@ -148,6 +187,18 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
     optionCount: PdfOptionCount,
     entries: PdfAnswerKeyEntry[],
   ) => {
+    // บันทึกเฉลยลบคำถามเดิมทั้งหมดแล้วสร้างใหม่ด้วย id ใหม่ (ดู replaceAllQuestions) —
+    // ถ้ามีห้องสอบกำลังเปิดใช้ชุดนี้อยู่ นักเรียนที่ทำสอบค้างจะ join คำถามเดิมไม่ได้อีก
+    if (year) {
+      const activeRooms = await findActiveRoomsUsingQuestionSet(set.id, String(year));
+      if (activeRooms.length > 0) {
+        const proceed = await new Promise<boolean>((resolve) => {
+          setActiveRoomWarning({ rooms: activeRooms, resolve });
+        });
+        if (!proceed) return false;
+      }
+    }
+
     const dataList = buildPdfExamQuestions(optionCount, entries, {
       curriculumYear: year ?? set.curriculumYear,
       subjectGroup: set.subjectGroup,
@@ -160,6 +211,7 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
       await updateQuestionSet(set.id, { questionCount: newCount });
       onSetUpdated({ ...set, questionCount: newCount });
     });
+    return true;
   };
 
   const handleEditQuestion = (q: Question) => {
@@ -234,12 +286,12 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
       <button
         type="button"
         onClick={() => setActionsMenuOpen((open) => !open)}
-        className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
-        title="เมนูจัดการข้อสอบ"
-        aria-label="เมนูจัดการข้อสอบ"
+        className={HEADER_ICON_BTN}
+        title="เพิ่ม / จัดการข้อสอบ"
+        aria-label="เพิ่ม / จัดการข้อสอบ"
         aria-expanded={actionsMenuOpen}
       >
-        <HiBars3 className="h-5 w-5" />
+        <Plus size={16} strokeWidth={3} />
       </button>
 
       {actionsMenuOpen && (
@@ -255,6 +307,21 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
               isLgUp ? 'absolute right-0 top-full mt-2' : 'fixed right-4 top-14'
             }`}
           >
+            {!set.examPdfUrl && (
+              <button
+                type="button"
+                onClick={() => {
+                  closeActionsMenu();
+                  handleAddQuestion();
+                }}
+                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-900 transition-colors hover:bg-slate-50"
+              >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700">
+                  <Plus size={14} strokeWidth={3} />
+                </span>
+                <span>เพิ่มข้อสอบ</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -309,76 +376,70 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
     </div>
   );
 
+  const desktopActionButtons = actionsMenu;
+
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Header — desktop only; mobile uses portal header in QuestionBankManager */}
-      <div className="hidden lg:flex items-center justify-between mb-6 shrink-0 px-2">
-        <div className="flex items-center gap-4">
-          <motion.button
-            whileHover={{ scale: 1.1, x: -2 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={onBack}
-            className="w-10 h-10 rounded-full bg-white border border-slate-300 text-slate-500 flex items-center justify-center transition-all hover:text-slate-900"
-          >
-            <ArrowLeft size={20} strokeWidth={3} />
-          </motion.button>
-          <div className="flex items-center gap-3">
-            {set.coverImage && (
-              <div className="w-10 h-10 rounded-xl overflow-hidden border border-slate-200 bg-slate-50 shrink-0">
-                <img src={set.coverImage} alt="" className="w-full h-full object-cover" />
-              </div>
-            )}
-            <div className="min-w-0">
-              <h3 className="text-lg font-black text-slate-800 font-sukhumvit leading-tight truncate">
-                {set.title}
-              </h3>
-              {set.setCode && (
-                <p className="mt-0.5 font-mono text-[10px] font-black text-indigo-600">
-                  {set.setCode}
-                </p>
-              )}
-              {set.createdByName && (
-                <p className="mt-0.5 text-[10px] font-semibold text-slate-400 font-sarabun truncate">
-                  สร้างโดย {set.createdByName}
-                </p>
-              )}
-              <div className="flex items-center gap-3 mt-1">
-                <p className="text-[11px] font-black text-slate-400 font-sarabun uppercase tracking-widest">
-                  {questions.length} ข้อสอบ
-                </p>
-                <div className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                  <span className="text-[10px] font-black text-emerald-600 font-sukhumvit">ง่าย: {stats.easy}</span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 ml-1" />
-                  <span className="text-[10px] font-black text-amber-600 font-sukhumvit">กลาง: {stats.medium}</span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400 ml-1" />
-                  <span className="text-[10px] font-black text-rose-600 font-sukhumvit">ยาก: {stats.hard}</span>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/* Desktop header when parent does not own browse nav */}
+      {!hideDesktopBack && (
+        <div className="mb-6 hidden shrink-0 items-center justify-between px-2 lg:flex">
+          <div className="flex min-w-0 items-center gap-4">
+            <div className="inline-flex h-9 shrink-0 items-center overflow-hidden rounded-full border border-border bg-muted/60 shadow-xs">
+              <button
+                type="button"
+                onClick={onBack}
+                className="flex h-full w-9 items-center justify-center text-foreground transition-colors hover:bg-muted"
+                title="กลับ"
+                aria-label="กลับ"
+              >
+                <HiChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="h-4 w-px shrink-0 bg-border" aria-hidden />
+              <button
+                type="button"
+                disabled
+                className="flex h-full w-9 cursor-not-allowed items-center justify-center text-muted-foreground/35"
+                title="ไปข้างหน้า"
+                aria-label="ไปข้างหน้า"
+              >
+                <HiChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex min-w-0 items-center gap-3">
+              {set.coverImage && (
+                <div className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                  <img src={set.coverImage} alt="" className="h-full w-full object-cover" />
                 </div>
+              )}
+              <div className="min-w-0">
+                <h3 className="truncate font-sukhumvit text-lg font-black leading-tight text-slate-800">
+                  {set.title}
+                </h3>
+                {set.createdByName && (
+                  <p className="mt-0.5 truncate font-sarabun text-[10px] font-semibold text-slate-400">
+                    สร้างโดย {set.createdByName}
+                  </p>
+                )}
               </div>
             </div>
           </div>
+
+          {isLgUp && (
+            <div className={cn('flex', HEADER_ICON_BTN_GROUP)}>
+              {desktopActionButtons}
+            </div>
+          )}
         </div>
+      )}
 
-        {isLgUp && (
-          <div className="flex items-center gap-2">
-            {!set.examPdfUrl && (
-              <motion.button
-                type="button"
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
-                onClick={handleAddQuestion}
-                className="flex h-10 items-center gap-2 rounded-full bg-slate-900 px-4 text-white shadow-lg shadow-slate-900/15 transition-colors hover:bg-slate-800"
-                title="สร้างข้อสอบทีละข้อ"
-              >
-                <Plus size={18} strokeWidth={3} />
-                <span className="text-[13px] font-black font-sukhumvit">เพิ่มข้อสอบ</span>
-              </motion.button>
-            )}
-            {actionsMenu}
-          </div>
-        )}
-      </div>
-
+      {hideDesktopBack && isLgUp && desktopActionsHost
+        && createPortal(desktopActionButtons, desktopActionsHost)}
+      {/* Fallback if parent host not ready yet */}
+      {hideDesktopBack && isLgUp && !desktopActionsHost && (
+        <div className={cn('mb-2 flex shrink-0 justify-end px-1', HEADER_ICON_BTN_GROUP)}>
+          {desktopActionButtons}
+        </div>
+      )}
       {!isLgUp && headerMobileActionsEl && createPortal(actionsMenu, headerMobileActionsEl)}
 
       {set.examPdfUrl && (
@@ -403,12 +464,30 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
       )}
 
       {/* Question list — PDF preview lives in PdfExamSetupModal only */}
-      <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
-        <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
         {isLoading ? (
           <SkeletonList />
         ) : questions.length === 0 ? (
-          set.examPdfUrl ? null : (
+          set.examPdfUrl ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+              <FileText className="h-10 w-10 text-muted-foreground/40" />
+              <div>
+                <p className="font-sukhumvit text-[13px] font-black text-foreground">
+                  ยังไม่มีเฉลยในชุดนี้
+                </p>
+                <p className="mt-1 font-sarabun text-[11px] text-muted-foreground">
+                  กดตั้งค่าข้อที่ถูกเพื่อบันทึกเฉลยจาก PDF
+                </p>
+              </div>
+              <Button
+                type="button"
+                onClick={handleOpenPdfSetup}
+                className="h-9 rounded-xl px-4 text-[12px] font-black font-sukhumvit"
+              >
+                ตั้งค่าข้อที่ถูก
+              </Button>
+            </div>
+          ) : (
             <QuestionList
               questions={[]}
               onSelect={handleEditQuestion}
@@ -436,7 +515,6 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
             deleteTooltip="ลบออกจากชุด"
           />
         )}
-        </div>
       </div>
 
       {!set.examPdfUrl && (
@@ -504,6 +582,46 @@ export default function QuestionSetQuestionManager({ set, onBack, onSetUpdated, 
           />
         </Suspense>
       )}
+
+      <AlertDialog
+        open={activeRoomWarning !== null}
+        onOpenChange={(next) => {
+          if (!next && activeRoomWarning) {
+            activeRoomWarning.resolve(false);
+            setActiveRoomWarning(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>มีห้องสอบกำลังเปิดใช้ชุดข้อสอบนี้อยู่</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-left">
+                <p>
+                  การบันทึกเฉลยจะลบคำถามเดิมทั้งหมดแล้วสร้างใหม่ — นักเรียนที่กำลังทำข้อสอบอยู่ในห้องต่อไปนี้จะดูข้อสอบ/กระดาษคำตอบไม่ได้อีก:
+                </p>
+                <ul className="list-disc space-y-1 pl-5 font-medium text-foreground">
+                  {activeRoomWarning?.rooms.map((room) => (
+                    <li key={room.id}>{room.title}{room.className ? ` (${room.className})` : ''}</li>
+                  ))}
+                </ul>
+                <p>แนะนำให้รอห้องสอบปิดก่อน หรือกดยืนยันเฉพาะกรณีที่ยอมรับความเสี่ยงนี้</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => activeRoomWarning?.resolve(false)}>
+              ยกเลิก
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => activeRoomWarning?.resolve(true)}
+            >
+              ยืนยันบันทึกทับ
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -523,7 +641,7 @@ function PdfAnswerKeyList({
   ).length;
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col">
       <div className="flex items-center justify-between px-2 pb-2 shrink-0">
         <p className="text-[11px] font-black text-slate-500 uppercase tracking-wider">
           เฉลย {savableCount} ข้อ
@@ -536,7 +654,7 @@ function PdfAnswerKeyList({
           แก้ไขเฉลย
         </button>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 px-1">
+      <div className="space-y-1.5 px-1 pb-2">
         {parsed.entries.map((entry, index) => {
           const isParentWithSubs = hasPdfSubQuestions(parsed.entries, index);
           const isText = entry.mode === 'text';
@@ -545,7 +663,7 @@ function PdfAnswerKeyList({
           <div
             key={`${entry.label}-${index}`}
             className={cn(
-              'flex items-center justify-between gap-2 rounded-2xl border px-4 py-2.5',
+              'flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5',
               isParentWithSubs
                 ? 'border-slate-100 bg-slate-50/80'
                 : 'border-slate-200 bg-white',

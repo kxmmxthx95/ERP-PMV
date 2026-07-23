@@ -32,7 +32,10 @@ function scoreColor(pct: number): string {
 export default function StudentExamScoreWidget() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { rooms, attempts, isLoading } = useExamRoom();
+  const { rooms, attempts, isLoading } = useExamRoom({
+    loadAttempts: 'mine',
+    attemptsPollMs: 60_000,
+  });
 
   const subjectGroups = useMemo<SubjectGroup[]>(() => {
     if (!user?.uid) return [];

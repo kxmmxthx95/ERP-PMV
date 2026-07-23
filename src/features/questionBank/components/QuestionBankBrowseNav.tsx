@@ -1,7 +1,14 @@
+import { useCallback, useState } from 'react';
 import { motion } from 'framer-motion';
-import { HiArrowRight, HiChevronLeft } from 'react-icons/hi2';
+import { HiArrowRight } from 'react-icons/hi2';
 import { cn } from '@/lib/utils';
 import { SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
+import { SubjectFolderCard } from '@/components/SubjectFolderCard';
+import {
+  loadFolderCardColors,
+  saveFolderCardColors,
+  type FolderCardColorId,
+} from '@/lib/subjectFolderCardColors';
 import {
   SUBJECT_GROUP_CONFIG,
   SUBJECT_SUBGROUP_CONFIG,
@@ -10,6 +17,28 @@ import {
 import type { QuestionSet } from '@/types/questionBank';
 
 export const UNSPECIFIED_SUB_SUBJECT = '__none__';
+
+const QB_FOLDER_COLOR_KEY = 'pmv:question-bank-folder-colors:v1';
+
+/** โฟลเดอร์วิชาย่อย — สีตามกลุ่มสาระ */
+const SUBJECT_GROUP_FOLDER_COLOR: Record<SubjectGroupId, FolderCardColorId> = {
+  thai: 'rose',
+  math: 'blue',
+  science: 'emerald',
+  social: 'orange',
+  pe: 'rose',
+  arts: 'violet',
+  careers: 'slate',
+  foreign: 'sky',
+  examM4: 'violet',
+  onet: 'amber',
+  alevel: 'emerald',
+  other: 'slate',
+};
+
+function folderColorForSubjectGroup(subjectGroup: SubjectGroupId): FolderCardColorId {
+  return SUBJECT_GROUP_FOLDER_COLOR[subjectGroup] ?? 'slate';
+}
 
 export type QuestionBankBrowseStep =
   | { level: 'groups' }
@@ -20,7 +49,7 @@ const DASHBOARD_KICKER_CLASS = 'text-[10px] font-black uppercase tracking-[0.18e
 const DASHBOARD_SECTION_TITLE_CLASS = 'mt-1 text-sm font-black text-slate-900 sm:text-lg';
 const DASHBOARD_SECTION_META_CLASS = 'text-[11px] font-semibold text-slate-400 sm:text-xs';
 const GROUP_GRID_CLASS = 'grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3';
-const SUB_GRID_CLASS = 'grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-2';
+const FOLDER_GRID_CLASS = 'grid w-full grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 xl:grid-cols-4';
 
 export function groupHasSubSubjects(subjectGroup: SubjectGroupId): boolean {
   return (SUBJECT_SUBGROUP_CONFIG[subjectGroup]?.length ?? 0) > 0;
@@ -159,6 +188,18 @@ export default function QuestionBankBrowseNav({
   onSelectGroup,
   onSelectSubGroup,
 }: Props) {
+  const [folderColors, setFolderColors] = useState<Record<string, FolderCardColorId>>(() =>
+    loadFolderCardColors(QB_FOLDER_COLOR_KEY),
+  );
+
+  const setFolderColor = useCallback((key: string, id: FolderCardColorId) => {
+    setFolderColors((prev) => {
+      const next = { ...prev, [key]: id };
+      saveFolderCardColors(next, QB_FOLDER_COLOR_KEY);
+      return next;
+    });
+  }, []);
+
   if (step.level === 'groups') {
     const groups = (Object.entries(SUBJECT_GROUP_CONFIG) as [SubjectGroupId, typeof SUBJECT_GROUP_CONFIG[SubjectGroupId]][])
       .sort(([, a], [, b]) => a.order - b.order);
@@ -208,58 +249,27 @@ export default function QuestionBankBrowseNav({
 
   return (
     <section>
-      <div className={SUB_GRID_CLASS}>
-        {subCards.map((card, index) => (
-          <SubjectCategoryHeroCard
-            key={card.key}
-            title={card.title}
-            count={card.count}
-            accentColor={groupCfg.color}
-            subjectGroupId={step.subjectGroup}
-            onClick={() => onSelectSubGroup(card.key)}
-            delay={index * 0.03}
-          />
-        ))}
+      <div className={FOLDER_GRID_CLASS}>
+        {subCards.map((card) => {
+          const colorKey = `${step.subjectGroup}|${card.key}`;
+          return (
+            <SubjectFolderCard
+              key={card.key}
+              title={card.title}
+              subtitle={groupCfg.name}
+              meta={(
+                <p className="pt-0.5 text-[11px] font-black text-muted-foreground">
+                  {card.count.toLocaleString('th-TH')} ชุด
+                </p>
+              )}
+              colorId={folderColors[colorKey] ?? folderColorForSubjectGroup(step.subjectGroup)}
+              onColorChange={(id) => setFolderColor(colorKey, id)}
+              onClick={() => onSelectSubGroup(card.key)}
+              showPaper={card.count > 0}
+            />
+          );
+        })}
       </div>
     </section>
-  );
-}
-
-export function QuestionBankBrowseHeader({
-  step,
-  onBack,
-}: {
-  step: QuestionBankBrowseStep;
-  onBack: () => void;
-}) {
-  if (step.level === 'groups') return null;
-
-  const groupCfg = SUBJECT_GROUP_CONFIG[step.subjectGroup];
-  const title = step.level === 'subgroups'
-    ? 'เลือกวิชาย่อย'
-    : browseStepLabel(step);
-  const meta = step.level === 'subgroups'
-    ? `เลือกวิชาย่อยใน${groupCfg.name}`
-    : 'รายการชุดข้อสอบในกลุ่มที่เลือก';
-
-  return (
-    <div className="mb-3 hidden items-start gap-3 sm:mb-4 lg:flex">
-      <button
-        type="button"
-        onClick={onBack}
-        className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-100 bg-white text-slate-600 shadow-sm transition-all hover:bg-slate-50 active:scale-95 lg:flex"
-        title="กลับ"
-        aria-label="กลับ"
-      >
-        <HiChevronLeft className="h-4 w-4" />
-      </button>
-      <div className="min-w-0 flex-1">
-        <p className={DASHBOARD_KICKER_CLASS} style={{ color: groupCfg.color }}>
-          {groupCfg.name}
-        </p>
-        <h2 className={cn(DASHBOARD_SECTION_TITLE_CLASS, 'truncate')}>{title}</h2>
-        <p className={DASHBOARD_SECTION_META_CLASS}>{meta}</p>
-      </div>
-    </div>
   );
 }

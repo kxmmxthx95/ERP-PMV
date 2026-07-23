@@ -43,17 +43,21 @@ export async function loadPersonalAttendanceStats(
   if (!userId) return EMPTY_PERSONAL_STATS;
 
   const entries = await fetchStaffAttendanceRecordsForUser(userId);
-  const resolved = entries.map((entry) =>
-    resolveStaffAttendanceDisplay(entry, {
+  // 7.6 Combine iterations — one pass for present/late/absent
+  let present = 0;
+  let late = 0;
+  let absent = 0;
+  for (const entry of entries) {
+    const row = resolveStaffAttendanceDisplay(entry, {
       selectedDate: entry.date,
       isWorkingDay: true,
       isSpecialTeacher,
-    }),
-  );
-  const counted = resolved.filter((row) => !row.isPending);
-  const present = counted.filter((row) => row.status === 'present').length;
-  const late = counted.filter((row) => row.status === 'late').length;
-  const absent = counted.filter((row) => row.status === 'absent').length;
+    });
+    if (row.isPending) continue;
+    if (row.status === 'present') present += 1;
+    else if (row.status === 'late') late += 1;
+    else if (row.status === 'absent') absent += 1;
+  }
   const leave = countApprovedLeaveDays(userId, leaveRequests);
 
   return {

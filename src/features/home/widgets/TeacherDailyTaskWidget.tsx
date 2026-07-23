@@ -1,8 +1,9 @@
 import { useMemo, useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import {
   HiAcademicCap,
+  HiCheck,
   HiCheckCircle,
   HiClipboardDocumentCheck,
   HiOutlineEye,
@@ -10,10 +11,25 @@ import {
   HiUsers,
   HiXMark,
 } from 'react-icons/hi2';
+import { useAuth } from '@/hooks/useAuth';
+import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
-import { useTeacherDailyTasks } from '@/hooks/useTeacherDailyTasks';
-import { formatThaiDateLabelFromIso } from '@/lib/dateUtils';
+import {
+  useTeacherDailyTasks,
+  type TeacherTeachingReflectionTask,
+} from '@/hooks/useTeacherDailyTasks';
+import { formatThaiDateLabelFromIso, getLocalDateString } from '@/lib/dateUtils';
 import { cn } from '@/lib/utils';
+import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
+import type {
+  TeachingOverview,
+  TeachingPlanStatus,
+  TeachingReflectionStudent,
+  WeeklyTopic,
+} from '@/types/microSyllabus';
+import { normalizeTeachingOverview } from '@/types/microSyllabus';
+import { ProblemStudentPicker } from '@/features/microSyllabus/components/ProblemStudentPicker';
+import { TeachingStarRating } from '@/features/microSyllabus/components/TeachingStarRating';
 import {
   WIDGET_CARD,
   WIDGET_GLASS,
@@ -26,18 +42,21 @@ import {
   Drawer,
   DrawerContent,
   DrawerDescription,
+  DrawerFooter,
   DrawerHeader,
   DrawerTitle,
 } from '@/components/ui/drawer';
 
-const DRAWER_CONTENT_CLASS = [
-  'h-dvh flex flex-col p-0 rounded-none',
+const DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh flex-col bg-transparent p-0 before:hidden',
   'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
-  'data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none',
-  'sm:h-full sm:rounded-l-3xl',
-  'sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md',
-  'sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl',
-].join(' ');
+  'sm:h-full sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md sm:p-2',
+);
+
+const DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-col overflow-hidden bg-white',
+  'sm:rounded-4xl sm:border sm:border-slate-200/70 sm:shadow-xl',
+);
 
 function taskStatIconColor(applicable: boolean, pending: number): string {
   if (!applicable) return 'text-slate-400';
@@ -79,7 +98,7 @@ function ClassAttendanceTaskList({
       {showSectionHeader && (
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 min-w-0">
-            <HiClipboardDocumentCheck className="w-4 h-4 text-violet-500 shrink-0" />
+            <HiClipboardDocumentCheck className="w-4 h-4 text-blue-600 shrink-0" />
             <h3 className="text-sm font-black text-slate-800 truncate">เช็คชื่อเข้าเรียน</h3>
           </div>
           {hasClassesToday && (
@@ -137,14 +156,14 @@ function TeachingReflectionTaskList({
   reflectionStats: { done: number; total: number };
   teachingReflectionTasks: ReturnType<typeof useTeacherDailyTasks>['teachingReflectionTasks'];
   showSectionHeader?: boolean;
-  onSelectTask?: (task: ReturnType<typeof useTeacherDailyTasks>['teachingReflectionTasks'][number]) => void;
+  onSelectTask?: (task: TeacherTeachingReflectionTask) => void;
 }) {
   return (
     <section>
       {showSectionHeader && (
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 min-w-0">
-            <HiAcademicCap className="w-4 h-4 text-sky-500 shrink-0" />
+            <HiAcademicCap className="w-4 h-4 text-blue-600 shrink-0" />
             <h3 className="text-sm font-black text-slate-800 truncate">บันทึกหลังการสอน</h3>
           </div>
           {hasReflectionTasksToday && (
@@ -199,9 +218,16 @@ function TeachingReflectionTaskList({
 }
 
 export default function TeacherDailyTaskWidget() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user, userData } = useAuth();
+  const { activeYear, activeSemester } = useActiveAcademicYear();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedReflection, setSelectedReflection] = useState<TeacherTeachingReflectionTask | null>(null);
+  const [planStatus, setPlanStatus] = useState<TeachingPlanStatus>('on_plan');
+  const [overview, setOverview] = useState<TeachingOverview>(3);
+  const [notes, setNotes] = useState('');
+  const [problemStudents, setProblemStudents] = useState<TeachingReflectionStudent[]>([]);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -226,11 +252,118 @@ export default function TeacherDailyTaskWidget() {
     hasHomeroom,
     hasClassesToday,
     hasReflectionTasksToday,
+    syllabi,
+    createSyllabus,
+    updateTopics,
   } = useTeacherDailyTasks();
 
-  const goToReflectionTask = (task: { classId: string; subjectId: string }) => {
-    setDrawerOpen(false);
-    navigate(`/portal/micro-syllabus?classId=${encodeURIComponent(task.classId)}&subjectId=${encodeURIComponent(task.subjectId)}`);
+  const openReflectionForm = (task: TeacherTeachingReflectionTask) => {
+    const syllabus = syllabi.find(
+      (s) =>
+        s.classId === task.classId
+        && (s.subjectId === task.subjectId || s.subjectName === task.subjectName),
+    );
+    const existing = syllabus?.topics.find((t) => t.date === today)?.teachingReflection;
+    setPlanStatus(existing?.planStatus ?? 'on_plan');
+    setOverview(normalizeTeachingOverview(existing?.overview));
+    setNotes(existing?.additionalRequest ?? '');
+    setProblemStudents(existing?.problemStudents ?? []);
+    setSelectedReflection(task);
+  };
+
+  const closeReflectionForm = () => {
+    if (saving) return;
+    setSelectedReflection(null);
+  };
+
+  const handleSaveReflection = async () => {
+    if (!selectedReflection || !user?.uid || !activeYear || !activeSemester) return;
+    setSaving(true);
+    try {
+      let syllabus = syllabi.find(
+        (s) =>
+          s.classId === selectedReflection.classId
+          && (s.subjectId === selectedReflection.subjectId
+            || s.subjectName === selectedReflection.subjectName),
+      );
+
+      if (!syllabus) {
+        const departmentId =
+          (userData as { departmentId?: string } | null)?.departmentId ?? 'secondary';
+        const displayName =
+          (userData as { displayName?: string; firstName?: string } | null)?.displayName
+          || (userData as { firstName?: string } | null)?.firstName
+          || user.displayName
+          || 'ครู';
+        const gradeLevel = selectedReflection.className.split('/')[0]?.trim() || '';
+        const newId = await createSyllabus({
+          academicYearId: activeYear.year,
+          semester: activeSemester as 1 | 2,
+          departmentId,
+          teacherId: user.uid,
+          teacherName: displayName,
+          subjectId: selectedReflection.subjectId,
+          subjectName: selectedReflection.subjectName,
+          classId: selectedReflection.classId,
+          className: selectedReflection.className,
+          gradeLevel,
+          totalWeeks: 20,
+          topics: [],
+        });
+        syllabus = {
+          id: newId,
+          academicYearId: activeYear.year,
+          semester: activeSemester as 1 | 2,
+          departmentId,
+          teacherId: user.uid,
+          teacherName: displayName,
+          subjectId: selectedReflection.subjectId,
+          subjectName: selectedReflection.subjectName,
+          classId: selectedReflection.classId,
+          className: selectedReflection.className,
+          gradeLevel,
+          totalWeeks: 20,
+          topics: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      const dateIso = getLocalDateString();
+      const topicIndex = syllabus.topics.findIndex((t) => t.date === dateIso);
+      const reflection = {
+        planStatus,
+        overview,
+        problemStudents: problemStudents.length > 0 ? problemStudents : undefined,
+        additionalRequest: notes.trim() || undefined,
+        recordedAt: new Date().toISOString(),
+      };
+      const updatedTopics = [...syllabus.topics];
+
+      if (topicIndex >= 0) {
+        updatedTopics[topicIndex] = {
+          ...updatedTopics[topicIndex],
+          teachingReflection: reflection,
+          completedAt: new Date().toISOString(),
+        };
+      } else {
+        updatedTopics.push({
+          weekNumber: Math.max(1, updatedTopics.length + 1),
+          date: dateIso,
+          title: 'บันทึกหลังการสอน',
+          teachingReflection: reflection,
+          completedAt: new Date().toISOString(),
+        } as WeeklyTopic);
+      }
+
+      await updateTopics(syllabus.id, updatedTopics);
+      toast.success('บันทึกหลังการสอนเรียบร้อย');
+      setSelectedReflection(null);
+    } catch {
+      toast.error('บันทึกหลังการสอนไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const {
@@ -363,23 +496,26 @@ export default function TeacherDailyTaskWidget() {
 
       <Drawer open={drawerOpen} onOpenChange={setDrawerOpen} direction="right">
         <DrawerContent className={DRAWER_CONTENT_CLASS}>
+          <div className={DRAWER_PANEL_CLASS}>
           <DrawerHeader className="shrink-0 px-4 pt-4 pb-3 border-b border-slate-100">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center shrink-0"
-                aria-label="ปิด"
-              >
-                <HiXMark className="w-5 h-5 text-slate-600" />
-              </button>
-              <div className="min-w-0 flex-1">
+            <div className="relative flex items-center justify-center min-h-10">
+              <div className="min-w-0 flex-1 text-left pr-12">
                 <DrawerTitle className="text-base font-black text-slate-800 truncate">
                   งานประจำวันครู
                 </DrawerTitle>
                 <DrawerDescription className="text-[11px] font-bold text-slate-400 truncate">
                   {todayLabel}
                 </DrawerDescription>
+              </div>
+              <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                <button
+                  type="button"
+                  onClick={() => setDrawerOpen(false)}
+                  className={DRAWER_HEADER_ICON_BTN}
+                  aria-label="ปิด"
+                >
+                  <HiXMark className="w-4 h-4" />
+                </button>
               </div>
             </div>
           </DrawerHeader>
@@ -388,7 +524,7 @@ export default function TeacherDailyTaskWidget() {
             <section>
               <div className="flex items-center justify-between gap-2 mb-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <HiUsers className="w-4 h-4 text-amber-500 shrink-0" />
+                  <HiUsers className="w-4 h-4 text-blue-600 shrink-0" />
                   <h3 className="text-sm font-black text-slate-800 truncate">เช็คชื่อเข้าแถว</h3>
                 </div>
                 {hasHomeroom && (
@@ -439,7 +575,7 @@ export default function TeacherDailyTaskWidget() {
               hasReflectionTasksToday={hasReflectionTasksToday}
               reflectionStats={reflectionStats}
               teachingReflectionTasks={teachingReflectionTasks}
-              onSelectTask={goToReflectionTask}
+              onSelectTask={openReflectionForm}
             />
 
             {!isBlocked && allDone && (hasHomeroom || hasClassesToday || hasReflectionTasksToday) && (
@@ -448,6 +584,84 @@ export default function TeacherDailyTaskWidget() {
                 <p className="text-[11px] font-black text-emerald-700">งานประจำวันครบแล้ว</p>
               </div>
             )}
+          </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      <Drawer open={!!selectedReflection} onOpenChange={(open) => !open && closeReflectionForm()} direction="right">
+        <DrawerContent className={cn(DRAWER_CONTENT_CLASS, 'font-sukhumvit')}>
+          <div className={DRAWER_PANEL_CLASS}>
+          <DrawerHeader className="shrink-0 px-4 pt-4 pb-3 border-b border-slate-100 text-left">
+            <div className="relative flex items-center justify-center min-h-10">
+              <div className="min-w-0 flex-1 text-left pr-12">
+                <DrawerTitle className="text-base font-black text-slate-800 truncate">
+                  บันทึกหลังการสอน
+                </DrawerTitle>
+                <DrawerDescription className="text-[11px] font-bold text-slate-400 truncate">
+                  {selectedReflection
+                    ? `${selectedReflection.subjectName} · ${selectedReflection.className}`
+                    : todayLabel}
+                </DrawerDescription>
+              </div>
+              <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                <button
+                  type="button"
+                  onClick={closeReflectionForm}
+                  className={DRAWER_HEADER_ICON_BTN}
+                  aria-label="ปิด"
+                >
+                  <HiXMark className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </DrawerHeader>
+
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-4">
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-black text-slate-600 mb-1">แผนการสอน</label>
+                <select
+                  value={planStatus}
+                  onChange={(e) => setPlanStatus(e.target.value as TeachingPlanStatus)}
+                  className="w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-[12px] font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/30"
+                >
+                  <option value="on_plan">ตามแผน</option>
+                  <option value="off_plan">เบี่ยงเบน</option>
+                </select>
+              </div>
+              <TeachingStarRating value={overview} onChange={setOverview} />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black text-slate-600 mb-1">หมายเหตุเพิ่มเติม</label>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="ป้อนหมายเหตุ หากนักเรียนมีปัญหา ข้อเสนอแนะ ฯลฯ"
+                className="w-full h-28 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[12px] font-sarabun text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/30 resize-none"
+              />
+            </div>
+
+            <ProblemStudentPicker
+              classId={selectedReflection?.classId}
+              enabled={!!selectedReflection}
+              value={problemStudents}
+              onChange={setProblemStudents}
+            />
+          </div>
+
+          <DrawerFooter className="shrink-0 flex-row gap-2 border-t border-slate-100">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleSaveReflection()}
+              className="h-11 flex-1 rounded-xl bg-blue-600 text-[13px] font-black text-white shadow-md transition-colors hover:bg-blue-700 disabled:opacity-60 flex items-center justify-center gap-2"
+            >
+              <HiCheck className="h-4 w-4" />
+              {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+            </button>
+          </DrawerFooter>
           </div>
         </DrawerContent>
       </Drawer>

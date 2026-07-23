@@ -19,7 +19,7 @@ export function getCalendarEventsStore(academicYearId: string) {
         void getDocs(q)
           .then((snap) => {
             if (cancelled) return;
-            const items = snap.docs as unknown as CalendarEvent[];
+            const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as CalendarEvent);
             cached = items;
             emit(items);
           })

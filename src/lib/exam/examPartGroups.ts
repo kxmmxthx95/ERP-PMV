@@ -31,8 +31,12 @@ export function buildExamPartGroups(
 
   if (questions.length === 0) return [];
 
-  const questionIdsInOrder = selectedIds.length > 0
-    ? selectedIds.filter((qid) => questions.some((q) => q.id === qid))
+  // selectedIds ที่บันทึกไว้ตอนตั้งห้องสอบอาจ stale (ชุดข้อสอบถูกแก้ไข/สร้างใหม่หลังสอบ) —
+  // ถ้า filter แล้วไม่เหลือเลย ต้อง fallback ไปใช้ id จาก questions ตรงๆ (เหมือน fetchRoomRoundExamData)
+  // ไม่งั้นกระดาษคำตอบจะว่างเปล่าทั้งที่คะแนนสรุปคำนวณได้ปกติ
+  const matchedSelectedIds = selectedIds.filter((qid) => questions.some((q) => q.id === qid));
+  const questionIdsInOrder = matchedSelectedIds.length > 0
+    ? matchedSelectedIds
     : questions.map((q) => q.id);
 
   if (orderedSetIds.length <= 1) {

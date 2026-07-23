@@ -161,7 +161,64 @@ export const MOCK_QUESTIONS_PUBLIC = [
 ];
 
 // ── Hook: useExamRoom (teacher/admin side) ────────────────────────────────────
-export function useExamRoom() {
+
+/** How attempts are loaded — biggest Firestore quota lever for this hook. */
+export type ExamAttemptsLoadMode =
+  /** Full snapshot once, then poll only `active` rooms (default — safe for manager/dashboard). */
+  | 'all'
+  /** Only rooms with status === 'active' (live proctoring / alerts). */
+  | 'active'
+  /** Only current user's attempts (student score widget). */
+  | 'mine'
+  /** Skip attempts entirely (create-room shortcuts). */
+  | 'none';
+
+export interface UseExamRoomOptions {
+  loadAttempts?: ExamAttemptsLoadMode;
+  /** Poll interval for attempts. Default 20s. */
+  attemptsPollMs?: number;
+}
+
+type StudentExamContext = {
+  classIds: string[];
+  gradeLevels: string[];
+  studentIds: string[];
+};
+
+// Session cache — home widget + exam pages remount resolve often
+const studentCtxCache = new Map<string, { at: number; ctx: StudentExamContext }>();
+const STUDENT_CTX_TTL_MS = 5 * 60 * 1000;
+
+function mapRoomDoc(d: { id: string; data: () => Record<string, unknown> }): ExamRoom {
+  const raw = d.data();
+  return {
+    ...raw,
+    id: d.id,
+    startTime: normalizeTimestamp(raw.startTime),
+    endTime: normalizeTimestamp(raw.endTime),
+    createdAt: normalizeTimestamp(raw.createdAt),
+  } as ExamRoom;
+}
+
+function mapAttemptDoc(
+  d: { id: string; data: () => Record<string, unknown> },
+  roomId: string,
+): ExamAttempt {
+  const raw = d.data() as Record<string, unknown>;
+  return {
+    ...raw,
+    id: d.id,
+    roomId,
+    score: normalizeExamScore(raw.score),
+    startedAt: normalizeTimestamp(raw.startedAt),
+    submittedAt: raw.submittedAt ? normalizeTimestamp(raw.submittedAt) : null,
+    lastSavedAt: normalizeTimestamp(raw.lastSavedAt),
+  } as ExamAttempt;
+}
+
+export function useExamRoom(options: UseExamRoomOptions = {}) {
+  const loadAttempts = options.loadAttempts ?? 'all';
+  const attemptsPollMs = options.attemptsPollMs ?? 20000;
   const { user, role, userData } = useAuth();
   const { year: academicYear, activeSemester } = useActiveAcademicYear();
   const [rooms, setRooms] = useState<ExamRoom[]>([]);
@@ -190,11 +247,12 @@ export function useExamRoom() {
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;
 
-    const resolveStudentContext = async (): Promise<{
-      classIds: string[];
-      gradeLevels: string[];
-      studentIds: string[];
-    }> => {
+    const resolveStudentContext = async (): Promise<StudentExamContext> => {
+      const cached = studentCtxCache.get(user.uid);
+      if (cached && Date.now() - cached.at < STUDENT_CTX_TTL_MS) {
+        return cached.ctx;
+      }
+
       const ids = new Set<string>();
       const grades = new Set<string>();
       const studentIds = new Set<string>([user.uid]);
@@ -314,11 +372,13 @@ export function useExamRoom() {
         console.warn('[useExamRoom] resolve student enrollments failed:', err);
       }
 
-      return {
+      const ctx = {
         classIds: Array.from(ids),
         gradeLevels: Array.from(grades),
         studentIds: Array.from(studentIds),
       };
+      studentCtxCache.set(user.uid, { at: Date.now(), ctx });
+      return ctx;
     };
 
     const attach = async () => {
@@ -333,17 +393,7 @@ export function useExamRoom() {
           );
           unsubscribe = onSnapshot(qRef, (snap) => {
             if (cancelled) return;
-            const data = snap.docs.map(d => {
-              const raw = d.data();
-              return {
-                ...raw,
-                id: d.id,
-                startTime: normalizeTimestamp(raw.startTime),
-                endTime: normalizeTimestamp(raw.endTime),
-                createdAt: normalizeTimestamp(raw.createdAt),
-              } as ExamRoom;
-            });
-            setRooms(data);
+            setRooms(snap.docs.map(mapRoomDoc));
             setIsLoading(false);
           }, (err) => {
             console.error('Error loading teacher exam rooms:', err);
@@ -352,7 +402,9 @@ export function useExamRoom() {
           return;
         }
 
-        // Students see rooms for their enrolled class in current year/semester.
+        // Students: scope the query to their own class/gradeLevel — avoid listening to
+        // every exam room in the school (was: whole-semester listener + client-side filter,
+        // billed as (concurrent students) × (all rooms that semester) on every room change).
         if (role === 'student') {
           const studentCtx = await resolveStudentContext();
           if (cancelled) return;
@@ -362,35 +414,54 @@ export function useExamRoom() {
             return;
           }
 
-          const qRef = query(
-            collection(db, 'exam_rooms'),
-            where('academicYearId', '==', String(academicYear)),
-            where('semester', '==', activeSemester),
-          );
-          unsubscribe = onSnapshot(qRef, (snap) => {
+          let byClassRooms: ExamRoom[] = [];
+          let byGradeRooms: ExamRoom[] = [];
+          const mergeAndEmit = () => {
             if (cancelled) return;
-            const data = snap.docs
-              .map(d => {
-                const raw = d.data();
-                return {
-                  ...raw,
-                  id: d.id,
-                  startTime: normalizeTimestamp(raw.startTime),
-                  endTime: normalizeTimestamp(raw.endTime),
-                  createdAt: normalizeTimestamp(raw.createdAt),
-                } as ExamRoom;
-              })
-              .filter((room) => {
-                const byClass = !!room.classId && studentCtx.classIds.includes(room.classId);
-                const byGrade = !!room.gradeLevel && studentCtx.gradeLevels.includes(room.gradeLevel);
-                return byClass || byGrade;
-              });
-            setRooms(data);
+            const map = new Map<string, ExamRoom>();
+            [...byClassRooms, ...byGradeRooms].forEach((r) => map.set(r.id, r));
+            setRooms([...map.values()]);
             setIsLoading(false);
-          }, (err) => {
-            console.error('Error loading student exam rooms:', err);
-            if (!cancelled) setIsLoading(false);
-          });
+          };
+
+          const unsubs: Array<() => void> = [];
+          // Firestore `in` caps at 10 values — a student only ever has a handful of class/grade
+          // matches in practice, so this is not a real limitation here.
+          const classIdsChunk = studentCtx.classIds.slice(0, 10);
+          if (classIdsChunk.length > 0) {
+            const qClass = query(
+              collection(db, 'exam_rooms'),
+              where('academicYearId', '==', String(academicYear)),
+              where('semester', '==', activeSemester),
+              where('classId', 'in', classIdsChunk),
+            );
+            unsubs.push(onSnapshot(qClass, (snap) => {
+              byClassRooms = snap.docs.map(mapRoomDoc);
+              mergeAndEmit();
+            }, (err) => {
+              console.error('Error loading student exam rooms (classId):', err);
+              if (!cancelled) setIsLoading(false);
+            }));
+          }
+
+          const gradeLevelsChunk = studentCtx.gradeLevels.slice(0, 10);
+          if (gradeLevelsChunk.length > 0) {
+            const qGrade = query(
+              collection(db, 'exam_rooms'),
+              where('academicYearId', '==', String(academicYear)),
+              where('semester', '==', activeSemester),
+              where('gradeLevel', 'in', gradeLevelsChunk),
+            );
+            unsubs.push(onSnapshot(qGrade, (snap) => {
+              byGradeRooms = snap.docs.map(mapRoomDoc);
+              mergeAndEmit();
+            }, (err) => {
+              console.error('Error loading student exam rooms (gradeLevel):', err);
+              if (!cancelled) setIsLoading(false);
+            }));
+          }
+
+          unsubscribe = () => unsubs.forEach((u) => u());
           return;
         }
 
@@ -402,17 +473,7 @@ export function useExamRoom() {
         );
         unsubscribe = onSnapshot(qRef, (snap) => {
           if (cancelled) return;
-          const data = snap.docs.map(d => {
-            const raw = d.data();
-            return {
-              ...raw,
-              id: d.id,
-              startTime: normalizeTimestamp(raw.startTime),
-              endTime: normalizeTimestamp(raw.endTime),
-              createdAt: normalizeTimestamp(raw.createdAt),
-            } as ExamRoom;
-          });
-          setRooms(data);
+          setRooms(snap.docs.map(mapRoomDoc));
           setIsLoading(false);
         }, (err) => {
           console.error('Error loading exam rooms:', err);
@@ -432,49 +493,102 @@ export function useExamRoom() {
     };
   }, [user?.uid, role, academicYear, activeSemester, userData]);
 
-  // Load attempts — polled per room (not realtime) to avoid read amplification:
-  // every student answer-save write used to fan out to every open teacher/admin
-  // dashboard via onSnapshot on the whole attempts subcollection.
-  // Depends on roomIds (stable string) not rooms (new array ref on every snapshot)
-  // so the poll loop only restarts when the actual set of room IDs changes.
+  // Load attempts — polled (not realtime) to avoid read amplification from answer saves.
+  // Mode `all`: one full fetch when room set changes, then only poll `active` rooms.
   useEffect(() => {
-    if (!roomIds) {
+    if (!roomIds || loadAttempts === 'none') {
       setAttempts([]);
       return;
     }
 
     const ids = roomIds.split(',');
     let cancelled = false;
+    let didFullFetch = false;
 
-    const fetchAttempts = async () => {
-      const attemptsMap = new Map<string, ExamAttempt>();
-      await Promise.all(ids.map(async (roomId: string) => {
+    const fetchRoomAttempts = async (roomId: string, studentIdFilter?: string): Promise<ExamAttempt[]> => {
+      try {
+        if (studentIdFilter) {
+          const snap = await getDocs(
+            query(
+              collection(db, 'exam_rooms', roomId, 'attempts'),
+              where('studentId', '==', studentIdFilter),
+            ),
+          );
+          return snap.docs.map((d) => mapAttemptDoc(d, roomId));
+        }
         const snap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
-        snap.docs.forEach((d) => {
-          const raw = d.data();
-          attemptsMap.set(d.id, {
-            ...raw,
-            id: d.id,
-            roomId,
-            score: normalizeExamScore(raw.score),
-            startedAt: normalizeTimestamp(raw.startedAt),
-            submittedAt: raw.submittedAt ? normalizeTimestamp(raw.submittedAt) : null,
-            lastSavedAt: normalizeTimestamp(raw.lastSavedAt),
-          } as ExamAttempt);
-        });
-      }));
-      if (!cancelled) setAttempts(Array.from(attemptsMap.values()));
+        return snap.docs.map((d) => mapAttemptDoc(d, roomId));
+      } catch (err) {
+        if (studentIdFilter) {
+          console.warn('[useExamRoom] studentId attempts query failed, falling back:', err);
+          const snap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
+          return snap.docs
+            .map((d) => mapAttemptDoc(d, roomId))
+            .filter((a) => String(a.studentId).trim() === studentIdFilter);
+        }
+        console.error('[useExamRoom] fetch attempts failed:', roomId, err);
+        return [];
+      }
     };
 
-    void fetchAttempts();
-    // ponytail: 20s poll cadence, tighten if teachers report stale scores during active exams
-    const interval = window.setInterval(fetchAttempts, 20000);
+    const fetchAttempts = async (scope: 'full' | 'active-only') => {
+      let targetIds = ids;
+      if (scope === 'active-only' || loadAttempts === 'active') {
+        targetIds = roomsRef.current
+          .filter((r) => r.status === 'active')
+          .map((r) => r.id);
+      }
+
+      const studentFilter =
+        loadAttempts === 'mine' && user?.uid ? user.uid : undefined;
+
+      if (targetIds.length === 0) {
+        if (scope === 'full' || loadAttempts === 'active' || loadAttempts === 'mine') {
+          if (!cancelled) setAttempts([]);
+        }
+        return;
+      }
+
+      const batches = await Promise.all(
+        targetIds.map((roomId) => fetchRoomAttempts(roomId, studentFilter)),
+      );
+      const next = batches.flat();
+      if (cancelled) return;
+
+      if (scope === 'active-only' && loadAttempts === 'all') {
+        const activeSet = new Set(targetIds);
+        setAttempts((prev) => [
+          ...prev.filter((a) => !activeSet.has(a.roomId)),
+          ...next,
+        ]);
+      } else {
+        setAttempts(next);
+      }
+    };
+
+    const tick = async () => {
+      if (loadAttempts === 'mine' || loadAttempts === 'active') {
+        await fetchAttempts('full');
+        return;
+      }
+      if (!didFullFetch) {
+        await fetchAttempts('full');
+        didFullFetch = true;
+      } else {
+        await fetchAttempts('active-only');
+      }
+    };
+
+    void tick();
+    const interval = window.setInterval(() => {
+      void tick();
+    }, attemptsPollMs);
 
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [roomIds]);
+  }, [roomIds, loadAttempts, attemptsPollMs, user?.uid]);
 
   const createRoom = useCallback(async (data: Omit<ExamRoom, 'id' | 'createdAt' | 'status' | 'currentRound' | 'completedRounds'>) => {
     try {
@@ -971,6 +1085,9 @@ export function useExamAttempt(roomId: string) {
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
+  const attemptRef = useRef<ExamAttempt | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  attemptRef.current = attempt;
 
   useEffect(() => {
     if (!roomId) {
@@ -1252,14 +1369,35 @@ export function useExamAttempt(roomId: string) {
 
       const currentRound = found.currentRound ?? 1;
 
-      // Fetch ALL attempts in this room's subcollection (no where clause = no index needed)
-      // then filter in-memory by studentId + round — the subcollection is small per room
-      const allAttemptsSnap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
-      const matchingAttemptDoc = allAttemptsSnap.docs.find((d) => {
-        const data = d.data();
-        return String(data?.studentId).trim() === String(studentId).trim()
-          && data?.round === currentRound;
-      });
+      // Prefer studentId query; fall back if composite index missing
+      let matchingAttemptDoc: { id: string; data: () => Record<string, unknown> } | undefined;
+      try {
+        const mineSnap = await getDocs(
+          query(
+            collection(db, 'exam_rooms', roomId, 'attempts'),
+            where('studentId', '==', studentId),
+            where('round', '==', currentRound),
+          ),
+        );
+        matchingAttemptDoc = mineSnap.docs[0];
+      } catch {
+        try {
+          const byStudentSnap = await getDocs(
+            query(
+              collection(db, 'exam_rooms', roomId, 'attempts'),
+              where('studentId', '==', studentId),
+            ),
+          );
+          matchingAttemptDoc = byStudentSnap.docs.find((d) => d.data()?.round === currentRound);
+        } catch {
+          const allAttemptsSnap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
+          matchingAttemptDoc = allAttemptsSnap.docs.find((d) => {
+            const data = d.data();
+            return String(data?.studentId).trim() === String(studentId).trim()
+              && data?.round === currentRound;
+          });
+        }
+      }
 
       if (matchingAttemptDoc) {
         const existingRaw = matchingAttemptDoc.data();
@@ -1357,6 +1495,39 @@ export function useExamAttempt(roomId: string) {
     }
   }, [roomId, fetchQuestions]);
 
+  const flushAnswerSave = useCallback(async () => {
+    if (saveTimerRef.current != null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const current = attemptRef.current;
+    if (!current || current.status !== 'in_progress' || !roomId) return;
+    try {
+      await updateDoc(doc(db, 'exam_rooms', roomId, 'attempts', current.id), {
+        answers: current.answers,
+        lastSavedAt: Timestamp.now(),
+      });
+    } catch (err) {
+      console.error('Error saving answer to server:', err);
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') {
+        void flushAnswerSave();
+      }
+    };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', () => {
+      void flushAnswerSave();
+    });
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      void flushAnswerSave();
+    };
+  }, [flushAnswerSave]);
+
   const saveAnswer = useCallback(async (questionId: string, optionId: string) => {
     if (!attempt) return;
     if (attempt.status !== 'in_progress') return;
@@ -1373,17 +1544,18 @@ export function useExamAttempt(roomId: string) {
     };
 
     setAttempt(updated);
+    attemptRef.current = updated;
     localStorage.setItem(`exam_attempt_${roomId}_${attempt.studentId}`, JSON.stringify(updated));
 
-    try {
-      await updateDoc(doc(db, 'exam_rooms', roomId, 'attempts', attempt.id), {
-        answers: updated.answers,
-        lastSavedAt: Timestamp.now(),
-      });
-    } catch (err) {
-      console.error('Error saving answer to server:', err);
+    // Debounce Firestore writes — local + localStorage stay immediate
+    if (saveTimerRef.current != null) {
+      window.clearTimeout(saveTimerRef.current);
     }
-  }, [attempt, roomId]);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      void flushAnswerSave();
+    }, 600);
+  }, [attempt, roomId, flushAnswerSave]);
 
   const recordSuspicious = useCallback(async () => {
     if (!attempt) return;
@@ -1404,9 +1576,11 @@ export function useExamAttempt(roomId: string) {
       return;
     }
     try {
-      const updated = { ...attempt, status: 'submitted' as const, submittedAt: Date.now() };
+      await flushAnswerSave();
+      const latest = attemptRef.current ?? attempt;
+      const updated = { ...latest, status: 'submitted' as const, submittedAt: Date.now() };
 
-      await updateDoc(doc(db, 'exam_rooms', roomId, 'attempts', attempt.id), {
+      await updateDoc(doc(db, 'exam_rooms', roomId, 'attempts', latest.id), {
         answers: updated.answers,
         status: 'submitted',
         submittedAt: Timestamp.now(),
@@ -1414,12 +1588,12 @@ export function useExamAttempt(roomId: string) {
       });
 
       setAttempt(updated);
-      localStorage.removeItem(`exam_attempt_${roomId}_${attempt.studentId}`);
+      localStorage.removeItem(`exam_attempt_${roomId}_${latest.studentId}`);
 
       // คะแนนทั้งรอบคำนวณทีเดียวตอนครูปิดห้อง — ไม่ตรวจรายคนตอนส่ง
       if (room.status !== 'active') {
         try {
-          await requestExamAttemptGrading(roomId, attempt.id);
+          await requestExamAttemptGrading(roomId, latest.id);
         } catch (gradeErr) {
           console.warn('Exam grading callable failed, waiting for trigger:', gradeErr);
         }
@@ -1427,7 +1601,7 @@ export function useExamAttempt(roomId: string) {
     } catch (err) {
       console.error('Error submitting attempt:', err);
     }
-  }, [attempt, room, roomId]);
+  }, [attempt, room, roomId, flushAnswerSave]);
 
   const isSubmitted = attempt?.status === 'submitted' || attempt?.status === 'graded';
 

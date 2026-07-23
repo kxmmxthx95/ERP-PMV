@@ -967,7 +967,12 @@ export default function MorningRollCallDashboardPage() {
   }
 
   return (
-    <div className="relative flex flex-col min-h-0 gap-2 pb-10 md:flex-1 md:gap-5 md:pb-4">
+    <div
+      className={cn(
+        'relative flex min-h-0 w-full flex-1 flex-col overflow-hidden font-sukhumvit',
+        'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+      )}
+    >
       {!isLgUp && mobileActionsEl && createPortal(
         <MorningRollCallDashboardFilters
           variant="mobile"
@@ -996,6 +1001,7 @@ export default function MorningRollCallDashboardPage() {
         <div className="absolute top-24 -right-20 w-80 h-80 rounded-full bg-cyan-200/40 blur-3xl" />
       </div>
 
+      <div className="relative z-0 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-y-contain scrollbar-hide md:gap-5">
       {isError && (
           <div style={GLASS} className="rounded-2xl p-4 border border-red-200/80 bg-red-50/60">
             <p className="text-sm font-bold text-red-700">โหลดข้อมูลไม่สำเร็จ</p>
@@ -1345,6 +1351,7 @@ export default function MorningRollCallDashboardPage() {
           </div>
         </DrawerContent>
       </Drawer>
+      </div>
     </div>
   );
 }

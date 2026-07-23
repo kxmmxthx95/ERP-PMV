@@ -23,6 +23,7 @@ import {
   IoWalletOutline,
   IoPlayCircleOutline,
   IoBarChartOutline,
+  IoAnalyticsOutline,
 } from 'react-icons/io5';
 import type { IconType } from 'react-icons';
 import { useAuth } from '@/hooks/useAuth';
@@ -102,6 +103,7 @@ const ALL_MENUS: { title: string; subtitle: string; icon: IconType; path: string
   { title: 'คลังข้อสอบ', subtitle: 'Question Bank & Repository', icon: IoBookOutline, path: '/portal/question-bank', featureKey: 'questionBank' },
   { title: 'AI Agent', subtitle: 'Agent Command Center', icon: IoSparklesOutline, path: '/portal/ai-agents', featureKey: 'aiAgents' },
   { title: 'สมุดคะแนน', subtitle: 'Grade Book & Grade Cutting', icon: IoSchoolOutline, path: '/portal/grades', featureKey: 'grades' },
+  { title: 'วิเคราะห์ผู้เรียน', subtitle: 'Student Risk Analytics', icon: IoAnalyticsOutline, path: '/portal/student-analytics', featureKey: 'studentAnalytics' },
   { title: 'แผนการศึกษาต่อ', subtitle: 'Future Plan & University', icon: IoSchoolOutline, path: '/portal/future-plan', featureKey: 'futurePlan' },
   { title: 'เกมทายคำ', subtitle: 'Multiplayer Word Game', icon: IoGameControllerOutline, path: '/portal/word-game', featureKey: 'wordGame' },
   { title: 'มอบหมายงาน', subtitle: 'Task Delegation', icon: IoCheckmarkDoneOutline, path: '/portal/tasks', featureKey: 'tasks' },
@@ -132,7 +134,7 @@ const MENU_CATEGORIES = [
   {
     id: 'student_affairs',
     name: 'งานกิจการนักเรียนและส่วนกลาง (Student Affairs & Operation)',
-    featureKeys: ['attendance', 'morningRollCall', 'dutySchedule', 'announcements', 'tasks', 'feedback', 'behaviorScore', 'reports', 'aiAgents', 'futurePlan', 'wordGame'],
+    featureKeys: ['attendance', 'morningRollCall', 'dutySchedule', 'announcements', 'tasks', 'feedback', 'behaviorScore', 'studentAnalytics', 'reports', 'aiAgents', 'futurePlan', 'wordGame'],
   },
 ];
 
@@ -377,9 +379,12 @@ export default function HomePage() {
         label: c.title,
         subtitle: c.subtitle,
         icon: c.icon,
-        path: c.path,
+        path:
+          role === 'teacher' && c.featureKey === 'morningRollCall'
+            ? '/portal/morning-rollcall/check'
+            : c.path,
       })),
-    [cards],
+    [cards, role],
   );
 
   const groupedCategories = useMemo(() => {

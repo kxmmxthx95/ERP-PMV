@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "attempts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "studentId", "order": "ASCENDING" },
+        { "fieldPath": "round", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "lesson_comments",
       "queryScope": "COLLECTION",
       "fields": [

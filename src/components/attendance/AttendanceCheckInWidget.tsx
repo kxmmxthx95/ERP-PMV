@@ -5,7 +5,12 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
-import { useStaffAttendance, type AttendanceStatus } from '@/hooks/useStaffAttendance';
+import {
+  formatShiftEndLabel,
+  isAtOrAfterShiftEnd,
+  useStaffAttendance,
+  type AttendanceStatus,
+} from '@/hooks/useStaffAttendance';
 import { useAttendanceConfig } from '@/hooks/useAttendanceConfig';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import { useThaiHolidays } from '@/features/calendar/hooks/useThaiHolidays';
@@ -68,13 +73,27 @@ export default function AttendanceCheckInWidget({
   const uid = user?.uid ?? '';
   const name = user?.displayName || user?.email || 'บุคลากร';
   const { config } = useAttendanceConfig();
-  const { todayRecord, history, loading, actionLoading, error, checkIn, checkOut } = useStaffAttendance(uid, name, config);
-  const now = new Date();
+  const { todayRecord, history, loading, actionLoading, error, checkIn, checkOut } = useStaffAttendance(
+    uid,
+    name,
+    config,
+    undefined,
+    undefined,
+    false,
+    { loadHistory: true },
+  );
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   const todayDate = `${y}-${m}-${d}`;
   const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+  const checkoutTimeReached = isAtOrAfterShiftEnd(now, config);
+  const shiftEndLabel = formatShiftEndLabel(config);
   const { holidays: thaiHolidays } = useThaiHolidays(now.getFullYear());
   const { events: calendarEvents } = useAcademicCalendar(role ?? undefined, thaiHolidays);
 
@@ -102,7 +121,7 @@ export default function AttendanceCheckInWidget({
   };
 
   const handleCheckOut = () => {
-    if (isNonWorkingDay || actionLoading) return;
+    if (isNonWorkingDay || actionLoading || !checkoutTimeReached) return;
     checkOut();
   };
 
@@ -199,14 +218,15 @@ export default function AttendanceCheckInWidget({
           </motion.button>
         ) : !checkedOut ? (
           <motion.button
-            whileTap={{ scale: 0.95 }}
+            whileTap={checkoutTimeReached ? { scale: 0.95 } : undefined}
             onClick={handleCheckOut}
-            disabled={actionLoading}
-            className="w-full py-2 rounded-lg bg-gradient-to-r from-slate-500 to-slate-700 text-white text-sm font-bold flex items-center justify-center gap-1.5 disabled:opacity-60 transition-all"
+            disabled={actionLoading || !checkoutTimeReached}
+            title={checkoutTimeReached ? 'เช็คเอาต์' : `เช็คเอาต์ได้หลัง ${shiftEndLabel} น.`}
+            className="w-full py-2 rounded-lg bg-gradient-to-r from-slate-500 to-slate-700 text-white text-sm font-bold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
           >
             {actionLoading
               ? <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-              : <><LogOut size={15} /> เช็คเอาต์</>}
+              : <><LogOut size={15} /> {checkoutTimeReached ? 'เช็คเอาต์' : `หลัง ${shiftEndLabel}`}</>}
           </motion.button>
         ) : (
           <div className="w-full py-2 rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-600 text-sm font-bold flex items-center justify-center gap-1.5">
@@ -295,14 +315,15 @@ export default function AttendanceCheckInWidget({
               </motion.button>
             ) : !checkedOut ? (
               <motion.button
-                whileTap={{ scale: 0.95 }}
+                whileTap={checkoutTimeReached ? { scale: 0.95 } : undefined}
                 onClick={handleCheckOut}
-                disabled={actionLoading}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-slate-500 to-slate-700 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-60 transition-all"
+                disabled={actionLoading || !checkoutTimeReached}
+                title={checkoutTimeReached ? 'เช็คเอาต์' : `เช็คเอาต์ได้หลัง ${shiftEndLabel} น.`}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-slate-500 to-slate-700 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
                 {actionLoading
                   ? <div className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  : <><LogOut size={18} /> เช็คเอาต์</>}
+                  : <><LogOut size={18} /> {checkoutTimeReached ? 'เช็คเอาต์' : `เช็คเอาต์ได้หลัง ${shiftEndLabel} น.`}</>}
               </motion.button>
             ) : (
               <div className="w-full py-4 rounded-2xl bg-emerald-50 border border-emerald-100 text-emerald-600 font-bold flex items-center justify-center gap-2">

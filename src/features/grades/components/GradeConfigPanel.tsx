@@ -1,10 +1,32 @@
 // src/features/grades/components/GradeConfigPanel.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Trash2, AlertCircle } from 'lucide-react';
+import { HiPlus, HiTrash } from 'react-icons/hi2';
+import { AlertCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import type { GradeWeightConfig, GradeThreshold, GradeLetter } from '@/types/grades';
 import { GPA_GRADE_OPTIONS, formatGpa, gpaStyle } from '@/types/grades';
-import { GLASS } from '@/components/layouts/PortalLayout';
+import { cn } from '@/lib/utils';
+
+const FORM_LABEL = 'pl-1 text-[10px] font-black uppercase tracking-wider text-slate-600';
+const FORM_INPUT =
+  'h-10 rounded-xl border-none bg-slate-50/70 px-4 text-xs font-bold focus-visible:bg-slate-50/90 focus-visible:ring-2 focus-visible:ring-slate-900/20';
+
+const WEIGHT_FIELDS = [
+  { key: 'classwork' as const, label: 'คะแนนเก็บ', barClass: 'bg-primary' },
+  { key: 'midterm' as const, label: 'กลางภาค', barClass: 'bg-chart-2' },
+  { key: 'final' as const, label: 'ปลายภาค', barClass: 'bg-chart-4' },
+];
+
+const TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden';
 
 interface Props {
   config: GradeWeightConfig;
@@ -15,6 +37,10 @@ interface Props {
 export default function GradeConfigPanel({ config, onSave, onRecalculate }: Props) {
   const [local, setLocal] = useState<GradeWeightConfig>({ ...config });
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setLocal({ ...config });
+  }, [config.id, config.updatedAt]);
 
   const totalWeight = local.weights.classwork + local.weights.midterm + local.weights.final;
   const weightOk = totalWeight === 100;
@@ -39,6 +65,7 @@ export default function GradeConfigPanel({ config, onSave, onRecalculate }: Prop
       thresholds: [...local.thresholds, { minScore: 0, grade: 'F' as GradeLetter }],
     };
     setLocal(updated);
+    onRecalculate(updated);
   };
 
   const removeThreshold = (idx: number) => {
@@ -55,137 +82,189 @@ export default function GradeConfigPanel({ config, onSave, onRecalculate }: Prop
     setSaving(false);
   };
 
+  const sortedThresholds = [...local.thresholds].sort((a, b) => b.minScore - a.minScore);
+
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-      className="rounded-[2rem] p-5 flex flex-col gap-5"
-      style={GLASS}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex flex-col gap-6"
     >
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <p className="text-[13px] font-black text-slate-800 font-sukhumvit">ตั้งค่าการตัดเกรด</p>
-      </div>
-
       {/* สัดส่วนคะแนน */}
-      <div className="flex flex-col gap-3">
+      <section className="space-y-4">
         {!weightOk && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-rose-50 border border-rose-200">
-            <AlertCircle size={12} className="text-rose-500 shrink-0" />
-            <p className="text-[11px] text-rose-600 font-sarabun">ผลรวมต้องเท่ากับ 100% (ปัจจุบัน: {totalWeight}%)</p>
+          <div className="flex items-center gap-2 rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-2">
+            <AlertCircle size={14} className="shrink-0 text-destructive" />
+            <p className="text-[11px] font-sarabun text-destructive">
+              ผลรวมต้องเท่ากับ 100% (ปัจจุบัน: {totalWeight}%)
+            </p>
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3">
-          {(
-            [
-              { key: 'classwork' as const, label: 'คะแนนเก็บ', color: '#7c3aed' },
-              { key: 'midterm' as const, label: 'กลางภาค', color: '#0891b2' },
-              { key: 'final' as const, label: 'ปลายภาค', color: '#059669' },
-            ]
-          ).map(({ key, label, color }) => (
-            <div key={key} className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-bold font-sukhumvit" style={{ color }}>
-                {label}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {WEIGHT_FIELDS.map(({ key, label }) => (
+            <div key={key} className="space-y-1">
+              <label className={FORM_LABEL}>
+                {label} <span className="text-destructive">*</span>
               </label>
               <div className="relative">
-                <input
-                  type="number" min={0} max={100}
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
                   value={local.weights[key]}
-                  onChange={e => updateWeight(key, Number(e.target.value))}
-                  className="w-full h-9 rounded-2xl px-3 pr-7 text-xs font-bold text-center outline-none border font-sukhumvit"
-                  style={{ background: 'rgba(255,255,255,0.7)', borderColor: color + '55' }}
+                  onChange={(e) => updateWeight(key, Number(e.target.value))}
+                  className={cn(FORM_INPUT, 'pr-8 text-center tabular-nums font-sukhumvit')}
                 />
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-sarabun">%</span>
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground font-sarabun">
+                  %
+                </span>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Weight visual bar */}
-        <div className="flex h-2 rounded-full overflow-hidden gap-0.5">
-          <div className="rounded-l-full transition-all" style={{ width: `${local.weights.classwork}%`, background: '#7c3aed' }} />
-          <div className="transition-all" style={{ width: `${local.weights.midterm}%`, background: '#0891b2' }} />
-          <div className="rounded-r-full transition-all" style={{ width: `${local.weights.final}%`, background: '#059669' }} />
+        <div className="space-y-2">
+          <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+            {WEIGHT_FIELDS.map(({ key, barClass }, index) => (
+              <div
+                key={key}
+                className={cn(
+                  'transition-all',
+                  barClass,
+                  index === 0 && 'rounded-l-full',
+                  index === WEIGHT_FIELDS.length - 1 && 'rounded-r-full',
+                )}
+                style={{ width: `${local.weights[key]}%` }}
+              />
+            ))}
+          </div>
+          <div className="flex flex-wrap justify-center gap-x-4 gap-y-1">
+            {WEIGHT_FIELDS.map(({ key, label, barClass }) => (
+              <div key={key} className="flex items-center gap-1.5">
+                <span className={cn('h-2 w-2 rounded-full', barClass)} />
+                <span className="text-[10px] font-bold text-muted-foreground font-sarabun">
+                  {label} {local.weights[key]}%
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-3 justify-center">
-          {[{ label: 'คะแนนเก็บ', color: '#7c3aed', pct: local.weights.classwork },
-            { label: 'กลางภาค', color: '#0891b2', pct: local.weights.midterm },
-            { label: 'ปลายภาค', color: '#059669', pct: local.weights.final }].map(item => (
-            <div key={item.label} className="flex items-center gap-1">
-              <div className="w-2 h-2 rounded-full" style={{ background: item.color }} />
-              <span className="text-[9px] text-slate-500 font-sarabun">{item.label} {item.pct}%</span>
-            </div>
-          ))}
-        </div>
-      </div>
+      </section>
 
-      {/* เกณฑ์ตัดเกรด (GPA 0–4) */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest font-sukhumvit">เกณฑ์ตัดเกรด (GPA 0–4)</p>
-          <button onClick={addThreshold}
-            className="flex items-center gap-1 text-[10px] font-bold text-violet-600 font-sukhumvit">
-            <Plus size={11} /> เพิ่มเกณฑ์
-          </button>
+      {/* เกณฑ์ตัดเกรด */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[11px] font-black uppercase tracking-wider text-muted-foreground font-sukhumvit">
+            เกณฑ์ตัดเกรด (GPA 0–4)
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="h-8 rounded-xl px-3 text-[11px] font-bold font-sukhumvit"
+            onClick={addThreshold}
+          >
+            <HiPlus className="h-3.5 w-3.5" />
+            เพิ่มเกณฑ์
+          </Button>
         </div>
 
-        <div className="flex flex-col gap-2">
-          {[...local.thresholds]
-            .sort((a, b) => b.minScore - a.minScore)
-            .map((t, idx) => {
+        <div className={TABLE_SHELL}>
+          <div className="grid grid-cols-[4.5rem_1fr_1fr_2.5rem] gap-3 border-b border-border bg-muted/30 px-4 py-3 sm:grid-cols-[5rem_1fr_1fr_2.5rem]">
+            <span className="text-[11px] font-black uppercase tracking-wide text-muted-foreground font-sukhumvit">
+              GPA
+            </span>
+            <span className="text-[11px] font-black uppercase tracking-wide text-muted-foreground font-sukhumvit">
+              คะแนนขั้นต่ำ
+            </span>
+            <span className="text-[11px] font-black uppercase tracking-wide text-muted-foreground font-sukhumvit">
+              เกรด
+            </span>
+            <span className="sr-only">ลบ</span>
+          </div>
+
+          <div className="flex flex-col">
+            {sortedThresholds.map((t) => {
               const realIdx = local.thresholds.indexOf(t);
-              const gpa = GPA_GRADE_OPTIONS.find(o => o.letter === t.grade)?.gpa ?? 0;
+              const gpa = GPA_GRADE_OPTIONS.find((o) => o.letter === t.grade)?.gpa ?? 0;
               const gStyle = gpaStyle(gpa);
+
               return (
-                <div key={idx} className="flex items-center gap-2">
-                  <div className="w-8 h-6 rounded-lg flex items-center justify-center text-[9px] font-black tabular-nums"
-                    style={{ background: gStyle.bg, color: gStyle.text }}>
-                    {formatGpa(gpa)}
-                  </div>
-                  <span className="text-[10px] text-slate-400 font-sarabun">คะแนน ≥</span>
-                  <input
-                    type="number" min={0} max={100}
-                    value={t.minScore}
-                    onChange={e => updateThreshold(realIdx, 'minScore', e.target.value)}
-                    className="w-16 h-7 rounded-xl text-center text-xs font-bold outline-none border font-sukhumvit"
-                    style={{ background: 'rgba(255,255,255,0.7)', borderColor: 'rgba(200,180,255,0.4)' }}
-                  />
-                  <span className="text-[10px] text-slate-400 font-sarabun">%</span>
-                  <select
-                    value={t.grade}
-                    onChange={e => updateThreshold(realIdx, 'grade', e.target.value)}
-                    className="flex-1 h-7 rounded-xl px-2 text-xs font-bold outline-none border font-sukhumvit appearance-none tabular-nums"
-                    style={{ background: 'rgba(255,255,255,0.7)', borderColor: 'rgba(200,180,255,0.4)', color: gStyle.text }}
+                <div
+                  key={`${t.grade}-${realIdx}`}
+                  className="grid grid-cols-[4.5rem_1fr_1fr_2.5rem] items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 sm:grid-cols-[5rem_1fr_1fr_2.5rem]"
+                >
+                  <span
+                    className="inline-flex w-fit rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums font-sukhumvit"
+                    style={{ color: gStyle.text, background: gStyle.bg }}
                   >
-                    {GPA_GRADE_OPTIONS.map(({ letter, gpa: gpaVal }) => (
-                      <option key={letter} value={letter}>{formatGpa(gpaVal)}</option>
-                    ))}
-                  </select>
-                  {local.thresholds.length > 1 && (
-                    <button onClick={() => removeThreshold(realIdx)}
-                      className="w-6 h-6 rounded-lg bg-rose-50 flex items-center justify-center text-rose-400 hover:text-rose-600">
-                      <Trash2 size={10} />
+                    {formatGpa(gpa)}
+                  </span>
+
+                  <div className="relative">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={t.minScore}
+                      onChange={(e) => updateThreshold(realIdx, 'minScore', e.target.value)}
+                      className={cn(FORM_INPUT, 'h-9 pr-8 text-center tabular-nums font-sukhumvit')}
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground font-sarabun">
+                      %
+                    </span>
+                  </div>
+
+                  <Select
+                    value={t.grade}
+                    onValueChange={(value) => updateThreshold(realIdx, 'grade', value)}
+                  >
+                    <SelectTrigger className="h-9 w-full rounded-xl border-none bg-slate-50/70 text-xs font-bold font-sukhumvit shadow-none focus:ring-2 focus:ring-slate-900/20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl">
+                      {GPA_GRADE_OPTIONS.map(({ letter, gpa: gpaVal }) => (
+                        <SelectItem key={letter} value={letter} className="text-xs font-bold font-sukhumvit">
+                          {formatGpa(gpaVal)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  {local.thresholds.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeThreshold(realIdx)}
+                      className="flex h-8 w-8 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                      aria-label="ลบเกณฑ์"
+                    >
+                      <HiTrash className="h-4 w-4" />
                     </button>
+                  ) : (
+                    <span />
                   )}
                 </div>
               );
             })}
+          </div>
         </div>
-      </div>
+      </section>
 
-      {/* Save */}
-      <motion.button
-        whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
-        onClick={handleSave}
-        disabled={!weightOk || saving}
-        className="w-full h-10 rounded-2xl text-sm font-bold text-white font-sukhumvit flex items-center justify-center gap-2 disabled:opacity-50"
-        style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', boxShadow: '0 4px 12px rgba(124,58,237,0.3)' }}
-      >
-        {saving
-          ? <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-          : 'บันทึกการตั้งค่า'
-        }
-      </motion.button>
+      <div className="border-t border-border pt-4">
+        <Button
+          type="button"
+          disabled={!weightOk || saving}
+          onClick={handleSave}
+          className="h-10 w-full rounded-xl font-bold font-sukhumvit"
+        >
+          {saving ? (
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground" />
+          ) : (
+            'บันทึกการตั้งค่า'
+          )}
+        </Button>
+      </div>
     </motion.div>
   );
 }

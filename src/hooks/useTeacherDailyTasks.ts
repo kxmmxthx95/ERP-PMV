@@ -17,7 +17,9 @@ import type { MicroSyllabus } from '@/types/microSyllabus';
 import type { ScheduleEntry, SchoolDay } from '@/types/schedule';
 
 const noopSubscribe = () => () => {};
-const emptySessions = (): never[] => [];
+// ค่าอ้างอิงเดียวคงที่ ห้ามสร้าง [] ใหม่ทุกครั้ง ไม่งั้น useSyncExternalStore วน re-render ไม่จบ
+const EMPTY_SESSIONS: never[] = [];
+const emptySessions = () => EMPTY_SESSIONS;
 
 export type TeacherDailyTaskStatus = 'done' | 'pending' | 'not_applicable';
 
@@ -65,6 +67,11 @@ function hasTeachingReflectionForDate(syllabus: MicroSyllabus | undefined, dateI
   return Boolean(topic?.completedAt && topic?.teachingReflection);
 }
 
+function isNoTeachingDay(syllabus: MicroSyllabus | undefined, dateIso: string): boolean {
+  const topic = syllabus?.topics.find((item) => item.date === dateIso);
+  return Boolean(topic?.isNoTeaching);
+}
+
 function useTodayClassSessions(academicYearId: string | undefined) {
   const today = getLocalDateString();
   const store = academicYearId ? getTodayClassSessionsStore(academicYearId, today) : null;
@@ -92,7 +99,7 @@ export function useTeacherDailyTasks() {
   const { sessions: classSessions, loading: loadingClassSessions } = useTodayClassSessions(
     year ?? undefined,
   );
-  const { syllabi, loading: loadingMicroSyllabi } = useMicroSyllabus(user?.uid ?? null);
+  const { syllabi, loading: loadingMicroSyllabi, createSyllabus, updateTopics } = useMicroSyllabus(user?.uid ?? null);
   const { events: calendarEvents } = useAcademicCalendar();
 
   const teacherProfile = useMemo(
@@ -198,6 +205,7 @@ export function useTeacherDailyTasks() {
         subjectName,
       );
       const done = hasTeachingReflectionForDate(syllabus, today);
+      const noTeachingDay = isNoTeachingDay(syllabus, today);
 
       groups.set(taskId, {
         taskId,
@@ -206,7 +214,7 @@ export function useTeacherDailyTasks() {
         className,
         subjectName,
         periods: [entry.period],
-        status: isExamOrActivityDay ? 'not_applicable' : done ? 'done' : 'pending',
+        status: isExamOrActivityDay || noTeachingDay ? 'not_applicable' : done ? 'done' : 'pending',
         syllabusId: syllabus?.id,
       });
     });
@@ -266,5 +274,8 @@ export function useTeacherDailyTasks() {
     hasHomeroom: homeRoomClasses.length > 0,
     hasClassesToday: classAttendanceTasks.length > 0,
     hasReflectionTasksToday: teachingReflectionTasks.length > 0,
+    syllabi,
+    createSyllabus,
+    updateTopics,
   };
 }

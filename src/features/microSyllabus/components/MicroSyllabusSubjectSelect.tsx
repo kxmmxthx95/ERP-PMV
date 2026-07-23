@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { HiOutlineArrowLeft, HiOutlineCalendarDays, HiOutlineChevronDown } from 'react-icons/hi2';
+import { HiOutlineCalendarDays, HiOutlineChevronDown } from 'react-icons/hi2';
 import { cn } from '@/lib/utils';
 
 export const MICRO_SYLLABUS_FEATURE_TITLE = 'แผนการสอน';
@@ -15,7 +15,6 @@ interface Props {
   options: MicroSyllabusSubjectOption[];
   selectedKey: string | null;
   onSelect: (key: string) => void;
-  onBack: () => void;
   active: boolean;
 }
 
@@ -34,54 +33,37 @@ function SubjectSelectCapsule({
   options,
   selectedKey,
   onSelect,
-  onBack,
-  showBack = true,
+  compact = false,
 }: {
   options: MicroSyllabusSubjectOption[];
   selectedKey: string | null;
   onSelect: (key: string) => void;
-  onBack: () => void;
-  showBack?: boolean;
+  compact?: boolean;
 }) {
   const selected = options.find((option) => option.key === selectedKey) ?? options[0];
 
   return (
     <div
       className={cn(
-        'pointer-events-auto flex min-w-0 items-center gap-1',
-        showBack
-          ? 'max-w-[min(480px,calc(100vw-480px))] rounded-full border border-white bg-white/60 p-1 shadow-[0_4px_10px_-2px_rgba(0,0,0,0.025)] backdrop-blur-xl'
-          : 'max-w-[calc(100vw-112px)]',
+        'pointer-events-auto flex min-w-0 items-center',
+        compact
+          ? 'max-w-[calc(100vw-112px)]'
+          : 'max-w-[min(480px,calc(100vw-480px))]',
       )}
     >
-      {showBack && (
-        <>
-          <button
-            type="button"
-            onClick={onBack}
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-slate-500 transition-colors hover:bg-white hover:text-slate-800"
-            aria-label="กลับไปเลือกวิชา"
-            title="กลับไปเลือกวิชา"
-          >
-            <HiOutlineArrowLeft size={16} />
-          </button>
-          <div className="h-5 w-px shrink-0 bg-slate-200/80" aria-hidden />
-        </>
-      )}
-
       <div className="relative min-w-0 flex-1">
-        <label className="sr-only" htmlFor={showBack ? 'micro-syllabus-subject-select' : 'micro-syllabus-subject-select-mobile'}>
+        <label className="sr-only" htmlFor={compact ? 'micro-syllabus-subject-select-mobile' : 'micro-syllabus-subject-select'}>
           เลือกรายวิชา
         </label>
         <select
-          id={showBack ? 'micro-syllabus-subject-select' : 'micro-syllabus-subject-select-mobile'}
+          id={compact ? 'micro-syllabus-subject-select-mobile' : 'micro-syllabus-subject-select'}
           value={selectedKey ?? selected.key}
           onChange={(event) => onSelect(event.target.value)}
           className={cn(
             'h-8 w-full appearance-none truncate rounded-full bg-transparent',
             'pr-8 font-sukhumvit text-[13px] font-black text-slate-800',
             'focus:outline-none focus:ring-2 focus:ring-indigo-500/20',
-            showBack ? 'min-w-[180px] pl-2.5' : 'min-w-0 max-w-[calc(100vw-112px)] pl-1',
+            compact ? 'min-w-0 max-w-[calc(100vw-112px)] pl-1' : 'min-w-[180px] pl-2.5',
           )}
           aria-label="เลือกรายวิชา"
         >
@@ -105,20 +87,15 @@ export function MicroSyllabusSubjectSelect({
   options,
   selectedKey,
   onSelect,
-  onBack,
   active,
 }: Props) {
-  const [centerEl, setCenterEl] = useState<HTMLElement | null>(null);
   const [centerMobileEl, setCenterMobileEl] = useState<HTMLElement | null>(null);
-  const [mobileBackEl, setMobileBackEl] = useState<HTMLElement | null>(null);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false,
   );
 
   useEffect(() => {
-    setCenterEl(document.getElementById('header-portal-center'));
     setCenterMobileEl(document.getElementById('header-portal-center-mobile'));
-    setMobileBackEl(document.getElementById('header-portal-mobile-back'));
   }, []);
 
   useEffect(() => {
@@ -128,53 +105,23 @@ export function MicroSyllabusSubjectSelect({
   }, []);
 
   const showSubjectSelect = active && options.length > 0;
-  const showMobileSubjectBack = isMdOrBelow && showSubjectSelect;
 
-  useEffect(() => {
-    const defaultBack = document.getElementById('portal-default-mobile-back');
-    if (!defaultBack) return;
-    defaultBack.style.display = showMobileSubjectBack ? 'none' : '';
-  }, [showMobileSubjectBack]);
+  // Desktop: subject shown in breadcrumb — no center select
+  if (!isMdOrBelow) return null;
 
-  return (
-    <>
-      {showSubjectSelect && centerEl && createPortal(
-        <SubjectSelectCapsule
-          options={options}
-          selectedKey={selectedKey}
-          onSelect={onSelect}
-          onBack={onBack}
-        />,
-        centerEl,
-      )}
-
-      {isMdOrBelow && centerMobileEl && createPortal(
+  return centerMobileEl
+    ? createPortal(
         showSubjectSelect ? (
           <SubjectSelectCapsule
             options={options}
             selectedKey={selectedKey}
             onSelect={onSelect}
-            onBack={onBack}
-            showBack={false}
+            compact
           />
         ) : (
           <MicroSyllabusFeatureTitle className="lg:hidden" />
         ),
         centerMobileEl,
-      )}
-
-      {showMobileSubjectBack && mobileBackEl && createPortal(
-        <button
-          type="button"
-          onClick={onBack}
-          className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50 lg:hidden"
-          title="กลับไปเลือกวิชา"
-          aria-label="กลับไปเลือกวิชา"
-        >
-          <HiOutlineArrowLeft size={18} />
-        </button>,
-        mobileBackEl,
-      )}
-    </>
-  );
+      )
+    : null;
 }

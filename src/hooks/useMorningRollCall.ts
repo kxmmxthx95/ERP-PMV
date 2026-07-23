@@ -7,7 +7,9 @@ import { getTodayRollCallSessionsStore } from '@/lib/firestoreShared/morningRoll
 import type { MorningRollCallSession, NewMorningRollCall } from '@/types/morningRollCall';
 
 const noopSubscribe = () => () => {};
-const emptySessions = (): MorningRollCallSession[] => [];
+// ค่าอ้างอิงเดียวคงที่ ห้ามสร้าง [] ใหม่ทุกครั้ง ไม่งั้น useSyncExternalStore วน re-render ไม่จบ
+const EMPTY_SESSIONS: readonly MorningRollCallSession[] = [];
+const emptySessions = () => EMPTY_SESSIONS;
 
 function generateDocId(date: string, classId: string): string {
   return `${date}_${classId.replace(/[^a-zA-Z0-9]/g, '_')}`;

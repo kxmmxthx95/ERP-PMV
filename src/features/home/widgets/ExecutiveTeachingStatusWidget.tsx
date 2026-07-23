@@ -14,6 +14,10 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from '@/components/ui/drawer';
+import {
+  DRAWER_HEADER_ICON_BTN,
+  DRAWER_HEADER_RIGHT_ACTIONS,
+} from '@/lib/drawerHeaderBtn';
 import { subjectColorByName } from '@/features/schedule/constants/colors';
 import { formatThaiDateLabel } from '@/lib/dateUtils';
 import { cn } from '@/lib/utils';
@@ -44,14 +48,17 @@ type TeacherStatus = {
   subjectGroup?: string;
 };
 
-const DRAWER_CONTENT_CLASS = [
-  'h-dvh max-h-dvh flex flex-col overflow-hidden p-0 rounded-none',
+const DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh max-h-dvh flex-col overflow-hidden bg-transparent p-0 before:hidden',
   'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
-  'data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none',
-  'sm:h-full sm:max-h-full sm:rounded-l-3xl sm:overflow-hidden',
+  'sm:h-full sm:max-h-full sm:p-2',
   'sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md',
-  'sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl',
-].join(' ');
+);
+
+const DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white',
+  'sm:rounded-4xl sm:border sm:border-border sm:shadow-xl',
+);
 
 const KIND_META: Record<
   TeacherLiveKind,
@@ -562,43 +569,47 @@ export default function ExecutiveTeachingStatusWidget() {
 
       <Drawer open={drawerOpen} onOpenChange={setDrawerOpen} direction="right">
         <DrawerContent className={DRAWER_CONTENT_CLASS}>
-          <DrawerHeader className="shrink-0 px-4 pt-4 pb-2">
-            <div className="relative flex items-center justify-center min-h-10">
-              <div className="min-w-0 text-center px-12">
-                <DrawerTitle className="text-base font-black text-slate-800">
-                  สถานะครูตามตารางสอน
-                </DrawerTitle>
-                <DrawerDescription className="text-xs text-slate-500">{todayLabel}</DrawerDescription>
+          <div className={DRAWER_PANEL_CLASS}>
+            <DrawerHeader className="shrink-0 px-4 pt-4 pb-2">
+              <div className="relative flex min-h-10 items-center justify-center">
+                <div className="min-w-0 px-12 text-center">
+                  <DrawerTitle className="text-base font-black text-slate-800">
+                    สถานะครูตามตารางสอน
+                  </DrawerTitle>
+                  <DrawerDescription className="text-xs text-slate-500">{todayLabel}</DrawerDescription>
+                </div>
+                <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                  <button
+                    type="button"
+                    onClick={() => setDrawerOpen(false)}
+                    className={DRAWER_HEADER_ICON_BTN}
+                    aria-label="ปิด"
+                  >
+                    <HiXMark className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="absolute right-0 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 active:scale-[0.98] transition"
-                aria-label="ปิด"
-              >
-                <HiXMark className="w-4 h-4" />
-              </button>
-            </div>
-          </DrawerHeader>
+            </DrawerHeader>
 
-          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pb-6">
-            {isHoliday ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
-                <p className="text-sm font-bold text-slate-600">วันนี้เป็นวันหยุด</p>
-                <p className="text-xs text-slate-400 mt-1">
-                  {getWidgetHolidayLabel(isWeekend, holidayTitle)}
-                </p>
-              </div>
-            ) : status.teachers.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
-                <p className="text-sm font-bold text-slate-600">ยังไม่มีครูที่มีคาบสอนวันนี้</p>
-              </div>
-            ) : drawerOpen ? (
-              <TeacherDrawerList
-                groupedTeachers={groupedTeachers}
-                teacherProfileById={teacherProfileById}
-              />
-            ) : null}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
+              {isHoliday ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
+                  <p className="text-sm font-bold text-slate-600">วันนี้เป็นวันหยุด</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {getWidgetHolidayLabel(isWeekend, holidayTitle)}
+                  </p>
+                </div>
+              ) : status.teachers.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
+                  <p className="text-sm font-bold text-slate-600">ยังไม่มีครูที่มีคาบสอนวันนี้</p>
+                </div>
+              ) : drawerOpen ? (
+                <TeacherDrawerList
+                  groupedTeachers={groupedTeachers}
+                  teacherProfileById={teacherProfileById}
+                />
+              ) : null}
+            </div>
           </div>
         </DrawerContent>
       </Drawer>

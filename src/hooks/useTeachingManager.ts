@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
   doc, query, where, writeBatch, getDocs,
@@ -13,7 +13,10 @@ import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import { useStudentManager } from '@/hooks/useStudentManager';
-import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
+import {
+  getClassesByYearStore,
+  getTeachingClassesStore,
+} from '@/lib/firestoreShared/studentSummaryStore';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
@@ -23,6 +26,8 @@ import {
   resolveTeacherFromAuth,
 } from '@/lib/teachers/teacherIdentity';
 import type { Subject } from '@/types/curriculum';
+import type { ClassRoom } from '@/types/class';
+import { GRADE_LEVEL_ORDER } from '@/types/class';
 import type {
   AttendanceRecord, ClassSession, NewAttendanceRecord, StudentAttendance,
   Assignment, NewAssignment,
@@ -30,6 +35,11 @@ import type {
   Exam, NewExam,
   ExamScore, NewExamScore,
 } from '@/types/teaching';
+
+const noopSubscribeClasses = () => () => {};
+// ค่าอ้างอิงเดียวคงที่ ห้ามสร้าง [] ใหม่ทุกครั้ง ไม่งั้น useSyncExternalStore วน re-render ไม่จบ
+const EMPTY_CLASS_ROWS: { id: string; [key: string]: unknown }[] = [];
+const getEmptyClassRows = () => EMPTY_CLASS_ROWS;
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
@@ -46,9 +56,8 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
   // array gets a new reference.
   const studentsRef = useRef(studentMgr.students);
   studentsRef.current = studentMgr.students;
-  const classMgr = useClassroomManager();
   const curriculum = useCurriculum();
-  const { coursesByVersion } = useCurriculumVersioned();
+  const { versions, coursesByVersion, loadCoursesForVersion } = useCurriculumVersioned();
   const { requests: leaveRequests } = useStudentLeaveRequests(`${Number(activeYearStr) - 543}-01-01`);
 
   // ── Local State ──────────────────────────────────────────────────────────────
@@ -71,15 +80,83 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
     return buildTeacherIdentityKeys(currentTeacherId, currentTeacher);
   }, [currentTeacherId, currentTeacher]);
 
+  // ── Classes ──────────────────────────────────────────────────────────────────
+  // canViewAllSubjects (admin/sysadmin overview) ต้องเห็นทุกห้อง — ครูทั่วไปเห็นแค่ห้อง
+  // ที่มีวิชาตัวเองสอน (teacherIds ที่ sync มาจาก enrolledCourses) ไม่ต้องโหลดทั้งโรงเรียน
+  const identityKeysList = useMemo(() => [...teacherIdentityKeys], [teacherIdentityKeys]);
+  const scopedClassesStore = !canViewAllSubjects && activeYearStr && identityKeysList.length > 0
+    ? getTeachingClassesStore(activeYearStr, identityKeysList)
+    : null;
+  const fullClassesStore = canViewAllSubjects && activeYearStr
+    ? getClassesByYearStore(activeYearStr)
+    : null;
+
+  const scopedRawClasses = useSyncExternalStore(
+    scopedClassesStore?.subscribe ?? noopSubscribeClasses,
+    scopedClassesStore ? scopedClassesStore.getSnapshot : getEmptyClassRows,
+    scopedClassesStore ? scopedClassesStore.getSnapshot : getEmptyClassRows,
+  );
+  const fullRawClasses = useSyncExternalStore(
+    fullClassesStore?.subscribe ?? noopSubscribeClasses,
+    fullClassesStore ? fullClassesStore.getSnapshot : getEmptyClassRows,
+    fullClassesStore ? fullClassesStore.getSnapshot : getEmptyClassRows,
+  );
+  const rawClasses = canViewAllSubjects ? fullRawClasses : scopedRawClasses;
+
+  const allClasses = useMemo(
+    () => rawClasses.map((d) => ({ id: d.id, ...(d as Record<string, unknown>) } as ClassRoom)),
+    [rawClasses],
+  );
+
+  // เหมือน useClassroomManager.classes (activeClasses) — กรองปี+เทอม, sort, fallback แสดง
+  // ทั้งหมดถ้ากรองแล้วว่างเปล่า (กันหน้าว่างตอนข้อมูล semester ไม่ตรง)
+  const activeClasses = useMemo(() => {
+    if (allClasses.length === 0) return [];
+    const filtered = allClasses.filter((c) =>
+      (String(c.academicYearId) === String(activeYearStr) || String((c as { academicYear?: string }).academicYear) === String(activeYearStr))
+      && (Number(c.semester) === Number(semester) || !c.semester),
+    );
+    const source = filtered.length === 0 ? allClasses : filtered;
+    return [...source].sort((a, b) => {
+      const orderA = GRADE_LEVEL_ORDER[a.gradeLevel] || 999;
+      const orderB = GRADE_LEVEL_ORDER[b.gradeLevel] || 999;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
+    });
+  }, [allClasses, activeYearStr, semester]);
+
+  // ห้องเรียนทั้งปี — ไม่กรองตาม class.semester (ภาคเรียนอยู่ที่ enrolledCourses)
+  const yearClasses = useMemo(
+    () => allClasses.filter(c =>
+      String(c.academicYearId) === String(activeYearStr)
+      || String((c as { academicYear?: string }).academicYear) === String(activeYearStr),
+    ),
+    [allClasses, activeYearStr],
+  );
+
+  // Preload versioned courses so enrolledCourses.subjectId can resolve to names
+  useEffect(() => {
+    if (!yearClasses.length || !versions.length) return;
+    const versionIds = new Set<string>();
+    for (const cls of yearClasses) {
+      const pkgId = cls.curriculumPackageId || (cls as { curriculumId?: string }).curriculumId;
+      if (pkgId) versionIds.add(String(pkgId));
+    }
+    for (const versionId of versionIds) {
+      if (!versions.some((v) => v.id === versionId)) continue;
+      if (!coursesByVersion[versionId]) void loadCoursesForVersion(versionId);
+    }
+  }, [yearClasses, versions, coursesByVersion, loadCoursesForVersion]);
+
   // ── Subjects assigned to this teacher via enrolledCourses (stamp) ────────────
   // กรองจาก classes.enrolledCourses ที่ teacherId ตรงกับ currentTeacherId
   // และ semester ตรงกับ activeSemester (หรือ semester == null สำหรับ backward compat)
   const mySubjects = useMemo(() => {
     const assignedSubjectIds = new Set<string>();
     const allVersionedCourses = Object.values(coursesByVersion).flat();
-    
-    // ใช้ allClasses เพื่อให้ครูเห็นภาระงานทั้งหมด
-    for (const cls of classMgr.allClasses) {
+
+    // ใช้ yearClasses เพื่อให้ครูเห็นภาระงานปีปัจจุบัน
+    for (const cls of yearClasses) {
       for (const ec of (cls.enrolledCourses ?? [])) {
         if (
           canViewAllSubjects ||
@@ -91,52 +168,68 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       }
     }
 
+    for (const subjectId of currentTeacher?.teachingSubjectIds ?? []) {
+      assignedSubjectIds.add(subjectId);
+    }
+
     const result: Subject[] = [];
     assignedSubjectIds.forEach(id => {
       // 1. หาใน Repository (ระบบเดิม)
-      const s = curriculum.subjects.find(sub => sub.id === id);
+      const s = curriculum.subjects.find(sub => sub.id === id || sub.code === id);
       if (s) {
         result.push(s);
-      } else {
-        // 2. หาใน Versioned (ระบบใหม่)
-        const v = allVersionedCourses.find(vc => vc.id === id);
-        if (v) {
-          const department =
-            v.department === 'early' || v.department === 'primary' || v.department === 'secondary'
-              ? v.department
-              : 'secondary';
-          const category =
-            v.category === 'basic'
-              ? 'core'
-              : v.category === 'additional'
-                ? 'added'
-                : 'activity';
-
-          result.push({
-            id: v.id,
-            name: v.courseName,
-            code: v.courseCode,
-            credits: v.credit || 0,
-            hoursPerWeek: v.periodsPerWeek ?? 1,
-            totalHours: v.totalHours ?? (v.periodsPerWeek ?? 1) * 18,
-            category,
-            department,
-          });
-        }
+        return;
       }
+      // 2. หาใน Versioned (ระบบใหม่)
+      const v = allVersionedCourses.find(vc => vc.id === id || vc.courseCode === id);
+      if (v) {
+        const department =
+          v.department === 'early' || v.department === 'primary' || v.department === 'secondary'
+            ? v.department
+            : 'secondary';
+        const category =
+          v.category === 'basic'
+            ? 'core'
+            : v.category === 'additional'
+              ? 'added'
+              : 'activity';
+
+        result.push({
+          id: v.id,
+          name: v.courseName,
+          code: v.courseCode,
+          credits: v.credit || 0,
+          hoursPerWeek: v.periodsPerWeek ?? 1,
+          totalHours: v.totalHours ?? (v.periodsPerWeek ?? 1) * 18,
+          category,
+          department,
+          subjectGroup: v.subjectGroup,
+        });
+        return;
+      }
+      // 3. stub — ยังโชว์การ์ดได้ก่อน curriculum โหลดครบ
+      result.push({
+        id,
+        name: id,
+        code: '',
+        credits: 0,
+        hoursPerWeek: 1,
+        totalHours: 18,
+        category: 'core',
+        department: 'secondary',
+      });
     });
 
     return result;
-  }, [curriculum.subjects, classMgr.allClasses, teacherIdentityKeys, semester, coursesByVersion, canViewAllSubjects]);
-
-  // ห้องเรียนทั้งปี — ไม่กรองตาม class.semester (ภาคเรียนอยู่ที่ enrolledCourses)
-  const yearClasses = useMemo(
-    () => classMgr.allClasses.filter(c =>
-      String(c.academicYearId) === String(activeYearStr)
-      || String((c as { academicYear?: string }).academicYear) === String(activeYearStr),
-    ),
-    [classMgr.allClasses, activeYearStr],
-  );
+  }, [
+    canViewAllSubjects,
+    coursesByVersion,
+    curriculum.subjects,
+    currentTeacher?.teachingSubjectIds,
+    semester,
+    teacherIdentityKeys,
+    yearClasses,
+  ]);
 
   // Stable ID lists used to scope submissions/scores queries
   const assignmentIds = useMemo(() => assignments.map(a => a.id), [assignments]);
@@ -187,59 +280,99 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
     if (!currentTeacherId) return;
 
     const classSessionsColl = collection(db, 'class_sessions');
-    const attendanceQuery = canViewAllSubjects
-      ? query(classSessionsColl,
-          where('academicYearId', '==', activeYearStr),
-          where('semester', '==', semester)
-        )
-      : query(classSessionsColl,
+
+    const flattenSessions = (sessions: ClassSession[]) => {
+      const studentMap = new Map(studentsRef.current.map(s => [s.id, s]));
+      return sessions.flatMap(session => {
+        const subjectName = session.subjectName ?? '';
+        const className = session.className ?? '';
+        const recordedAt = typeof session.updatedAt === 'string'
+          ? session.updatedAt
+          : new Date().toISOString();
+
+        return (session.attendance ?? []).map((entry: StudentAttendance) => {
+          const student = studentMap.get(entry.studentId);
+          return {
+            id: `${session.id ?? 'session'}_${entry.studentId}`,
+            studentId: entry.studentId,
+            studentName: student ? `${student.prefix}${student.firstName} ${student.lastName}` : '',
+            studentCode: student?.studentCode ?? '',
+            subjectId: session.subjectId,
+            subjectName,
+            classId: session.classId,
+            className,
+            teacherId: session.teacherId,
+            departmentId: session.departmentId,
+            academicYearId: session.academicYearId,
+            semester: session.semester,
+            date: session.date,
+            period: Number(session.period),
+            status: entry.status,
+            note: entry.note ?? '',
+            recordedAt,
+          } as AttendanceRecord;
+        });
+      });
+    };
+
+    // Widget / schedule may store teacherId as auth uid OR teachers/{id}.
+    // Listen every identity key and merge by session doc id.
+    const teacherIdsToWatch = canViewAllSubjects
+      ? null
+      : [...teacherIdentityKeys].filter(Boolean);
+
+    const sessionBuckets = new Map<string, Map<string, ClassSession>>();
+    const unsubs: Array<() => void> = [];
+
+    const publishAttendance = () => {
+      const merged = new Map<string, ClassSession>();
+      for (const bucket of sessionBuckets.values()) {
+        for (const [id, session] of bucket) merged.set(id, session);
+      }
+      setAttendance(flattenSessions([...merged.values()]));
+    };
+
+    if (canViewAllSubjects || !teacherIdsToWatch || teacherIdsToWatch.length === 0) {
+      const attendanceQuery = query(
+        classSessionsColl,
+        where('academicYearId', '==', activeYearStr),
+        where('semester', '==', semester),
+      );
+      unsubs.push(onSnapshot(
+        attendanceQuery,
+        {
+          next: snap => {
+            const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassSession));
+            const filtered = canViewAllSubjects
+              ? sessions
+              : sessions.filter(s => matchesTeacherIdentity(s.teacherId, teacherIdentityKeys));
+            sessionBuckets.set('all', new Map(filtered.map(s => [s.id ?? '', s])));
+            publishAttendance();
+          },
+          error: () => { /* Silent fail */ },
+        },
+      ));
+    } else {
+      for (const tid of teacherIdsToWatch) {
+        const attendanceQuery = query(
+          classSessionsColl,
           where('academicYearId', '==', activeYearStr),
           where('semester', '==', semester),
-          where('teacherId', '==', currentTeacherId)
+          where('teacherId', '==', tid),
         );
-
-    const unsubAttendance = onSnapshot(
-      attendanceQuery,
-      {
-        next: snap => {
-          const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassSession));
-          const studentMap = new Map(studentsRef.current.map(s => [s.id, s]));
-
-          const flattened = sessions.flatMap(session => {
-            const subjectName = session.subjectName ?? '';
-            const className = session.className ?? '';
-            const recordedAt = typeof session.updatedAt === 'string'
-              ? session.updatedAt
-              : new Date().toISOString();
-
-            return (session.attendance ?? []).map((entry: StudentAttendance) => {
-              const student = studentMap.get(entry.studentId);
-              return {
-                id: `${session.id ?? 'session'}_${entry.studentId}`,
-                studentId: entry.studentId,
-                studentName: student ? `${student.prefix}${student.firstName} ${student.lastName}` : '',
-                studentCode: student?.studentCode ?? '',
-                subjectId: session.subjectId,
-                subjectName,
-                classId: session.classId,
-                className,
-                teacherId: session.teacherId,
-                departmentId: session.departmentId,
-                academicYearId: session.academicYearId,
-                semester: session.semester,
-                date: session.date,
-                period: session.period,
-                status: entry.status,
-                note: entry.note ?? '',
-                recordedAt,
-              } as AttendanceRecord;
-            });
-          });
-          setAttendance(flattened);
-        },
-        error: () => { /* Silent fail */ }
+        unsubs.push(onSnapshot(
+          attendanceQuery,
+          {
+            next: snap => {
+              const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassSession));
+              sessionBuckets.set(tid, new Map(sessions.map(s => [s.id ?? '', s])));
+              publishAttendance();
+            },
+            error: () => { /* Silent fail */ },
+          },
+        ));
       }
-    );
+    }
 
     const assignmentsColl = collection(db, 'assignments');
     const assignmentsQuery = canViewAllSubjects
@@ -248,7 +381,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
           where('semester', '==', semester)
         )
       : query(assignmentsColl,
-          where('teacherId', '==', currentTeacherId),
+          where('teacherId', '==', currentTeacher?.id ?? currentTeacherId),
           where('academicYearId', '==', activeYearStr),
           where('semester', '==', semester)
         );
@@ -268,7 +401,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
           where('semester', '==', semester)
         )
       : query(examsColl,
-          where('teacherId', '==', currentTeacherId),
+          where('teacherId', '==', currentTeacher?.id ?? currentTeacherId),
           where('academicYearId', '==', activeYearStr),
           where('semester', '==', semester)
         );
@@ -282,11 +415,18 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
     );
 
     return () => {
-      unsubAttendance();
+      unsubs.forEach(u => u());
       unsubAssignments();
       unsubExams();
     };
-  }, [currentTeacherId, activeYearStr, semester, canViewAllSubjects]);
+  }, [
+    activeYearStr,
+    canViewAllSubjects,
+    currentTeacher?.id,
+    currentTeacherId,
+    semester,
+    teacherIdentityKeys,
+  ]);
 
   // ── Submissions: one-shot fetch scoped to known assignment IDs ───────────────
   // assignment_submissions has no academicYearId field — filter by assignmentId instead
@@ -411,7 +551,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
   const getAttendanceForSession = (subjectId: string, classId: string, date: string, period: number) =>
     attendance.filter(a =>
       a.subjectId === subjectId && a.classId === classId &&
-      a.date === date && a.period === period,
+      a.date === date && Number(a.period) === Number(period),
     );
 
   // ── ASSIGNMENT CRUD ──────────────────────────────────────────────────────────
@@ -565,7 +705,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
     // context
     activeYearStr,
     semester,
-    classes: classMgr.classes,
+    classes: activeClasses,
     yearClasses,
     teachers: teacherMgr.teachers,
   };

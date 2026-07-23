@@ -11,7 +11,12 @@ import {
   HiSun,
 } from 'react-icons/hi2';
 import { useAuth } from '@/hooks/useAuth';
-import { resolveStaffAttendanceDisplay, useStaffAttendance } from '@/hooks/useStaffAttendance';
+import {
+  formatShiftEndLabel,
+  isAtOrAfterShiftEnd,
+  resolveStaffAttendanceDisplay,
+  useStaffAttendance,
+} from '@/hooks/useStaffAttendance';
 import { useAttendanceConfig } from '@/hooks/useAttendanceConfig';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
 import { resolveTeacherFromAuth } from '@/lib/teachers/teacherIdentity';
@@ -212,6 +217,8 @@ export default function StaffCheckInWidget() {
   const isAdminOverride = !!todayRecord?.overrideBy && isCheckedInStatus;
   const checked = !!todayRecord?.checkInTime || isAdminOverride;
   const checkedOut = !!todayRecord?.checkOutTime;
+  const checkoutTimeReached = isAtOrAfterShiftEnd(now, config);
+  const shiftEndLabel = formatShiftEndLabel(config);
   const showAdminBadge = isAdminOverride && !checkedOut;
   const showPostCheckoutCountdown = checked && checkedOut;
   const isOutsideSchoolAreaError = !!error && error.includes('นอกพื้นที่โรงเรียน');
@@ -502,14 +509,25 @@ export default function StaffCheckInWidget() {
                       </motion.button>
                     ) : !checkedOut ? (
                       <motion.button
-                        whileTap={{ scale: 0.9 }}
+                        whileTap={checkoutTimeReached ? { scale: 0.9 } : undefined}
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (!checkoutTimeReached || actionLoading) return;
                           pendingSuccessActionRef.current = 'checkout';
                           checkOut();
                         }}
-                        disabled={actionLoading}
-                        className="relative w-14 h-14 rounded-full flex items-center justify-center shadow-md disabled:opacity-60 transition-all overflow-hidden group bg-[#ef4444] border border-white/50 text-white"
+                        disabled={actionLoading || !checkoutTimeReached}
+                        title={
+                          checkoutTimeReached
+                            ? 'เช็คเอาต์'
+                            : `เช็คเอาต์ได้หลัง ${shiftEndLabel} น.`
+                        }
+                        aria-label={
+                          checkoutTimeReached
+                            ? 'เช็คเอาต์'
+                            : `ยังไม่ถึงเวลาเลิกงาน เช็คเอาต์ได้หลัง ${shiftEndLabel} น.`
+                        }
+                        className="relative w-14 h-14 rounded-full flex items-center justify-center shadow-md disabled:opacity-40 disabled:cursor-not-allowed transition-all overflow-hidden group bg-[#ef4444] border border-white/50 text-white"
                       >
                         {actionLoading ? (
                           <div className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />

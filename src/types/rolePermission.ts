@@ -52,6 +52,7 @@ export const FEATURE_LIST: FeaturePermission[] = [
   { featureKey: 'questionBank', label: 'คลังข้อสอบ',           category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'full' },
   { featureKey: 'aiAgents',     label: 'AI Agent Command',      category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'view-only' },
   { featureKey: 'grades',       label: 'สมุดคะแนน/ตัดเกรด',   category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'full' },
+  { featureKey: 'studentAnalytics', label: 'วิเคราะห์ผู้เรียน', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'view-only' },
 
   // ── การลา ──
   { featureKey: 'leave', label: 'การลา', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'edit' },

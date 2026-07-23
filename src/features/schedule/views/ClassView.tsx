@@ -1,17 +1,10 @@
 import ScheduleGrid from '../components/ScheduleGrid';
-import type { ReactNode } from 'react';
-import type { ConflictResult, ScheduleEntry, SchoolClass, SchoolDay } from '@/types/schedule';
-import type { Teacher } from '@/types/schedule';
+import type { ConflictResult, ScheduleEntry, SchoolClass, SchoolDay, Teacher } from '@/types/schedule';
 
 interface ClassViewProps {
   grid: Record<number, Record<number, ScheduleEntry[]>>;
   selectedClassId: string;
-  setSelectedClassId: (id: string) => void;
   filterDept: 'all' | 'early' | 'primary' | 'secondary';
-  setFilterDept: (v: 'all' | 'early' | 'primary' | 'secondary') => void;
-  filterGrade: string;
-  setFilterGrade: (v: string) => void;
-  filteredClasses?: SchoolClass[];
   isEditMode: boolean;
   openSlotModal: (day: SchoolDay, period: number, entry?: ScheduleEntry | null) => void;
   deleteEntry: (id: string) => Promise<void>;
@@ -31,7 +24,6 @@ interface ClassViewProps {
     className?: string;
     classId?: string;
   }[];
-  mobileHeaderContent?: ReactNode;
   jointClassEntryIds?: Set<string>;
   jointClassPartnersByEntryId?: Map<string, string[]>;
 }
@@ -39,12 +31,7 @@ interface ClassViewProps {
 export function ClassView({
   grid,
   selectedClassId,
-  setSelectedClassId,
   filterDept,
-  setFilterDept,
-  filterGrade,
-  setFilterGrade,
-  filteredClasses,
   isEditMode,
   openSlotModal,
   deleteEntry,
@@ -55,7 +42,6 @@ export function ClassView({
   teachers,
   excessEntryIds,
   draggableSubjects,
-  mobileHeaderContent,
   jointClassEntryIds,
   jointClassPartnersByEntryId,
 }: ClassViewProps) {
@@ -65,9 +51,6 @@ export function ClassView({
       viewMode="class"
       classId={selectedClassId}
       filterDept={filterDept}
-      setFilterDept={setFilterDept}
-      filterGrade={filterGrade}
-      setFilterGrade={setFilterGrade}
       readOnly={!isEditMode}
       isEditMode={isEditMode}
       setIsEditMode={setIsEditMode}
@@ -79,12 +62,9 @@ export function ClassView({
       }}
       onDropSubject={onDropSubject}
       allClasses={allClasses}
-      filteredClasses={filteredClasses}
-      onClassSelect={setSelectedClassId}
       teachers={teachers}
       excessEntryIds={excessEntryIds}
       draggableSubjects={draggableSubjects}
-      mobileHeaderContent={mobileHeaderContent}
       jointClassEntryIds={jointClassEntryIds}
       jointClassPartnersByEntryId={jointClassPartnersByEntryId}
     />

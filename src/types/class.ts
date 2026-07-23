@@ -21,6 +21,10 @@ export interface ClassRoom {
   homeroomTeacherId: string;  // ref → TeacherProfile.id (ครูประจำชั้นหลัก)
   homeroomTeacherIds: string[]; // ref → TeacherProfile.id (ครูประจำชั้น 1-2 คน)
   enrolledCourses: EnrolledCourse[]; // รายวิชาและครูผู้สอน
+  // flatten จาก enrolledCourses[].teacherId — sync อัตโนมัติใน updateClass()/addClass()
+  // (src/features/classes/hooks/useClassroomManager.ts) เก็บไว้ query "ห้องที่ครูคนนี้สอน"
+  // ตรงๆ ด้วย array-contains แทนการโหลดทั้ง collection มาสแกน enrolledCourses ทีละห้อง
+  teacherIds?: string[];
   studentCount: number;       // จำนวนนักเรียนปัจจุบัน
   maxStudents: number;        // ความจุสูงสุด
   track?: string;             // แผนการเรียน เช่น "วิทย์-คณิต"

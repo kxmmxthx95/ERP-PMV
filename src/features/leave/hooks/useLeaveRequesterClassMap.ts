@@ -1,8 +1,7 @@
-import { useMemo, useSyncExternalStore } from 'react';
-import {
-  getClassesByYearStore,
-  getEnrollmentsByYearStore,
-} from '@/lib/firestoreShared/studentSummaryStore';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { collection, documentId, getDocs, query, where } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { chunkIds } from '@/lib/firestoreShared/fetchStudentsByIds';
 import { resolveStudentClassDisplayName, resolveEnrollmentClassId } from '@/lib/students/classRoster';
 import { resolveHomeroomTeachers } from '@/features/classes/utils/homeroomTeachers';
 import { inferDepartmentFromGradeLevel } from '@/lib/school/gradeLevelBadge';
@@ -21,7 +20,8 @@ export type LeaveRequesterProfile = {
 
 const noopSubscribe = () => () => {};
 const readySnapshot = () => true;
-const getEmptyRowsSnapshot = <T,>(): T => [] as T;
+// ค่าอ้างอิงเดียวคงที่ ห้ามสร้าง [] ใหม่ทุกครั้ง ไม่งั้น useSyncExternalStore วน re-render ไม่จบ
+const EMPTY_ROWS: readonly never[] = [];
 
 function useSharedStoreRows<T>(
   store: {
@@ -31,7 +31,7 @@ function useSharedStoreRows<T>(
   } | null,
 ) {
   const subscribe = store?.subscribe ?? noopSubscribe;
-  const getSnapshot = store ? store.getSnapshot : getEmptyRowsSnapshot<T>;
+  const getSnapshot = store ? store.getSnapshot : () => EMPTY_ROWS as unknown as T;
   const getReady = store ? store.getReady : readySnapshot;
   const rows = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const ready = useSyncExternalStore(subscribe, getReady, getReady);
@@ -47,17 +47,69 @@ export function useLeaveRequesterClassMap(
   academicYearId: string | undefined,
   requesterIds: string[],
 ): Map<string, LeaveRequesterProfile> {
-  const enrollmentStore = academicYearId ? getEnrollmentsByYearStore(academicYearId) : null;
-  const classStore = academicYearId ? getClassesByYearStore(academicYearId) : null;
-
-  const { rows: enrollments } = useSharedStoreRows(enrollmentStore);
-  const { rows: classes } = useSharedStoreRows(classStore);
   const { rows: teachers } = useSharedStoreRows(teachersCollectionStore);
 
   const requesterIdKey = useMemo(
     () => [...new Set(requesterIds.filter(Boolean))].sort().join(','),
     [requesterIds],
   );
+
+  // requesterIds เป็น list เล็กๆ ที่รู้อยู่แล้ว (คำขอลาที่แสดงในหน้านี้) — ดึงเฉพาะ enrollment
+  // ของนักเรียนกลุ่มนี้ + class เฉพาะที่ enrollment อ้างถึง แทนสแกน enrollments/classes
+  // ทั้งโรงเรียนทุกครั้งที่หน้านี้เปิด (getEnrollmentsByYearStore/getClassesByYearStore เดิม)
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  const [classes, setClasses] = useState<ClassRoom[]>([]);
+
+  useEffect(() => {
+    if (!academicYearId || !requesterIdKey) {
+      setEnrollments([]);
+      setClasses([]);
+      return;
+    }
+
+    let cancelled = false;
+    const studentIds = requesterIdKey.split(',');
+
+    void (async () => {
+      const enrollSnaps = await Promise.all(
+        chunkIds(studentIds).map((chunk) =>
+          getDocs(query(
+            collection(db, 'enrollments'),
+            where('studentId', 'in', chunk),
+            where('academicYearId', '==', academicYearId),
+          )),
+        ),
+      );
+      if (cancelled) return;
+      const enrollRows = enrollSnaps.flatMap((snap) =>
+        snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Enrollment),
+      );
+      setEnrollments(enrollRows);
+
+      const classIds = [...new Set(
+        enrollRows.map((e) => String(e.classId ?? '').trim()).filter(Boolean),
+      )];
+      if (classIds.length === 0) {
+        setClasses([]);
+        return;
+      }
+      const classSnaps = await Promise.all(
+        chunkIds(classIds).map((chunk) =>
+          getDocs(query(collection(db, 'classes'), where(documentId(), 'in', chunk))),
+        ),
+      );
+      if (cancelled) return;
+      setClasses(classSnaps.flatMap((snap) =>
+        snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ClassRoom),
+      ));
+    })().catch((err) => {
+      console.warn('[useLeaveRequesterClassMap] fetch failed:', err);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [academicYearId, requesterIdKey]);
 
   return useMemo(() => {
     const map = new Map<string, LeaveRequesterProfile>();

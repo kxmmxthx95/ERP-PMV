@@ -15,6 +15,8 @@ const DEFAULT_CONFIG = {
     radiusMeters: 200,
     shiftStartHour: 8,
     shiftStartMinute: 0,
+    shiftEndHour: 16,
+    shiftEndMinute: 30,
 };
 function haversineDistance(lat1, lng1, lat2, lng2) {
     const R = 6371000;
@@ -97,7 +99,19 @@ async function loadAttendanceConfig() {
         shiftStartMinute: typeof data.shiftStartMinute === "number"
             ? data.shiftStartMinute
             : DEFAULT_CONFIG.shiftStartMinute,
+        shiftEndHour: typeof data.shiftEndHour === "number" ? data.shiftEndHour : DEFAULT_CONFIG.shiftEndHour,
+        shiftEndMinute: typeof data.shiftEndMinute === "number"
+            ? data.shiftEndMinute
+            : DEFAULT_CONFIG.shiftEndMinute,
     };
+}
+function isAtOrAfterShiftEnd(now, config) {
+    const { hour, minute } = getBangkokHourMinute(now);
+    return (hour > config.shiftEndHour ||
+        (hour === config.shiftEndHour && minute >= config.shiftEndMinute));
+}
+function formatShiftEndLabel(config) {
+    return `${String(config.shiftEndHour).padStart(2, "0")}:${String(config.shiftEndMinute).padStart(2, "0")}`;
 }
 async function resolveHoliday(todayStr) {
     if (isBangkokWeekend()) {
@@ -167,7 +181,7 @@ function parseEntry(data) {
         overrideBy: typeof data.overrideBy === "string" ? data.overrideBy : undefined,
     };
 }
-function buildStatusPayload(todayStr, holiday, entry, displayName) {
+function buildStatusPayload(todayStr, holiday, entry, displayName, checkoutTimeReached) {
     const checkedIn = hasEffectiveCheckIn(entry);
     const checkedOut = !!entry?.checkOutTime;
     return {
@@ -183,7 +197,7 @@ function buildStatusPayload(todayStr, holiday, entry, displayName) {
             }
             : null,
         canCheckIn: !holiday.isHoliday && !checkedIn,
-        canCheckOut: !holiday.isHoliday && checkedIn && !checkedOut,
+        canCheckOut: !holiday.isHoliday && checkedIn && !checkedOut && checkoutTimeReached,
     };
 }
 exports.lineStaffAttendance = (0, https_1.onCall)({
@@ -218,6 +232,8 @@ exports.lineStaffAttendance = (0, https_1.onCall)({
     }
     const todayStr = getBangkokDateIso();
     const holiday = await resolveHoliday(todayStr);
+    const config = await loadAttendanceConfig();
+    const checkoutTimeReached = isAtOrAfterShiftEnd(new Date(), config);
     const entryRef = db
         .collection("staff_attendance_by_date")
         .doc(todayStr)
@@ -228,7 +244,7 @@ exports.lineStaffAttendance = (0, https_1.onCall)({
     if (action === "status") {
         return {
             linked: true,
-            ...buildStatusPayload(todayStr, holiday, entry, user.displayName),
+            ...buildStatusPayload(todayStr, holiday, entry, user.displayName, checkoutTimeReached),
         };
     }
     if (holiday.isHoliday) {
@@ -240,7 +256,7 @@ exports.lineStaffAttendance = (0, https_1.onCall)({
                 linked: true,
                 success: true,
                 alreadyDone: true,
-                ...buildStatusPayload(todayStr, holiday, entry, user.displayName),
+                ...buildStatusPayload(todayStr, holiday, entry, user.displayName, checkoutTimeReached),
             };
         }
         const lat = typeof request.data?.latitude === "number" ? request.data.latitude : NaN;
@@ -248,7 +264,6 @@ exports.lineStaffAttendance = (0, https_1.onCall)({
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
             throw new https_1.HttpsError("invalid-argument", "ต้องเปิด GPS เพื่อเช็คอิน");
         }
-        const config = await loadAttendanceConfig();
         const distance = haversineDistance(lat, lng, config.lat, config.lng);
         if (distance > config.radiusMeters) {
             throw new https_1.HttpsError("failed-precondition", `คุณอยู่นอกพื้นที่โรงเรียน (ห่าง ${Math.round(distance)} เมตร / รัศมี ${config.radiusMeters} เมตร)`);
@@ -284,19 +299,22 @@ exports.lineStaffAttendance = (0, https_1.onCall)({
         return {
             linked: true,
             success: true,
-            ...buildStatusPayload(todayStr, holiday, updatedEntry, user.displayName),
+            ...buildStatusPayload(todayStr, holiday, updatedEntry, user.displayName, checkoutTimeReached),
         };
     }
     // checkOut
     if (!hasEffectiveCheckIn(entry)) {
         throw new https_1.HttpsError("failed-precondition", "ไม่พบเวลาเข้าในระบบ กรุณาเช็คอินก่อนเช็กเอาต์");
     }
+    if (!checkoutTimeReached) {
+        throw new https_1.HttpsError("failed-precondition", `ยังไม่ถึงเวลาเลิกงาน (${formatShiftEndLabel(config)}) ไม่สามารถเช็คเอาต์ได้`);
+    }
     if (entry?.checkOutTime) {
         return {
             linked: true,
             success: true,
             alreadyDone: true,
-            ...buildStatusPayload(todayStr, holiday, entry, user.displayName),
+            ...buildStatusPayload(todayStr, holiday, entry, user.displayName, checkoutTimeReached),
         };
     }
     const dayRef = db.collection("staff_attendance_by_date").doc(todayStr);
@@ -319,7 +337,7 @@ exports.lineStaffAttendance = (0, https_1.onCall)({
     return {
         linked: true,
         success: true,
-        ...buildStatusPayload(todayStr, holiday, updatedEntry, user.displayName),
+        ...buildStatusPayload(todayStr, holiday, updatedEntry, user.displayName, checkoutTimeReached),
     };
 });
 //# sourceMappingURL=lineStaffAttendance.js.map

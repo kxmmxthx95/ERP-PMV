@@ -20,6 +20,23 @@ import { deleteQuestionSetPdfStorage } from '@/lib/questionSetStorage';
 
 export const QUESTION_SETS_COL = 'question_sets';
 
+function creatorDisplayNameFromAuth(
+  user: { displayName?: string | null; email?: string | null } | null | undefined,
+  userData: Record<string, unknown> | null | undefined,
+): string {
+  const fromData = [
+    userData?.name,
+    userData?.displayName,
+    userData?.fullName,
+  ]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .find(Boolean);
+  if (fromData) return fromData;
+  const fromAuth = user?.displayName?.trim();
+  if (fromAuth) return fromAuth;
+  return '';
+}
+
 export interface QuestionSetFilters {
   search?: string;
   subjectGroup?: SubjectGroupId | 'all';
@@ -29,7 +46,7 @@ export interface QuestionSetFilters {
 }
 
 export function useQuestionSetBank() {
-  const { user } = useAuth();
+  const { user, userData } = useAuth();
   const [questionSets, setQuestionSets] = useState<QuestionSet[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -72,7 +89,7 @@ export function useQuestionSetBank() {
       questionCount: 0,
       isPublished: data.isPublished ?? false,
       createdBy: user?.uid ?? 'unknown',
-      createdByName: user?.displayName ?? user?.email ?? '',
+      createdByName: creatorDisplayNameFromAuth(user, userData),
       createdAt: now,
       updatedAt: now,
     };
@@ -204,7 +221,7 @@ export function useQuestionSetBank() {
     const createdIds: string[] = [];
     const now = Date.now();
     const uid = user?.uid ?? 'unknown';
-    const displayName = user?.displayName ?? user?.email ?? '';
+    const displayName = creatorDisplayNameFromAuth(user, userData);
 
     try {
       for (const data of items) {

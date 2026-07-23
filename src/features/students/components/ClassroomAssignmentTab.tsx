@@ -1,30 +1,66 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    HiMagnifyingGlass, HiArrowRight, HiPlus, HiXMark,
-    HiCheckCircle, HiBookOpen, HiCheck, HiArrowLeft,
-    HiUsers, HiUserCircle, HiPencil, HiTrash,
-    HiChevronDown, HiSquares2X2, HiExclamationTriangle, HiAcademicCap,
+    HiArrowRight, HiPlus, HiXMark,
+    HiArrowLeft,
+    HiPencil, HiTrash,
+    HiChevronDown, HiAcademicCap,
+    HiUserPlus,
+    HiMagnifyingGlass,
+    HiOutlineBookOpen,
 } from 'react-icons/hi2';
 import { collection, doc, writeBatch, getDocs, arrayUnion, arrayRemove, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { invalidateStudentSummaryCache } from '@/lib/firestoreShared/studentSummaryStore';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
+import {
+    DRAWER_HEADER_ICON_BTN,
+    DRAWER_HEADER_RIGHT_ACTIONS,
+} from '@/lib/drawerHeaderBtn';
+import { GRADE_LEVEL_ORDER, type ClassRoom } from '@/types/class';
+import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
+import StudentAvatar from '@/features/students/components/StudentAvatar';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+    Dialog,
+    DialogContent,
+    DialogFooter,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import {
+    Drawer,
+    DrawerContent,
+    DrawerHeader,
+    DrawerTitle,
+} from '@/components/ui/drawer';
 import { cn } from '@/lib/utils';
 
-type MobileClassView = 'rooms' | 'unassigned' | 'curriculum';
+const TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden';
+const TABLE_HEADER_CELL = 'text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap';
+const TABLE_GRID = 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) minmax(4rem, 0.7fr) minmax(3rem, 0.45fr)';
+const FIELD_INPUT =
+    'h-10 rounded-xl border-none bg-slate-50/70 px-4 text-xs font-bold focus-visible:bg-slate-50/90 focus-visible:ring-2 focus-visible:ring-slate-900/20';
+const FIELD_LABEL = 'pl-1 text-[10px] font-black uppercase tracking-wider text-slate-600';
+
+const ASSIGN_DRAWER_CONTENT = cn(
+    'flex h-dvh flex-col bg-transparent p-0 before:hidden',
+    'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+    'sm:h-full sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md sm:p-2',
+);
+const ASSIGN_DRAWER_PANEL = cn(
+    'flex h-full min-h-0 flex-col overflow-hidden bg-white',
+    'sm:rounded-4xl sm:border sm:border-border sm:shadow-xl',
+);
 
 // --- Grade Progression Maps ---
 const GRADE_ORDER: Record<string, string[]> = {
     early: ['อ.1', 'อ.2', 'อ.3'],
     primary: ['ป.1', 'ป.2', 'ป.3', 'ป.4', 'ป.5', 'ป.6'],
     secondary: ['ม.1', 'ม.2', 'ม.3', 'ม.4', 'ม.5', 'ม.6'],
-};
-
-const DEPT_CONFIG: Record<string, { label: string; gradient: string; badge: string }> = {
-    early: { label: 'ปฐมวัย', gradient: 'from-rose-400 to-pink-500', badge: 'bg-rose-100 text-rose-600' },
-    primary: { label: 'ประถม', gradient: 'from-sky-400 to-blue-500', badge: 'bg-sky-100 text-sky-600' },
-    secondary: { label: 'มัธยม', gradient: 'from-violet-500 to-indigo-600', badge: 'bg-violet-100 text-violet-600' },
 };
 
 // --- Types ---
@@ -39,16 +75,7 @@ interface Student {
     academicYearId?: string;
     classroomId: string | null;
     currentTrack?: string;
-}
-
-interface Teacher {
-    id: string;
-    displayName?: string;
-    firstName?: string;
-    lastName?: string;
-    prefix?: string;
-    employeeCode?: string;
-    position?: string;
+    photoURL?: string;
 }
 
 interface CurriculumPackage {
@@ -128,16 +155,11 @@ function PanelCapsuleSelect({
     );
 }
 
-export default function ClassroomAssignmentTab() {
+export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: ReactNode }) {
     const { year: activeYear } = useActiveAcademicYear();
-    const panelCardClass = 'rounded-[2rem] border border-white/30 bg-white/30 backdrop-blur-xl shadow-sm';
-    const panelHeaderClass = 'px-3 py-3 space-y-2 z-10 border-b border-white/30';
 
     // --- State ---
-    const [curriculumYear, setCurriculumYear] = useState<string>(activeYear);
     const [classroomYear, setClassroomYear] = useState<string>(activeYear);
-    const [studentYear, setStudentYear] = useState<string>(activeYear);
-    const [searchQuery, setSearchQuery] = useState('');
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [newRoom, setNewRoom] = useState({
         name: '',
@@ -154,29 +176,22 @@ export default function ClassroomAssignmentTab() {
     const [isCreating, setIsCreating] = useState(false);
     const [deptFilter, setDeptFilter] = useState<string>('');
     const [gradeFilter, setGradeFilter] = useState<string>('');
-    const [classroomFilter] = useState<string>('');
     const [curriculumFilter, setCurriculumFilter] = useState<string>('');
-    const [curriculumSearch, setCurriculumSearch] = useState('');
 
-    const [unassignedDeptFilter, setUnassignedDeptFilter] = useState<string>('');
-    const [unassignedGradeFilter, setUnassignedGradeFilter] = useState<string>('');
     const [selectedClassroomId, setSelectedClassroomId] = useState<string | null>(null);
-    const [mobileView, setMobileView] = useState<MobileClassView>('rooms');
-    const [isMdOrBelow, setIsMdOrBelow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024);
-
-    useEffect(() => {
-        const handleResize = () => setIsMdOrBelow(window.innerWidth < 1024);
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    const showCurriculumPanel = !isMdOrBelow || (mobileView === 'curriculum' && !selectedClassroomId);
-    const showClassroomPanel = !isMdOrBelow || mobileView === 'rooms' || !!selectedClassroomId;
-    const showUnassignedPanel = !isMdOrBelow || (mobileView === 'unassigned' && !selectedClassroomId);
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [addStudentsOpen, setAddStudentsOpen] = useState(false);
+    const [addStudentsSearch, setAddStudentsSearch] = useState('');
+    const [drawerSelectedIds, setDrawerSelectedIds] = useState<Set<string>>(new Set());
+    const [curriculumDrawerOpen, setCurriculumDrawerOpen] = useState(false);
+    const [curriculumSearch, setCurriculumSearch] = useState('');
+    const [drawerCurriculumId, setDrawerCurriculumId] = useState<string | null>(null);
+    const [curriculumFilterDept, setCurriculumFilterDept] = useState<Department | ''>('');
+    const [curriculumFilterGrade, setCurriculumFilterGrade] = useState('');
+    const [curriculumFilterYear, setCurriculumFilterYear] = useState('');
 
     const [students, setStudents] = useState<Student[]>([]);
     const [classrooms, setClassrooms] = useState<Classroom[]>([]);
-    const [teachers, setTeachers] = useState<Teacher[]>([]);
     const [curriculumPackages, setCurriculumPackages] = useState<CurriculumPackage[]>([]);
     const [loading, setLoading] = useState<boolean>(true);
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -229,10 +244,6 @@ export default function ClassroomAssignmentTab() {
                 setClassrooms(clData);
                 setSelectedStudentIds(new Set());
 
-                const tcSnapshot = await getDocs(collection(db, 'teachers'));
-                const tcData = tcSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Teacher));
-                setTeachers(tcData);
-
                 const pkSnapshot = await getDocs(collection(db, 'curriculums'));
                 const pkData = pkSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as any));
                 setCurriculumPackages(pkData);
@@ -247,20 +258,52 @@ export default function ClassroomAssignmentTab() {
     }, [classroomYear]);
 
     // --- Derived State ---
-    const sidebarClassrooms = useMemo(() => {
-        return classrooms.filter(cls => {
-            const matchYear = String(cls.academicYearId) === classroomYear;
-            const matchDept = !deptFilter || cls.departmentId === deptFilter;
-            return matchYear && matchDept;
+    const sidebarGradeOptions = useMemo(() => {
+        if (!deptFilter) return [] as string[];
+        const grades = new Set<string>();
+        classrooms.forEach((c) => {
+            if (c.departmentId === deptFilter && c.gradeLevel) grades.add(String(c.gradeLevel));
         });
-    }, [classrooms, classroomYear, deptFilter]);
+        return Array.from(grades).sort(
+            (a, b) => (GRADE_LEVEL_ORDER[a] ?? 99) - (GRADE_LEVEL_ORDER[b] ?? 99),
+        );
+    }, [classrooms, deptFilter]);
+
+    const sidebarClassOptions = useMemo(() => {
+        if (!deptFilter || !gradeFilter) return [] as ClassRoom[];
+        return classrooms
+            .filter((c) => c.departmentId === deptFilter && c.gradeLevel === gradeFilter)
+            .slice()
+            .sort((a, b) =>
+                String(a.roomNumber || a.className).localeCompare(
+                    String(b.roomNumber || b.className),
+                    undefined,
+                    { numeric: true },
+                ),
+            ) as unknown as ClassRoom[];
+    }, [classrooms, deptFilter, gradeFilter]);
+
+    const handleSidebarSelectDept = useCallback((dept: Department) => {
+        setDeptFilter((prev) => (prev === dept ? '' : dept));
+        setGradeFilter('');
+        setSelectedClassroomId(null);
+    }, []);
+
+    const handleSidebarSelectGrade = useCallback((grade: string) => {
+        setGradeFilter((prev) => (prev === grade ? '' : grade));
+        setSelectedClassroomId(null);
+    }, []);
+
+    const handleSidebarSelectClass = useCallback((classId: string) => {
+        setSelectedClassroomId(classId);
+    }, []);
 
     const filteredClassrooms = useMemo(() => {
-        return sidebarClassrooms
-            .filter(cls => {
+        return classrooms
+            .filter((cls) => {
+                const matchDept = !deptFilter || cls.departmentId === deptFilter;
                 const matchGrade = !gradeFilter || cls.gradeLevel === gradeFilter;
-                const matchClassroom = !classroomFilter || cls.id === classroomFilter;
-                return matchGrade && matchClassroom;
+                return matchDept && matchGrade;
             })
             .sort((a, b) => {
                 const flatGrades = Object.values(GRADE_ORDER).flat();
@@ -271,7 +314,7 @@ export default function ClassroomAssignmentTab() {
                 }
                 return a.className.localeCompare(b.className, undefined, { numeric: true });
             });
-    }, [sidebarClassrooms, gradeFilter, classroomFilter]);
+    }, [classrooms, deptFilter, gradeFilter]);
 
     const classroomScopedStudents = useMemo(() => {
         let result = students;
@@ -289,18 +332,6 @@ export default function ClassroomAssignmentTab() {
         return result;
     }, [students, classroomYear, classrooms]);
 
-    const filteredCurriculumPackages = useMemo(() => {
-        return curriculumPackages
-            .filter(pkg => {
-                const name = pkg.name?.toLowerCase() || '';
-                const pkgYear = String(pkg.year || pkg.academicYearId || '').trim();
-                const matchSearch = name.includes(curriculumSearch.toLowerCase());
-                const matchYear = !curriculumYear || !pkgYear || pkgYear === curriculumYear;
-                return matchSearch && matchYear;
-            })
-            .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    }, [curriculumPackages, curriculumSearch, curriculumYear]);
-
     const studentsByClass = useMemo(() => {
         const groups: Record<string, Student[]> = { 'unassigned': [] };
         classrooms.forEach(c => groups[c.id] = []);
@@ -315,34 +346,86 @@ export default function ClassroomAssignmentTab() {
         return groups;
     }, [classroomScopedStudents, classrooms]);
 
-    const filteredUnassignedStudents = useMemo(() => {
-        return (studentsByClass['unassigned'] || [])
-            .filter(s => {
-                const studentCurrentYear = String((s as any).academicYear || s.academicYearId || '');
-                if (!studentYear) return true;
-                return studentCurrentYear ? studentCurrentYear === studentYear : true;
+    const selectedClassroom = useMemo(
+        () => classrooms.find((c) => c.id === selectedClassroomId) ?? null,
+        [classrooms, selectedClassroomId],
+    );
+
+    const curriculumDrawerGradeOptions = useMemo(() => {
+        if (curriculumFilterDept) {
+            return DEPARTMENT_CONFIG[curriculumFilterDept].grades;
+        }
+        return Object.values(GRADE_ORDER).flat();
+    }, [curriculumFilterDept]);
+
+    const curriculumDrawerCandidates = useMemo(() => {
+        const q = curriculumSearch.trim().toLowerCase();
+        return curriculumPackages
+            .filter((pkg) => {
+                const pkgYear = String(pkg.year || pkg.academicYearId || '').trim();
+                if (curriculumFilterYear && pkgYear && pkgYear !== curriculumFilterYear) return false;
+
+                const pkgGrades = pkg.assignedGrades?.length
+                    ? pkg.assignedGrades
+                    : pkg.gradeLevel
+                        ? [pkg.gradeLevel]
+                        : [];
+
+                let pkgDept = (pkg.departmentId || '') as Department | '';
+                if (!pkgDept && pkgGrades.length > 0) {
+                    const found = (Object.keys(GRADE_ORDER) as Array<keyof typeof GRADE_ORDER>).find((dept) =>
+                        pkgGrades.some((g) => GRADE_ORDER[dept].includes(g)),
+                    );
+                    pkgDept = (found as Department | undefined) ?? '';
+                }
+
+                if (curriculumFilterDept && pkgDept && pkgDept !== curriculumFilterDept) return false;
+                if (curriculumFilterDept && !pkgDept && pkgGrades.length > 0) {
+                    const deptGrades = DEPARTMENT_CONFIG[curriculumFilterDept].grades;
+                    if (!pkgGrades.some((g) => deptGrades.includes(g))) return false;
+                }
+                if (curriculumFilterGrade) {
+                    if (pkgGrades.length > 0 && !pkgGrades.includes(curriculumFilterGrade)) return false;
+                }
+                if (!q) return true;
+                const label = `${pkg.name || ''} ${pkg.versionName || ''} ${pkg.id}`.toLowerCase();
+                return label.includes(q);
             })
-            .filter(s => {
-                if (unassignedDeptFilter) {
-                    const expectedGrades = GRADE_ORDER[unassignedDeptFilter] || [];
-                    if (!expectedGrades.includes(s.gradeLevel)) return false;
+            .slice()
+            .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    }, [
+        curriculumPackages,
+        curriculumSearch,
+        curriculumFilterYear,
+        curriculumFilterDept,
+        curriculumFilterGrade,
+    ]);
+
+    const hasCurriculumDrawerFilters = !!(
+        curriculumFilterYear
+        || curriculumFilterDept
+        || curriculumFilterGrade
+        || curriculumSearch.trim()
+    );
+
+    const assignDrawerCandidates = useMemo(() => {
+        if (!selectedClassroom) return [] as Student[];
+        const q = addStudentsSearch.trim().toLowerCase();
+        return (studentsByClass.unassigned ?? [])
+            .filter((s) => {
+                if (selectedClassroom.gradeLevel && s.gradeLevel && s.gradeLevel !== selectedClassroom.gradeLevel) {
+                    return false;
                 }
-                if (unassignedGradeFilter) {
-                    if (s.gradeLevel !== unassignedGradeFilter) return false;
-                }
-                if (searchQuery) {
-                    const q = searchQuery.toLowerCase();
-                    const fullName = `${s.firstName} ${s.lastName}`.toLowerCase();
-                    const studentCode = (s.studentCode || '').toLowerCase();
-                    const nationalId = (s.nationalId || '').toLowerCase();
-                    if (!fullName.includes(q) && !studentCode.includes(q) && !nationalId.includes(q)) {
-                        return false;
-                    }
-                }
-                return true;
+                if (!q) return true;
+                const fullName = `${s.prefix ?? ''}${s.firstName} ${s.lastName}`.toLowerCase();
+                return fullName.includes(q) || (s.studentCode || '').toLowerCase().includes(q);
             })
-            .sort((a, b) => (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true }) || a.firstName.localeCompare(b.firstName));
-    }, [studentsByClass, studentYear, unassignedDeptFilter, unassignedGradeFilter, searchQuery]);
+            .slice()
+            .sort((a, b) =>
+                (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true })
+                || a.firstName.localeCompare(b.firstName),
+            );
+    }, [selectedClassroom, studentsByClass.unassigned, addStudentsSearch]);
 
     // --- Actions ---
     const toggleStudentSelection = (studentId: string) => {
@@ -456,20 +539,6 @@ export default function ClassroomAssignmentTab() {
         }
     };
 
-    const handleCurriculumAssign = async (curriculumId: string, classroomId: string) => {
-        setIsProcessing(true);
-        try {
-            await updateDoc(doc(db, 'classes', classroomId), { curriculumPackageId: curriculumId });
-            setClassrooms(prev => prev.map(c => c.id === classroomId ? { ...c, curriculumPackageId: curriculumId } : c));
-            setCurriculumFilter('');
-        } catch (error) {
-            console.error("Assign curriculum error:", error);
-            alert('เกิดข้อผิดพลาดในการมอบหมายหลักสูตร');
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
     const handleRemoveCurriculum = async (classroomId: string, curriculumName: string) => {
         if (!confirm(`ยืนยันการเอาหลักสูตร "${curriculumName}" ออกจากห้องเรียนนี้?`)) return;
         setIsProcessing(true);
@@ -484,29 +553,28 @@ export default function ClassroomAssignmentTab() {
         }
     };
 
-    const handleClassCardClick = async (classId: string) => {
-        if (selectedStudentIds.size > 0) {
-            await moveStudents(Array.from(selectedStudentIds), classId);
-            return;
-        }
-        if (curriculumFilter) {
-            await handleCurriculumAssign(curriculumFilter, classId);
-            return;
-        }
-        setSelectedClassroomId(classId);
-    };
-    const handleSelectAllUnassigned = () => {
-        if (filteredUnassignedStudents.length === 0) return;
-        const allSelected = filteredUnassignedStudents.every(s => selectedStudentIds.has(s.id));
-        const newSelection = new Set(selectedStudentIds);
-        if (allSelected) {
-            filteredUnassignedStudents.forEach(s => newSelection.delete(s.id));
-        } else {
-            filteredUnassignedStudents.forEach(s => newSelection.add(s.id));
-        }
-        setSelectedStudentIds(newSelection);
+    const openAddStudentsDrawer = () => {
+        setAddStudentsSearch('');
+        setDrawerSelectedIds(new Set());
+        setAddStudentsOpen(true);
     };
 
+    const toggleDrawerStudent = (studentId: string) => {
+        setDrawerSelectedIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(studentId)) next.delete(studentId);
+            else next.add(studentId);
+            return next;
+        });
+    };
+
+    const confirmAddStudentsToRoom = async () => {
+        if (!selectedClassroomId || drawerSelectedIds.size === 0) return;
+        await moveStudents(Array.from(drawerSelectedIds), selectedClassroomId);
+        setAddStudentsOpen(false);
+        setDrawerSelectedIds(new Set());
+        setAddStudentsSearch('');
+    };
 
     const createClassroom = async () => {
         if (!newRoom.name.trim() || !newRoom.gradeLevel) return;
@@ -563,10 +631,6 @@ export default function ClassroomAssignmentTab() {
         e.dataTransfer.setData('studentId', studentId);
     };
 
-    const handleCurriculumDragStart = (e: React.DragEvent, curriculumId: string) => {
-        e.dataTransfer.setData('curriculumId', curriculumId);
-    };
-
     const assignCurriculumToClass = async (curriculumId: string, classroomId: string) => {
         try {
             await updateDoc(doc(db, 'classes', classroomId), { curriculumPackageId: curriculumId });
@@ -575,6 +639,33 @@ export default function ClassroomAssignmentTab() {
             console.error("Error assigning curriculum:", error);
             alert('ไม่สามารถมอบหมายหลักสูตรได้');
         }
+    };
+
+    const openCurriculumDrawer = () => {
+        const dept = (selectedClassroom?.departmentId || '') as Department | '';
+        const grade = selectedClassroom?.gradeLevel || '';
+        setCurriculumSearch('');
+        setCurriculumFilterYear(classroomYear || selectedClassroom?.academicYearId || '');
+        setCurriculumFilterDept(
+            dept === 'early' || dept === 'primary' || dept === 'secondary' ? dept : '',
+        );
+        setCurriculumFilterGrade(grade);
+        setDrawerCurriculumId(selectedClassroom?.curriculumPackageId || null);
+        setCurriculumDrawerOpen(true);
+    };
+
+    const clearCurriculumDrawerFilters = () => {
+        setCurriculumSearch('');
+        setCurriculumFilterYear('');
+        setCurriculumFilterDept('');
+        setCurriculumFilterGrade('');
+    };
+
+    const confirmAssignCurriculum = async () => {
+        if (!selectedClassroomId || !drawerCurriculumId) return;
+        await assignCurriculumToClass(drawerCurriculumId, selectedClassroomId);
+        setCurriculumDrawerOpen(false);
+        setCurriculumFilter('');
     };
 
     const handleDragOver = (e: React.DragEvent) => e.preventDefault();
@@ -587,159 +678,8 @@ export default function ClassroomAssignmentTab() {
         else if (curriculumId && targetClassroomId !== 'unassigned') assignCurriculumToClass(curriculumId, targetClassroomId);
     };
 
-    const isAssignMode = selectedStudentIds.size > 0 || !!curriculumFilter;
-
-    // ── Classroom Card (grid) ──────────────────────────────────────────────────
-    function ClassroomCard({ cls }: { cls: Classroom }) {
-        const count = studentsByClass[cls.id]?.length || 0;
-        const curriculum = curriculumPackages.find(p => p.id === cls.curriculumPackageId);
-        const dept = DEPT_CONFIG[cls.departmentId || 'secondary'] ?? DEPT_CONFIG.secondary;
-        const isSelected = selectedClassroomId === cls.id;
-
-        return (
-            <motion.div
-                layout
-                whileTap={{ scale: 0.98 }}
-                onClick={() => handleClassCardClick(cls.id)}
-                onDragOver={handleDragOver}
-                onDrop={(e) => handleDrop(e, cls.id)}
-                className={`group relative cursor-pointer select-none rounded-2xl overflow-hidden shadow-sm transition-all duration-300 hover:shadow-lg border backdrop-blur-sm ${
-                    isSelected
-                        ? 'bg-blue-50/95 border-blue-300'
-                        : 'bg-white/70 hover:bg-white/90 border-black/[0.04] hover:border-black/[0.08]'
-                }`}
-            >
-                {/* Gradient header */}
-                <div className={`relative h-24 bg-gradient-to-br ${dept.gradient}`}>
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
-
-                    {/* Grade level big */}
-                    <div className="absolute top-3 left-3 text-white text-xl font-black drop-shadow z-10">
-                        {cls.gradeLevel}
-                    </div>
-
-                    {/* Room number */}
-                    <div className="absolute top-[3rem] left-3 text-white/70 text-sm font-bold z-10">
-                        /{cls.roomNumber}
-                    </div>
-
-                    {/* Dept badge */}
-                    <div className="absolute top-3 right-3 z-10">
-                        <span className="px-2 py-0.5 rounded-full bg-white/20 border border-white/30 text-white text-[9px] font-black uppercase tracking-wider">
-                            {dept.label}
-                        </span>
-                    </div>
-
-                    {/* Edit/delete actions */}
-                    {!isAssignMode && (
-                        <div className="absolute bottom-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                            <button
-                                onClick={e => {
-                                    e.stopPropagation();
-                                    setEditingClassroom(cls);
-                                    const deptId = Object.entries(GRADE_ORDER).find(([_, grades]) =>
-                                        grades.includes(cls.gradeLevel)
-                                    )?.[0] || 'secondary';
-                                    setNewRoom({
-                                        name: cls.roomNumber,
-                                        gradeLevel: cls.gradeLevel,
-                                        departmentId: deptId,
-                                        capacity: String(cls.capacity || 40),
-                                        track: cls.track || '',
-                                        trackColor: cls.trackColor || '',
-                                        academicYearId: cls.academicYearId || classroomYear,
-                                        curriculumPackageId: cls.curriculumPackageId || '',
-                                        homeroomTeacherIds: cls.homeroomTeacherIds || [],
-                                    });
-                                    setShowCreateModal(true);
-                                }}
-                                className="w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-slate-600 hover:bg-white hover:text-blue-600 transition-all shadow"
-                            >
-                                <HiPencil className="w-3 h-3" />
-                            </button>
-                            <button
-                                onClick={e => { e.stopPropagation(); deleteClassroom(cls.id, count); }}
-                                className="w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-slate-600 hover:bg-white hover:text-rose-500 transition-all shadow"
-                            >
-                                <HiTrash className="w-3 h-3" />
-                            </button>
-                        </div>
-                    )}
-                </div>
-
-                {/* Card body */}
-                <div className="p-3">
-                    {/* Track */}
-                    <p className="text-[11px] font-bold text-slate-500 truncate mb-1">
-                        {cls.track || 'ไม่มีแผนการเรียน'}
-                    </p>
-
-                    {/* Curriculum */}
-                    <div className="flex items-center gap-1 mb-2">
-                        <HiBookOpen className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        {curriculum ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black border border-amber-200/60 truncate flex-1 shadow-sm">
-                                <HiExclamationTriangle className="w-3 h-3 text-amber-500 shrink-0" />
-                                <span className="truncate">{curriculum.name}</span>
-                            </span>
-                        ) : (
-                            <span className="text-[10px] text-slate-400 font-medium truncate flex-1">
-                                ยังไม่มีหลักสูตร
-                            </span>
-                        )}
-                        {curriculum && (
-                            <button
-                                onClick={e => { e.stopPropagation(); handleRemoveCurriculum(cls.id, curriculum.name || ''); }}
-                                className="p-0.5 rounded hover:text-rose-500 text-slate-300 transition-colors shrink-0"
-                            >
-                                <HiXMark className="w-3 h-3" />
-                            </button>
-                        )}
-                    </div>
-
-                    {/* Student count */}
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1">
-                            <HiUsers className="w-3.5 h-3.5 text-slate-400" />
-                            <span className="text-[12px] font-black text-slate-700">{count}</span>
-                            <span className="text-[10px] text-slate-400 font-medium">คน</span>
-                        </div>
-                        <button
-                            onClick={e => { e.stopPropagation(); setSelectedClassroomId(cls.id); }}
-                            className="flex items-center gap-1 text-[10px] font-bold text-blue-500 hover:text-blue-700 transition-colors"
-                        >
-                            ดูนักเรียน
-                            <HiArrowRight className="w-3 h-3" />
-                        </button>
-                    </div>
-                </div>
-
-                {/* Assign mode overlay */}
-                {isAssignMode && (
-                    <div className={`absolute inset-0 flex items-center justify-center z-20 transition-all duration-300 backdrop-blur-[2px] ${
-                        curriculum && !!curriculumFilter
-                            ? 'bg-amber-600/35 group-hover:bg-amber-600/40'
-                            : 'bg-blue-600/35 group-hover:bg-blue-600/40'
-                    }`}>
-                        {curriculum && !!curriculumFilter ? (
-                            <div className="bg-white rounded-full px-3 py-1 flex items-center gap-1.5 shadow-md transform scale-100 group-hover:scale-105 transition-transform duration-300 border border-amber-200">
-                                <HiExclamationTriangle className="w-3.5 h-3.5 text-amber-500 font-bold" />
-                                <span className="text-[10px] font-black text-amber-700 uppercase tracking-wide">มีหลักสูตรแล้ว</span>
-                            </div>
-                        ) : (
-                            <div className="bg-white rounded-full px-3 py-1 flex items-center gap-1.5 shadow-md transform scale-100 group-hover:scale-105 transition-transform duration-300">
-                                <HiPlus className="w-3.5 h-3.5 text-blue-600 font-bold" />
-                                <span className="text-[11px] font-black text-blue-600 uppercase tracking-wide">Assign</span>
-                            </div>
-                        )}
-                    </div>
-                )}
-            </motion.div>
-        );
-    }
-
     return (
-        <div className="relative flex-1 min-w-0 h-full overflow-hidden flex flex-col font-sukhumvit">
+        <div className="relative flex h-full min-h-0 max-h-full flex-1 flex-col gap-4 overflow-hidden font-sukhumvit lg:flex-row lg:items-stretch">
 
             {loading ? (
                 <div className="flex-1 flex items-center justify-center text-slate-400 gap-3 h-64">
@@ -747,698 +687,540 @@ export default function ClassroomAssignmentTab() {
                     <span className="font-bold text-sm">กำลังโหลดข้อมูล...</span>
                 </div>
             ) : (
-                <div className={cn('flex-1 min-h-0 flex gap-3', isMdOrBelow && 'pb-[4.5rem]')}>
-
-                    {/* ── LEFT SIDEBAR — Curriculum List ── */}
-                    <div className={cn(
-                        'shrink-0 flex-col overflow-hidden',
-                        panelCardClass,
-                        showCurriculumPanel ? 'flex' : 'hidden',
-                        'w-full lg:w-[230px] lg:flex',
-                    )}>
-                        {/* Year + search */}
-                        <div className={panelHeaderClass}>
-                            <div className="flex items-center h-9 bg-white/80 border border-black/[0.07] rounded-full px-1 shadow-sm">
-                                <PanelCapsuleSelect
-                                    value={curriculumYear}
-                                    onChange={setCurriculumYear}
-                                    options={ACADEMIC_YEARS.map((y) => ({
-                                        value: y,
-                                        label: `ปีการศึกษา ${y}`,
-                                    }))}
-                                />
-                            </div>
-                            {/* Curriculum search */}
-                            <div className="relative">
-                                <HiMagnifyingGlass className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
-                                <input
-                                    type="text"
-                                    placeholder="ค้นหาหลักสูตร..."
-                                    value={curriculumSearch}
-                                    onChange={e => setCurriculumSearch(e.target.value)}
-                                    className="w-full pl-8 pr-3 py-1.5 bg-slate-100 rounded-xl text-[11px] font-bold outline-none placeholder:text-slate-400 text-slate-700"
-                                />
-                            </div>
-                        </div>
-
-                        {/* Curriculum list */}
-                        <div className="flex-1 overflow-y-auto scrollbar-hide px-2 pt-1 pb-4 space-y-1">
-                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 py-1 pb-2">หลักสูตร ({filteredCurriculumPackages.length})</p>
-                            {filteredCurriculumPackages.map(pkg => {
-                                const isAssigned = classrooms.some(c => c.curriculumPackageId === pkg.id);
-                                const isActive = curriculumFilter === pkg.id;
-                                return (
-                                    <button
-                                        key={pkg.id}
-                                        draggable
-                                        onDragStart={(e) => handleCurriculumDragStart(e, pkg.id)}
-                                        onClick={() => setCurriculumFilter(isActive ? '' : pkg.id)}
-                                        className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-xl transition-all cursor-grab active:cursor-grabbing group ${
-                                            isActive
-                                                ? 'bg-blue-600 text-white shadow-sm'
-                                                : 'text-slate-600 hover:bg-slate-100'
-                                        }`}
-                                    >
-                                        <div className={`w-7 h-7 shrink-0 rounded-lg flex items-center justify-center ${
-                                            isActive ? 'bg-white/20' : 'bg-blue-50'
-                                        }`}>
-                                            <HiBookOpen className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-blue-600'}`} />
+                <>
+                    {/* ── LEFT — GradeBookClassSidebar (same as รายชื่อ) ── */}
+                    <div
+                        className={cn(
+                            'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
+                            sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+                            selectedClassroomId
+                                ? 'hidden lg:flex'
+                                : 'flex min-h-0 flex-1 lg:flex-none',
+                        )}
+                    >
+                        <GradeBookClassSidebar
+                            selectedDept={deptFilter}
+                            selectedGrade={gradeFilter}
+                            selectedClassId={selectedClassroomId || ''}
+                            gradeOptions={sidebarGradeOptions}
+                            classOptions={sidebarClassOptions}
+                            onSelectDept={handleSidebarSelectDept}
+                            onSelectGrade={handleSidebarSelectGrade}
+                            onSelectClass={handleSidebarSelectClass}
+                            collapsed={sidebarCollapsed}
+                            headerAction={(
+                                <>
+                                    {!sidebarCollapsed && (
+                                        <div className="flex h-8 min-w-0 flex-1 items-center rounded-full border border-border bg-muted/50 px-1 shadow-sm">
+                                            <PanelCapsuleSelect
+                                                value={classroomYear}
+                                                onChange={(y) => {
+                                                    setClassroomYear(y);
+                                                    setDeptFilter('');
+                                                    setGradeFilter('');
+                                                    setSelectedClassroomId(null);
+                                                }}
+                                                options={ACADEMIC_YEARS.map((y) => ({
+                                                    value: y,
+                                                    label: `ปี ${y}`,
+                                                }))}
+                                            />
                                         </div>
-                                        <div className="flex flex-col min-w-0 text-left flex-1">
-                                            <span className={`text-[11px] font-bold truncate leading-tight ${isActive ? 'text-white' : 'text-slate-800'}`}>
-                                                {pkg.name}
-                                            </span>
-                                            <span className={`text-[9px] font-black uppercase tracking-wider ${isActive ? 'text-blue-100' : 'text-slate-400'}`}>
-                                                ปี {pkg.year || pkg.name?.match(/\d{4}/)?.[0] || '—'}
-                                            </span>
-                                        </div>
-                                        {isAssigned && (
-                                            <HiCheckCircle className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : 'text-emerald-500'}`} />
+                                    )}
+                                    <div className={cn('flex shrink-0', HEADER_ICON_BTN_GROUP)}>
+                                        {!sidebarCollapsed && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setEditingClassroom(null);
+                                                    setNewRoom({
+                                                        name: '',
+                                                        gradeLevel: 'ม.4',
+                                                        departmentId: 'secondary',
+                                                        capacity: '40',
+                                                        track: TRACK_OPTIONS[0].label,
+                                                        trackColor: TRACK_OPTIONS[0].color,
+                                                        academicYearId: classroomYear,
+                                                        curriculumPackageId: '',
+                                                        homeroomTeacherIds: [],
+                                                    });
+                                                    setShowCreateModal(true);
+                                                }}
+                                                className={HEADER_ICON_BTN}
+                                                title="เพิ่มห้องเรียน"
+                                                aria-label="เพิ่มห้องเรียน"
+                                            >
+                                                <HiPlus size={16} />
+                                            </button>
                                         )}
-                                    </button>
-                                );
-                            })}
-                            {filteredCurriculumPackages.length === 0 && (
-                                <p className="text-[10px] text-center py-6 text-slate-400 font-bold">ไม่พบหลักสูตร</p>
+                                        <SidebarCollapseButton
+                                            collapsed={sidebarCollapsed}
+                                            onToggle={() => setSidebarCollapsed((v) => !v)}
+                                        />
+                                    </div>
+                                </>
                             )}
-                        </div>
+                        />
                     </div>
 
-                    {/* ── MIDDLE — Classroom Workspace ── */}
-                    <div className={cn(
-                        'min-w-0 flex-col overflow-hidden',
-                        panelCardClass,
-                        'px-3 lg:px-5',
-                        showClassroomPanel ? 'flex flex-1' : 'hidden',
-                        'lg:flex lg:flex-1',
-                    )}>
+                    {/* ── MIDDLE — Classroom workspace (card shell matches sidebar) ── */}
+                    <div
+                        className={cn(
+                            'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+                            !selectedClassroomId && 'hidden lg:flex',
+                        )}
+                    >
+                        {(() => {
+                            const cls = selectedClassroomId
+                                ? classrooms.find((c) => c.id === selectedClassroomId)
+                                : undefined;
+                            const count = cls ? (studentsByClass[cls.id]?.length || 0) : 0;
+                            const curriculum = cls
+                                ? curriculumPackages.find((p) => p.id === cls.curriculumPackageId)
+                                : undefined;
 
-                        {selectedClassroomId ? (
+                            const openEdit = () => {
+                                if (!cls) return;
+                                const deptId = Object.entries(GRADE_ORDER).find(([, grades]) =>
+                                    grades.includes(cls.gradeLevel),
+                                )?.[0] || 'secondary';
+                                setEditingClassroom(cls);
+                                setNewRoom({
+                                    name: cls.roomNumber,
+                                    gradeLevel: cls.gradeLevel,
+                                    departmentId: deptId,
+                                    capacity: String(cls.capacity || 40),
+                                    track: cls.track || '',
+                                    trackColor: cls.trackColor || '',
+                                    academicYearId: cls.academicYearId || classroomYear,
+                                    curriculumPackageId: cls.curriculumPackageId || '',
+                                    homeroomTeacherIds: cls.homeroomTeacherIds || [],
+                                });
+                                setShowCreateModal(true);
+                            };
+
+                            const headerActions = (
+                                <div className={cn('flex shrink-0 items-center', HEADER_ICON_BTN_GROUP)}>
+                                    {curriculum && (
+                                        <span className="hidden sm:inline-flex max-w-[120px] items-center gap-1 truncate rounded-full border border-emerald-100/80 bg-emerald-50 px-2 py-1 text-[9px] font-black text-emerald-600 shadow-sm">
+                                            <span className="truncate">{curriculum.name}</span>
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleRemoveCurriculum(cls!.id, curriculum.name || '');
+                                                }}
+                                                className="shrink-0 rounded-full p-0.5 text-emerald-400 transition-all duration-200 hover:bg-emerald-100 hover:text-emerald-700"
+                                                title="ยกเลิกหลักสูตร"
+                                            >
+                                                <HiXMark className="h-3 w-3" />
+                                            </button>
+                                        </span>
+                                    )}
+                                    {cls && (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={openAddStudentsDrawer}
+                                                className={HEADER_ICON_BTN}
+                                                title="เพิ่มนักเรียนเข้าห้อง"
+                                                aria-label="เพิ่มนักเรียนเข้าห้อง"
+                                            >
+                                                <HiUserPlus size={16} />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={openCurriculumDrawer}
+                                                className={HEADER_ICON_BTN}
+                                                title="มอบหมายหลักสูตร"
+                                                aria-label="มอบหมายหลักสูตร"
+                                            >
+                                                <HiOutlineBookOpen size={16} />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={openEdit}
+                                                className={HEADER_ICON_BTN}
+                                                title="แก้ไขห้องเรียน"
+                                                aria-label="แก้ไขห้องเรียน"
+                                            >
+                                                <HiPencil size={16} />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => deleteClassroom(cls.id, count)}
+                                                className={HEADER_ICON_BTN}
+                                                title="ลบห้องเรียน"
+                                                aria-label="ลบห้องเรียน"
+                                            >
+                                                <HiTrash size={16} />
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            );
+
+                            return (
+                                <>
+                        {/* Header — same height/border as GradeBookClassSidebar */}
+                        <div className="mb-2 hidden min-h-[3.25rem] w-full shrink-0 items-center justify-between gap-2 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:flex">
+                            <div className="min-w-0 shrink overflow-x-auto scrollbar-none">
+                                {headerTabs}
+                            </div>
+                            <div className="ml-auto shrink-0">{headerActions}</div>
+                        </div>
+
+                        {/* Mobile header when room selected */}
+                        {cls && (
+                            <div className="mb-2 flex min-h-[3.25rem] w-full shrink-0 items-center justify-between gap-2 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:hidden">
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedClassroomId(null)}
+                                    className={HEADER_ICON_BTN}
+                                    title="ย้อนกลับ"
+                                    aria-label="ย้อนกลับ"
+                                >
+                                    <HiArrowLeft size={16} />
+                                </button>
+                                {headerActions}
+                            </div>
+                        )}
+
+                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                        {cls ? (
                             // ── Classroom Detail View ──
-                            (() => {
-                                const cls = classrooms.find(c => c.id === selectedClassroomId);
-                                if (!cls) return null;
-                                const count = studentsByClass[cls.id]?.length || 0;
-                                const dept = DEPT_CONFIG[cls.departmentId || 'secondary'] ?? DEPT_CONFIG.secondary;
-                                const curriculum = curriculumPackages.find(p => p.id === cls.curriculumPackageId);
-
-                                return (
-                                    <div className="flex flex-col h-full">
-                                        {/* Detail header */}
-                                        <div className="flex items-center justify-between border-b border-black/[0.05] py-3 mb-4 lg:py-4 lg:mb-5 shrink-0 gap-2">
-                                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                                {/* Back button */}
-                                                <button
-                                                    onClick={() => setSelectedClassroomId(null)}
-                                                    className="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-white hover:bg-slate-50 border border-black/[0.06] shadow-sm flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all shrink-0 active:scale-95"
-                                                    title="ย้อนกลับ"
-                                                >
-                                                    <HiArrowLeft size={16} className="text-slate-600 lg:hidden" />
-                                                    <HiArrowLeft size={18} className="text-slate-600 hidden lg:block" />
-                                                </button>
-
-                                                {/* Class Badge */}
-                                                <div className={`w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-gradient-to-br ${dept.gradient} flex items-center justify-center shadow-sm shrink-0 border border-white/20`}>
-                                                    <span className="text-white text-[12px] lg:text-[13px] font-black">{cls.gradeLevel}</span>
-                                                </div>
-
-                                                {/* Text Info */}
-                                                <div className="min-w-0 flex flex-col justify-center">
-                                                    <h2 className="text-[14px] lg:text-[15.5px] font-black text-slate-800 leading-tight truncate">ห้อง {cls.className}</h2>
-                                                    <p className="text-[10px] lg:text-[10.5px] text-slate-400 font-bold mt-0.5 truncate">
-                                                        {dept.label} · {count} คน
-                                                    </p>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex items-center gap-1.5 shrink-0">
-                                                {curriculum && (
-                                                    <span className="hidden sm:inline-flex items-center gap-1 max-w-[120px] px-2 py-1 rounded-full bg-emerald-50 text-emerald-600 text-[9px] font-black border border-emerald-100/80 shadow-sm truncate">
-                                                        <span className="truncate">{curriculum.name}</span>
-                                                        <button
-                                                            onClick={e => {
-                                                                e.stopPropagation();
-                                                                handleRemoveCurriculum(cls.id, curriculum.name || '');
-                                                            }}
-                                                            className="p-0.5 rounded-full hover:bg-emerald-100 text-emerald-400 hover:text-emerald-700 transition-all duration-200 shrink-0"
-                                                            title="ยกเลิกหลักสูตร"
-                                                        >
-                                                            <HiXMark className="w-3 h-3" />
-                                                        </button>
-                                                    </span>
-                                                )}
-                                                <button
-                                                    onClick={() => {
-                                                        setEditingClassroom(cls);
-                                                        const deptId = Object.entries(GRADE_ORDER).find(([_, grades]) =>
-                                                            grades.includes(cls.gradeLevel)
-                                                        )?.[0] || 'secondary';
-                                                        setNewRoom({
-                                                            name: cls.roomNumber,
-                                                            gradeLevel: cls.gradeLevel,
-                                                            departmentId: deptId,
-                                                            capacity: String(cls.capacity || 40),
-                                                            track: cls.track || '',
-                                                            trackColor: cls.trackColor || '',
-                                                            academicYearId: cls.academicYearId || classroomYear,
-                                                            curriculumPackageId: cls.curriculumPackageId || '',
-                                                            homeroomTeacherIds: cls.homeroomTeacherIds || [],
-                                                        });
-                                                        setShowCreateModal(true);
-                                                    }}
-                                                    className="w-10 h-10 rounded-full bg-white hover:bg-slate-50 border border-black/[0.06] shadow-sm flex items-center justify-center text-slate-500 hover:text-blue-600 transition-all active:scale-95"
-                                                    title="แก้ไขห้องเรียน"
-                                                >
-                                                    <HiPencil size={16} className="text-slate-600" />
-                                                </button>
-                                                <button
-                                                    onClick={() => deleteClassroom(cls.id, count)}
-                                                    className="w-10 h-10 rounded-full bg-white hover:bg-rose-50 border border-black/[0.06] shadow-sm flex items-center justify-center text-slate-500 hover:text-rose-600 transition-all active:scale-95"
-                                                    title="ลบห้องเรียน"
-                                                >
-                                                    <HiTrash size={16} className="text-slate-600" />
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                        {/* Teacher banner */}
-                                        {cls.homeroomTeacherIds && cls.homeroomTeacherIds.length > 0 && (
-                                            <div className="flex items-center gap-3 px-4 py-3 bg-emerald-50 border border-emerald-100 rounded-2xl mb-4 shrink-0">
-                                                <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
-                                                    <HiUserCircle className="w-4 h-4 text-emerald-600" />
-                                                </div>
-                                                <div>
-                                                    <p className="text-[9px] font-black text-emerald-600 uppercase tracking-wider">ครูประจำชั้น</p>
-                                                    <p className="text-[13px] font-bold text-emerald-900">
-                                                        {cls.homeroomTeacherIds.map(tid => {
-                                                            const t = teachers.find(tc => tc.id === tid);
-                                                            return t ? (t.displayName || `${t.prefix || ''}${t.firstName || ''} ${t.lastName || ''}`.trim()) : tid;
-                                                        }).join(', ')}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {/* Student grid */}
+                                    <div className="flex h-full flex-col">
+                                        {/* Student table */}
                                         <div
-                                            className="flex-1 overflow-y-auto scrollbar-hide"
+                                            className="flex-1 overflow-y-auto scrollbar-hide pb-6"
                                             onDragOver={handleDragOver}
                                             onDrop={(e) => handleDrop(e, cls.id)}
                                         >
                                             {count === 0 ? (
-                                                <div className="h-48 flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 gap-2">
-                                                    <HiArrowRight className="w-8 h-8" />
-                                                    <p className="text-sm font-bold">ลากนักเรียนมาวางที่นี่</p>
-                                                    <p className="text-[11px]">เพื่อเพิ่มนักเรียนเข้าห้อง {cls.className}</p>
+                                                <div className="py-12 text-center text-muted-foreground">
+                                                    <p className="text-[13px] font-sarabun">ยังไม่มีนักเรียนในห้องนี้</p>
                                                 </div>
                                             ) : (
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pb-10">
-                                                    <AnimatePresence>
-                                                        {(studentsByClass[cls.id] || [])
-                                                            .sort((a, b) => (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true }) || a.firstName.localeCompare(b.firstName))
-                                                            .map(student => {
-                                                                const isSelected = selectedStudentIds.has(student.id);
-                                                                return (
-                                                                    <motion.div
-                                                                        key={student.id}
-                                                                        layout
-                                                                        initial={{ opacity: 0 }}
-                                                                        animate={{ opacity: 1 }}
-                                                                        exit={{ opacity: 0 }}
-                                                                        draggable
-                                                                        onDragStart={(e: any) => handleDragStart(e, student.id)}
-                                                                        onClick={() => toggleStudentSelection(student.id)}
-                                                                        className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors ${
-                                                                            isSelected
-                                                                                ? 'bg-blue-600 text-white'
-                                                                                : 'bg-white border border-slate-100 hover:border-slate-200 hover:bg-slate-50'
-                                                                        }`}
+                                                (() => {
+                                                    const rows = (studentsByClass[cls.id] || [])
+                                                        .slice()
+                                                        .sort((a, b) =>
+                                                            (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true })
+                                                            || a.firstName.localeCompare(b.firstName),
+                                                        );
+                                                    return (
+                                                        <div className="flex flex-col gap-3">
+                                                            {/* Mobile cards */}
+                                                            <div className="flex flex-col gap-2.5 md:hidden">
+                                                                <AnimatePresence>
+                                                                    {rows.map((student, i) => {
+                                                                        const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
+                                                                        const isSelected = selectedStudentIds.has(student.id);
+                                                                        return (
+                                                                            <motion.div
+                                                                                key={student.id}
+                                                                                layout
+                                                                                initial={{ opacity: 0, y: 8 }}
+                                                                                animate={{ opacity: 1, y: 0 }}
+                                                                                exit={{ opacity: 0 }}
+                                                                                transition={{ delay: i * 0.02 }}
+                                                                                draggable
+                                                                                onDragStart={(e: any) => handleDragStart(e, student.id)}
+                                                                                onClick={() => toggleStudentSelection(student.id)}
+                                                                                className={cn(
+                                                                                    'cursor-pointer rounded-2xl border border-border bg-card p-3 transition-colors active:scale-[0.99]',
+                                                                                    isSelected ? 'bg-primary/10 border-primary/30' : 'hover:bg-muted/40',
+                                                                                )}
+                                                                            >
+                                                                                <div className="flex items-center gap-3">
+                                                                                    <StudentAvatar
+                                                                                        photoURL={student.photoURL}
+                                                                                        studentId={student.id}
+                                                                                        name={fullName}
+                                                                                        className="h-9 w-9 shrink-0 rounded-full"
+                                                                                    />
+                                                                                    <div className="min-w-0 flex-1">
+                                                                                        <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                                                                            {fullName}
+                                                                                        </p>
+                                                                                        <p className="mt-0.5 text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+                                                                                            {student.studentCode || '—'}
+                                                                                        </p>
+                                                                                    </div>
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={(e) => {
+                                                                                            e.stopPropagation();
+                                                                                            moveStudents([student.id], 'unassigned');
+                                                                                        }}
+                                                                                        className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                                                                                        aria-label="นำออกจากห้อง"
+                                                                                    >
+                                                                                        <HiXMark className="h-3.5 w-3.5" />
+                                                                                    </button>
+                                                                                </div>
+                                                                                <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
+                                                                                    <span className="text-[11px] font-bold text-muted-foreground font-sukhumvit">
+                                                                                        ชั้น
+                                                                                    </span>
+                                                                                    <span className="text-[12px] font-bold text-foreground font-sukhumvit">
+                                                                                        {student.gradeLevel || '—'}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </motion.div>
+                                                                        );
+                                                                    })}
+                                                                </AnimatePresence>
+                                                            </div>
+
+                                                            {/* Desktop table */}
+                                                            <div className={cn('hidden md:block', TABLE_SHELL)}>
+                                                                <div className="border-b border-border bg-background">
+                                                                    <div
+                                                                        className="grid gap-3 px-4 py-3"
+                                                                        style={{ gridTemplateColumns: TABLE_GRID }}
                                                                     >
-                                                                        <div className={`w-8 h-8 rounded-xl overflow-hidden shrink-0 ${isSelected ? 'ring-2 ring-white/40' : ''}`}>
-                                                                            <img
-                                                                                src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${student.id}&backgroundColor=f8fafc`}
-                                                                                alt="avatar"
-                                                                                className="w-full h-full object-cover"
-                                                                            />
-                                                                        </div>
-                                                                        <div className="flex-1 min-w-0">
-                                                                            <p className={`text-[12px] font-bold truncate ${isSelected ? 'text-white' : 'text-slate-900'}`}>
-                                                                                {student.prefix}{student.firstName} {student.lastName}
-                                                                            </p>
-                                                                            <p className={`text-[10px] font-medium uppercase tracking-tight ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>
-                                                                                {student.studentCode || 'N/A'}
-                                                                            </p>
-                                                                        </div>
-                                                                        <button
-                                                                            onClick={e => { e.stopPropagation(); moveStudents([student.id], 'unassigned'); }}
-                                                                            className={`p-1.5 rounded-full transition-colors shrink-0 ${
-                                                                                isSelected ? 'hover:bg-white/20 text-white/70' : 'hover:bg-rose-50 hover:text-rose-500 text-slate-300'
-                                                                            }`}
-                                                                        >
-                                                                            <HiXMark className="w-3.5 h-3.5" />
-                                                                        </button>
-                                                                    </motion.div>
-                                                                );
-                                                            })}
-                                                    </AnimatePresence>
-                                                </div>
+                                                                        <span className={TABLE_HEADER_CELL}>รหัส</span>
+                                                                        <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                                                                        <span className={TABLE_HEADER_CELL}>ชั้น</span>
+                                                                        <span className={TABLE_HEADER_CELL} />
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex flex-col">
+                                                                    <AnimatePresence>
+                                                                        {rows.map((student, i) => {
+                                                                            const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
+                                                                            const isSelected = selectedStudentIds.has(student.id);
+                                                                            return (
+                                                                                <motion.div
+                                                                                    key={student.id}
+                                                                                    layout
+                                                                                    initial={{ opacity: 0 }}
+                                                                                    animate={{ opacity: 1 }}
+                                                                                    exit={{ opacity: 0 }}
+                                                                                    transition={{ delay: i * 0.015 }}
+                                                                                    draggable
+                                                                                    onDragStart={(e: any) => handleDragStart(e, student.id)}
+                                                                                    onClick={() => toggleStudentSelection(student.id)}
+                                                                                    className={cn(
+                                                                                        'grid cursor-pointer items-center gap-3 border-b border-border px-4 py-3 transition-colors last:border-b-0',
+                                                                                        isSelected ? 'bg-primary/10' : 'hover:bg-muted/40',
+                                                                                    )}
+                                                                                    style={{ gridTemplateColumns: TABLE_GRID }}
+                                                                                >
+                                                                                    <span className="truncate text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+                                                                                        {student.studentCode || '—'}
+                                                                                    </span>
+                                                                                    <div className="flex min-w-0 items-center gap-3">
+                                                                                        <StudentAvatar
+                                                                                            photoURL={student.photoURL}
+                                                                                            studentId={student.id}
+                                                                                            name={fullName}
+                                                                                            className="h-9 w-9 shrink-0 rounded-full"
+                                                                                        />
+                                                                                        <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                                                                            {fullName}
+                                                                                        </p>
+                                                                                    </div>
+                                                                                    <span className="truncate text-[13px] font-semibold text-foreground font-sukhumvit">
+                                                                                        {student.gradeLevel || (
+                                                                                            <span className="text-muted-foreground/40">—</span>
+                                                                                        )}
+                                                                                    </span>
+                                                                                    <div className="flex justify-end">
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={(e) => {
+                                                                                                e.stopPropagation();
+                                                                                                moveStudents([student.id], 'unassigned');
+                                                                                            }}
+                                                                                            className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                                                                                            aria-label="นำออกจากห้อง"
+                                                                                        >
+                                                                                            <HiXMark className="h-3.5 w-3.5" />
+                                                                                        </button>
+                                                                                    </div>
+                                                                                </motion.div>
+                                                                            );
+                                                                        })}
+                                                                    </AnimatePresence>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })()
                                             )}
                                         </div>
                                     </div>
-                                );
-                            })()
                         ) : (
-                            // ── Classroom Grid Overview ──
-                            <div className="flex flex-col h-full">
-                                {/* Header + filters */}
-                                <div className="shrink-0 pt-2 pb-2 lg:pt-3 lg:pb-3">
-                                    {/* Step Filters & Actions */}
-                                    <div className="flex items-center gap-1.5 flex-wrap mb-3 lg:gap-2 lg:mb-4">
-                                        {/* Step 1: Year */}
-                                        <div className="flex items-center h-7 lg:h-9 bg-white/80 border border-black/[0.07] rounded-full px-0.5 lg:px-1 shadow-sm shrink-0">
-                                            <PanelCapsuleSelect
-                                                value={classroomYear}
-                                                onChange={setClassroomYear}
-                                                options={ACADEMIC_YEARS.map((y) => ({
-                                                    value: y,
-                                                    label: `ปีการศึกษา ${y}`,
-                                                }))}
-                                            />
-                                        </div>
-
-                                        <HiChevronDown className="w-3 h-3 lg:w-4 lg:h-4 text-slate-300 shrink-0 -rotate-90 hidden sm:block" />
-
-                                        {/* Step 2: Department */}
-                                        <div className="flex items-center h-7 lg:h-9 bg-white/80 border border-black/[0.07] rounded-full px-0.5 lg:px-1 shadow-sm shrink-0">
-                                            <PanelCapsuleSelect
-                                                value={deptFilter}
-                                                onChange={(v) => { setDeptFilter(v); setGradeFilter(''); }}
-                                                options={[
-                                                    { value: '', label: 'ทุกแผนก' },
-                                                    { value: 'early', label: 'ปฐมวัย' },
-                                                    { value: 'primary', label: 'ประถม' },
-                                                    { value: 'secondary', label: 'มัธยม' },
-                                                ]}
-                                            />
-                                        </div>
-
-                                        {deptFilter && (
-                                            <>
-                                                <HiChevronDown className="w-3 h-3 lg:w-4 lg:h-4 text-slate-300 shrink-0 -rotate-90 hidden sm:block" />
-                                                {/* Step 3: Grade */}
-                                                <div className="flex items-center h-7 lg:h-9 bg-white/80 border border-black/[0.07] rounded-full px-0.5 lg:px-1 shadow-sm shrink-0">
-                                                    <PanelCapsuleSelect
-                                                        value={gradeFilter}
-                                                        onChange={setGradeFilter}
-                                                        options={[
-                                                            { value: '', label: 'ทุกระดับชั้น' },
-                                                            ...(GRADE_ORDER[deptFilter] || []).map(g => ({
-                                                                value: g,
-                                                                label: g
-                                                            }))
-                                                        ]}
-                                                    />
-                                                </div>
-                                            </>
-                                        )}
-
-                                        <div className="flex items-center gap-2 ml-auto lg:gap-4">
-                                            <div className="hidden sm:flex items-center gap-1 text-[10px] font-bold text-slate-400">
-                                                <HiSquares2X2 className="w-3.5 h-3.5" />
-                                                {filteredClassrooms.length} ห้อง
-                                            </div>
-
-                                            <button
-                                                onClick={() => { setEditingClassroom(null); setShowCreateModal(true); }}
-                                                className="flex items-center gap-1 px-3 py-1.5 lg:gap-1.5 lg:px-4 lg:py-2 rounded-full bg-slate-900 text-white text-[10px] lg:text-[11px] font-black hover:bg-slate-700 active:scale-95 transition-all shadow-sm shrink-0"
-                                            >
-                                                <HiPlus className="w-3 h-3 lg:w-3.5 lg:h-3.5" />
-                                                เพิ่มห้อง
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Card grid */}
-                                <div className="flex-1 overflow-y-auto scrollbar-hide p-1.5">
-                                    {filteredClassrooms.length === 0 ? (
-                                        <div className="flex flex-col items-center justify-center h-48 gap-3 text-slate-400">
-                                            <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
-                                                <HiAcademicCap className="w-6 h-6" />
-                                            </div>
-                                            <p className="text-sm font-bold">ไม่พบห้องเรียน</p>
-                                            <button
-                                                onClick={() => { setDeptFilter(''); setGradeFilter(''); }}
-                                                className="px-4 py-2 bg-slate-900 text-white text-[11px] font-black rounded-full shadow hover:bg-slate-800 transition-all"
-                                            >
-                                                ล้างตัวกรอง
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <motion.div
-                                            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-2.5 lg:gap-3 pb-10"
-                                            initial="hidden"
-                                            animate="show"
-                                            variants={{ hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.04 } } }}
-                                        >
-                                            {filteredClassrooms.map(cls => (
-                                                <motion.div
-                                                    key={cls.id}
-                                                    variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }}
-                                                >
-                                                    <ClassroomCard cls={cls} />
-                                                </motion.div>
-                                            ))}
-                                        </motion.div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* ── RIGHT PANEL — Unassigned Pool ── */}
-                    <div
-                        className={cn(
-                            'shrink-0 flex-col overflow-hidden',
-                            panelCardClass,
-                            showUnassignedPanel ? 'flex' : 'hidden',
-                            'w-full lg:w-[280px] lg:flex',
-                        )}
-                        onDragOver={handleDragOver}
-                        onDrop={(e) => handleDrop(e, 'unassigned')}
-                    >
-                        {/* Panel header */}
-                        <div className={panelHeaderClass}>
-                            <div className="flex items-center h-9 bg-white/80 border border-black/[0.07] rounded-full px-1 shadow-sm">
-                                <PanelCapsuleSelect
-                                    value={studentYear}
-                                    onChange={setStudentYear}
-                                    options={ACADEMIC_YEARS.map((y) => ({
-                                        value: y,
-                                        label: `ปีการศึกษา ${y}`,
-                                    }))}
-                                />
-                            </div>
-
-                            {/* Search */}
-                            <div className="relative">
-                                <HiMagnifyingGlass className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
-                                <input
-                                    type="text"
-                                    placeholder="ค้นหาชื่อ รหัส..."
-                                    value={searchQuery}
-                                    onChange={e => setSearchQuery(e.target.value)}
-                                    className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-[11px] font-bold outline-none placeholder:text-slate-300 text-slate-700"
-                                />
-                            </div>
-
-                            {/* Dept + grade filter */}
-                            <div className="flex gap-1.5">
-                                <div className="flex-1 flex items-center h-9 bg-white/80 border border-black/[0.07] rounded-full px-1 shadow-sm">
-                                    <PanelCapsuleSelect
-                                        value={unassignedDeptFilter}
-                                        onChange={(v) => {
-                                            setUnassignedDeptFilter(v);
-                                            setUnassignedGradeFilter('');
-                                        }}
-                                        options={[
-                                            { value: '', label: 'ทุกแผนก' },
-                                            { value: 'early', label: 'ปฐมวัย' },
-                                            { value: 'primary', label: 'ประถม' },
-                                            { value: 'secondary', label: 'มัธยม' },
-                                        ]}
-                                    />
-                                </div>
-                                <div className="flex-1 flex items-center h-9 bg-white/80 border border-black/[0.07] rounded-full px-1 shadow-sm">
-                                    <PanelCapsuleSelect
-                                        value={unassignedGradeFilter}
-                                        disabled={!unassignedDeptFilter}
-                                        onChange={setUnassignedGradeFilter}
-                                        options={[
-                                            { value: '', label: 'ทุกชั้น' },
-                                            ...((unassignedDeptFilter && GRADE_ORDER[unassignedDeptFilter]) || []).map((g) => ({
-                                                value: g,
-                                                label: g,
-                                            })),
-                                        ]}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Student count badge */}
-                        <div className="px-3 py-2 flex items-center justify-between">
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                                {filteredUnassignedStudents.length} คน
-                            </span>
-                            {isMdOrBelow && filteredUnassignedStudents.length > 0 && (
-                                <span className="text-[9px] font-bold text-slate-400 lg:hidden">
-                                    แตะเลือก → ย้ายห้องด้านล่าง
-                                </span>
-                            )}
-                            {filteredUnassignedStudents.length > 0 && (
-                                <button
-                                    onClick={handleSelectAllUnassigned}
-                                    className="text-[10px] font-black text-blue-600 hover:text-blue-700 transition-colors cursor-pointer"
-                                >
-                                    {selectedStudentIds.size > 0 
-                                        ? `เลือก ${selectedStudentIds.size} คน (ล้าง)` 
-                                        : 'เลือกทั้งหมด'}
-                                </button>
-                            )}
-                        </div>
-
-
-                        {/* Student list */}
-                        <div className="flex-1 overflow-y-auto scrollbar-hide px-2 pt-1 pb-20 space-y-0.5">
-                            <AnimatePresence>
-                                {filteredUnassignedStudents.map((student, index, arr) => {
-                                    const isSelected = selectedStudentIds.has(student.id);
-                                    const prevSelected = index > 0 && selectedStudentIds.has(arr[index - 1].id);
-                                    const nextSelected = index < arr.length - 1 && selectedStudentIds.has(arr[index + 1].id);
-
-                                    return (
-                                        <motion.div
-                                            key={student.id}
-                                            layout
-                                            initial={{ opacity: 0 }}
-                                            animate={{ opacity: 1 }}
-                                            exit={{ opacity: 0 }}
-                                            draggable
-                                            onDragStart={(e: any) => handleDragStart(e, student.id)}
-                                            onClick={() => toggleStudentSelection(student.id)}
-                                            className={`flex items-center gap-2.5 py-2 px-2 cursor-pointer transition-all ${
-                                                isSelected
-                                                    ? `bg-blue-600 text-white z-10 ${prevSelected ? '' : 'rounded-t-xl mt-1'} ${nextSelected ? 'border-b border-blue-400/30' : 'rounded-b-xl mb-1'}`
-                                                    : 'hover:bg-slate-50 rounded-xl'
-                                            }`}
-                                        >
-                                            <div className={`w-8 h-8 rounded-lg overflow-hidden shrink-0 ${isSelected ? 'ring-2 ring-white/30' : ''}`}>
-                                                <img
-                                                    src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${student.id}&backgroundColor=f8fafc`}
-                                                    alt=""
-                                                    className="w-full h-full object-cover"
-                                                />
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <p className={`text-[12px] font-bold truncate ${isSelected ? 'text-white' : 'text-slate-900'}`}>
-                                                    {student.prefix}{student.firstName}
-                                                </p>
-                                                <p className={`text-[10px] font-medium truncate -mt-0.5 ${isSelected ? 'text-blue-100' : 'text-slate-500'}`}>
-                                                    {student.lastName}
-                                                </p>
-                                            </div>
-                                            <span className={`text-[9px] font-black uppercase shrink-0 ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>
-                                                {student.studentCode || '—'}
-                                            </span>
-                                        </motion.div>
-                                    );
-                                })}
-                                {filteredUnassignedStudents.length === 0 && (
-                                    <div className="flex flex-col items-center justify-center h-32 text-slate-400 gap-2 border-2 border-dashed border-slate-200 rounded-2xl mt-2">
-                                        <HiCheckCircle className="w-6 h-6" />
-                                        <span className="text-xs font-bold text-center px-4">ไม่มีนักเรียนตกค้างตามตัวกรองนี้</span>
-                                    </div>
+                            // ── Empty / pick room (desktop) ──
+                            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+                                <HiAcademicCap className="h-8 w-8 text-muted-foreground/40" />
+                                <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
+                                    {!deptFilter
+                                        ? 'เลือกแผนกจากแถบด้านซ้าย'
+                                        : !gradeFilter
+                                            ? 'เลือกระดับชั้นจากแถบด้านซ้าย'
+                                            : sidebarClassOptions.length === 0
+                                                ? 'ยังไม่มีห้องในระดับชั้นนี้ — กด + เพื่อเพิ่ม'
+                                                : 'เลือกห้องเรียนจากแถบด้านซ้าย'}
+                                </p>
+                                {gradeFilter && (
+                                    <p className="text-[11px] font-bold text-slate-400">
+                                        {filteredClassrooms.length} ห้องในตัวกรองนี้
+                                    </p>
                                 )}
-                            </AnimatePresence>
+                            </div>
+                        )}
                         </div>
-                    </div>
-
-                </div>
-            )}
-
-            {/* ── Mobile bottom navigation ── */}
-            {isMdOrBelow && !selectedClassroomId && !loading && (
-                <div className="fixed inset-x-3 bottom-[max(4.75rem,env(safe-area-inset-bottom))] z-40 lg:hidden">
-                    <div className="flex items-center gap-1 rounded-2xl border border-white/80 bg-white/90 p-1 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-xl">
-                        {([
-                            { id: 'rooms' as const, label: 'ห้องเรียน', icon: HiSquares2X2, count: filteredClassrooms.length },
-                            { id: 'unassigned' as const, label: 'ตกค้าง', icon: HiUsers, count: filteredUnassignedStudents.length },
-                            { id: 'curriculum' as const, label: 'หลักสูตร', icon: HiBookOpen, count: filteredCurriculumPackages.length },
-                        ]).map((tab) => {
-                            const Icon = tab.icon;
-                            const isActive = mobileView === tab.id;
-                            return (
-                                <button
-                                    key={tab.id}
-                                    type="button"
-                                    onClick={() => {
-                                        setMobileView(tab.id);
-                                        setSelectedStudentIds(new Set());
-                                    }}
-                                    className={cn(
-                                        'relative flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-2 transition-all',
-                                        isActive ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50',
-                                    )}
-                                >
-                                    <Icon className={cn('h-4 w-4', isActive ? 'text-white' : 'text-slate-400')} />
-                                    <span className="text-[10px] font-black leading-none">{tab.label}</span>
-                                    {tab.count > 0 && (
-                                        <span className={cn(
-                                            'absolute right-2 top-1.5 min-w-[16px] rounded-full px-1 text-center text-[8px] font-black leading-4',
-                                            isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500',
-                                        )}>
-                                            {tab.count > 99 ? '99+' : tab.count}
-                                        </span>
-                                    )}
-                                </button>
+                                </>
                             );
-                        })}
+                        })()}
                     </div>
-                </div>
+
+                </>
             )}
 
             {/* ── Create/Edit Classroom Modal ── */}
-            <AnimatePresence>
-                {showCreateModal && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm"
-                        onClick={() => { setShowCreateModal(false); setEditingClassroom(null); }}
-                    >
-                        <motion.div
-                            initial={{ scale: 0.92, opacity: 0, y: 20 }}
-                            animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.92, opacity: 0, y: 20 }}
-                            onClick={e => e.stopPropagation()}
-                            className="w-[92vw] sm:max-w-md rounded-[2rem] sm:rounded-[2.5rem] border-none p-0 shadow-2xl overflow-hidden"
-                            style={{
-                                background: 'rgba(255,255,255,0.70)',
-                                backdropFilter: 'blur(24px) saturate(180%)',
-                                WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-                            }}
-                        >
-                            <div className="px-5 sm:px-6 pt-6 sm:pt-7 pb-2 sm:pb-3 flex items-center justify-between bg-transparent">
-                                <h2 className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">
-                                    {editingClassroom ? 'แก้ไขข้อมูลห้องเรียน' : 'สร้างห้องเรียนใหม่'}
-                                </h2>
-                                <button
-                                    onClick={() => { setShowCreateModal(false); setEditingClassroom(null); }}
-                                    className="w-8 h-8 rounded-full bg-slate-100/80 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-all"
-                                >
-                                    <HiXMark className="w-4 h-4" />
-                                </button>
-                            </div>
+            <Dialog
+                open={showCreateModal}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setShowCreateModal(false);
+                        setEditingClassroom(null);
+                    }
+                }}
+            >
+                <DialogContent
+                    className="w-[92vw] sm:max-w-lg rounded-2xl border-none p-0 shadow-2xl overflow-hidden"
+                    style={{
+                        background: 'rgba(255,255,255,0.7)',
+                        backdropFilter: 'blur(24px) saturate(180%)',
+                        WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+                    }}
+                >
+                    <div className="flex max-h-[90vh] flex-col">
+                        <div className="px-6 sm:px-8 pt-6 sm:pt-8 pb-2 sm:pb-3">
+                            <DialogTitle className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">
+                                {editingClassroom ? 'แก้ไขข้อมูลห้องเรียน' : 'สร้างห้องเรียนใหม่'}
+                            </DialogTitle>
+                        </div>
 
-                            <div className="px-5 sm:px-6 pb-6 sm:pb-7 space-y-3 max-h-[80vh] overflow-y-auto custom-scrollbar">
-                                {/* Dept */}
-                                <div className="space-y-1">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">แผนก *</label>
-                                    <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
-                                        {[{ id: 'early', label: 'ปฐมวัย' }, { id: 'primary', label: 'ประถม' }, { id: 'secondary', label: 'มัธยม' }].map(d => (
+                        <div className="flex-1 space-y-4 overflow-y-auto px-6 sm:px-8 py-4 custom-scrollbar">
+                            <div className="space-y-1">
+                                <label className={FIELD_LABEL}>
+                                    แผนก <span className="text-destructive">*</span>
+                                </label>
+                                <div className="flex gap-1.5 rounded-xl bg-slate-100/80 p-1">
+                                    {([
+                                        { id: 'early', label: 'ปฐมวัย' },
+                                        { id: 'primary', label: 'ประถม' },
+                                        { id: 'secondary', label: 'มัธยม' },
+                                    ] as const).map((d) => {
+                                        const active = newRoom.departmentId === d.id;
+                                        return (
                                             <button
                                                 key={d.id}
                                                 type="button"
-                                                onClick={() => setNewRoom(p => ({ ...p, departmentId: d.id, gradeLevel: '' }))}
-                                                className={`flex-1 h-9 text-xs font-bold rounded-lg transition-all ${
-                                                    (newRoom as any).departmentId === d.id
-                                                        ? 'bg-blue-600 text-white shadow-sm'
-                                                        : 'text-slate-500 hover:text-slate-700 hover:bg-white/70'
-                                                }`}
+                                                onClick={() => {
+                                                    const grades = GRADE_ORDER[d.id] || [];
+                                                    setNewRoom((p) => ({
+                                                        ...p,
+                                                        departmentId: d.id,
+                                                        gradeLevel: grades.includes(p.gradeLevel) ? p.gradeLevel : (grades[0] || ''),
+                                                    }));
+                                                }}
+                                                className={cn(
+                                                    'h-9 flex-1 rounded-lg text-xs font-bold transition-all',
+                                                    active
+                                                        ? 'bg-primary text-primary-foreground shadow-sm'
+                                                        : 'text-slate-500 hover:bg-white/70 hover:text-slate-700',
+                                                )}
                                             >
                                                 {d.label}
                                             </button>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    {/* Year */}
-                                    <div>
-                                        <label className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">ปีการศึกษา *</label>
-                                        <input
-                                            type="text"
-                                            placeholder="เช่น 2567"
-                                            value={newRoom.academicYearId}
-                                            onChange={e => setNewRoom(p => ({ ...p, academicYearId: e.target.value }))}
-                                            className="w-full h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4 outline-none focus:ring-2 focus:ring-blue-100"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">ระดับชั้น *</label>
-                                        <select
-                                            value={newRoom.gradeLevel}
-                                            onChange={e => setNewRoom(p => ({ ...p, gradeLevel: e.target.value }))}
-                                            className="w-full h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4 outline-none appearance-none focus:ring-2 focus:ring-blue-100"
-                                        >
-                                            <option value="" disabled>เลือกชั้น</option>
-                                            {GRADE_ORDER[(newRoom as any).departmentId || 'secondary']?.map(g => (
-                                                <option key={g} value={g}>{g}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    <div>
-                                        <label className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">ชื่อห้อง (ทับ) *</label>
-                                        <input
-                                            type="text"
-                                            placeholder="เช่น 1"
-                                            value={newRoom.name}
-                                            onChange={e => setNewRoom(p => ({ ...p, name: e.target.value }))}
-                                            className="w-full h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4 outline-none focus:ring-2 focus:ring-blue-100"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">แผนการเรียน</label>
-                                        <input
-                                            type="text"
-                                            placeholder="เช่น วิทย์-คณิต"
-                                            value={newRoom.track}
-                                            onChange={e => {
-                                                const val = e.target.value;
-                                                const match = TRACK_OPTIONS.find(t => t.label === val);
-                                                setNewRoom(p => ({ ...p, track: val, trackColor: match ? match.color : 'bg-slate-500 shadow-slate-500/40' }));
-                                            }}
-                                            className="w-full h-9 rounded-xl bg-slate-50 border-none text-xs font-bold px-4 outline-none focus:ring-2 focus:ring-blue-100"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="pt-4 flex items-center justify-end">
-                                    <button
-                                        disabled={!newRoom.name.trim() || !newRoom.academicYearId || isCreating}
-                                        onClick={createClassroom}
-                                        className="rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white text-sm font-bold h-10 px-8 flex items-center justify-center gap-2 shadow-lg shadow-slate-900/20 transition-colors"
-                                    >
-                                        {isCreating ? (
-                                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                        ) : editingClassroom ? (
-                                            <HiCheck className="w-4 h-4" />
-                                        ) : (
-                                            <HiPlus className="w-4 h-4" />
-                                        )}
-                                        บันทึก
-                                    </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className={FIELD_LABEL}>
+                                        ปีการศึกษา <span className="text-destructive">*</span>
+                                    </label>
+                                    <select
+                                        value={newRoom.academicYearId}
+                                        onChange={(e) => setNewRoom((p) => ({ ...p, academicYearId: e.target.value }))}
+                                        className={cn(FIELD_INPUT, 'w-full appearance-none outline-none')}
+                                    >
+                                        {ACADEMIC_YEARS.map((y) => (
+                                            <option key={y} value={y}>{y}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className={FIELD_LABEL}>
+                                        ระดับชั้น <span className="text-destructive">*</span>
+                                    </label>
+                                    <select
+                                        value={newRoom.gradeLevel}
+                                        onChange={(e) => setNewRoom((p) => ({ ...p, gradeLevel: e.target.value }))}
+                                        className={cn(FIELD_INPUT, 'w-full appearance-none outline-none')}
+                                    >
+                                        <option value="" disabled>เลือกชั้น</option>
+                                        {(GRADE_ORDER[newRoom.departmentId || 'secondary'] || []).map((g) => (
+                                            <option key={g} value={g}>{g}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className={FIELD_LABEL}>
+                                        ชื่อห้อง (ทับ) <span className="text-destructive">*</span>
+                                    </label>
+                                    <Input
+                                        value={newRoom.name}
+                                        onChange={(e) => setNewRoom((p) => ({ ...p, name: e.target.value }))}
+                                        placeholder="เช่น 1"
+                                        className={FIELD_INPUT}
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className={FIELD_LABEL}>แผนการเรียน</label>
+                                    <Input
+                                        value={newRoom.track}
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            const match = TRACK_OPTIONS.find((t) => t.label === val);
+                                            setNewRoom((p) => ({
+                                                ...p,
+                                                track: val,
+                                                trackColor: match ? match.color : 'bg-slate-500 shadow-slate-500/40',
+                                            }));
+                                        }}
+                                        placeholder="เช่น วิทย์-คณิต"
+                                        className={FIELD_INPUT}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <DialogFooter className="border-t border-white/20 px-6 pt-4 pb-6 sm:px-8 sm:pb-8">
+                            <Button
+                                type="button"
+                                disabled={!newRoom.name.trim() || !newRoom.academicYearId || !newRoom.gradeLevel || isCreating}
+                                onClick={() => void createClassroom()}
+                                className="h-10 w-full rounded-xl font-bold"
+                            >
+                                {isCreating ? 'กำลังบันทึก...' : editingClassroom ? 'บันทึก' : 'สร้างห้องเรียน'}
+                            </Button>
+                        </DialogFooter>
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             {/* ── Floating Action Bar (bulk assign) ── */}
             <AnimatePresence>
@@ -1520,6 +1302,302 @@ export default function ClassroomAssignmentTab() {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            <Drawer
+                open={addStudentsOpen}
+                onOpenChange={(open) => {
+                    setAddStudentsOpen(open);
+                    if (!open) {
+                        setDrawerSelectedIds(new Set());
+                        setAddStudentsSearch('');
+                    }
+                }}
+                direction="right"
+            >
+                <DrawerContent className={ASSIGN_DRAWER_CONTENT}>
+                    <div className={ASSIGN_DRAWER_PANEL}>
+                        <DrawerHeader className="px-4 pb-2">
+                            <div className="relative flex min-h-10 items-center justify-center">
+                                <DrawerTitle className="text-base font-black text-foreground font-sukhumvit">
+                                    เพิ่มนักเรียนเข้าห้อง
+                                </DrawerTitle>
+                                <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setAddStudentsOpen(false)}
+                                        className={DRAWER_HEADER_ICON_BTN}
+                                        aria-label="ปิด"
+                                    >
+                                        <HiXMark className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            </div>
+                            {selectedClassroom && (
+                                <p className="mt-1 text-center text-[11px] font-bold text-muted-foreground font-sukhumvit">
+                                    {selectedClassroom.className}
+                                    {selectedClassroom.gradeLevel ? ` · ${selectedClassroom.gradeLevel}` : ''}
+                                </p>
+                            )}
+                        </DrawerHeader>
+
+                        <div className="px-4 pb-3">
+                            <div className="flex h-10 items-center gap-2 rounded-xl border-none bg-slate-50/70 px-3">
+                                <HiMagnifyingGlass className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                <input
+                                    value={addStudentsSearch}
+                                    onChange={(e) => setAddStudentsSearch(e.target.value)}
+                                    placeholder="ค้นหาชื่อ หรือรหัส..."
+                                    className="min-w-0 flex-1 bg-transparent text-xs font-bold text-foreground outline-none placeholder:text-muted-foreground font-sukhumvit"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 scrollbar-hide">
+                            {assignDrawerCandidates.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+                                    <HiUserPlus className="h-8 w-8 text-muted-foreground/40" />
+                                    <p className="text-[13px] font-bold text-muted-foreground font-sukhumvit">
+                                        ไม่มีนักเรียนที่พร้อมจัดเข้าห้องนี้
+                                    </p>
+                                    <p className="text-[11px] text-muted-foreground/70 font-sarabun">
+                                        แสดงเฉพาะคนที่ยังไม่มีห้องในระดับชั้นนี้
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col gap-2">
+                                    {assignDrawerCandidates.map((student) => {
+                                        const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
+                                        const selected = drawerSelectedIds.has(student.id);
+                                        return (
+                                            <button
+                                                key={student.id}
+                                                type="button"
+                                                onClick={() => toggleDrawerStudent(student.id)}
+                                                className={cn(
+                                                    'flex w-full items-center gap-3 rounded-2xl border px-3 py-2.5 text-left transition-colors',
+                                                    selected
+                                                        ? 'border-primary/30 bg-primary/5'
+                                                        : 'border-border bg-card hover:bg-muted/40',
+                                                )}
+                                            >
+                                                <StudentAvatar
+                                                    photoURL={student.photoURL}
+                                                    studentId={student.id}
+                                                    name={fullName}
+                                                    className="h-9 w-9 shrink-0 rounded-full"
+                                                />
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                                        {fullName}
+                                                    </p>
+                                                    <p className="text-[13px] font-black tabular-nums text-foreground font-sukhumvit">
+                                                        {student.studentCode || '—'}
+                                                    </p>
+                                                </div>
+                                                <span
+                                                    className={cn(
+                                                        'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-black',
+                                                        selected
+                                                            ? 'border-primary bg-primary text-primary-foreground'
+                                                            : 'border-border text-transparent',
+                                                    )}
+                                                    aria-hidden
+                                                >
+                                                    ✓
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="shrink-0 border-t border-border px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                            <Button
+                                type="button"
+                                disabled={drawerSelectedIds.size === 0 || isProcessing || !selectedClassroomId}
+                                onClick={() => void confirmAddStudentsToRoom()}
+                                className="h-10 w-full rounded-xl font-bold"
+                            >
+                                {isProcessing
+                                    ? 'กำลังบันทึก...'
+                                    : drawerSelectedIds.size > 0
+                                        ? `เพิ่ม ${drawerSelectedIds.size} คนเข้าห้อง`
+                                        : 'เลือกนักเรียน'}
+                            </Button>
+                        </div>
+                    </div>
+                </DrawerContent>
+            </Drawer>
+
+            <Drawer
+                open={curriculumDrawerOpen}
+                onOpenChange={(open) => {
+                    setCurriculumDrawerOpen(open);
+                    if (!open) {
+                        setDrawerCurriculumId(null);
+                        setCurriculumSearch('');
+                        setCurriculumFilterYear('');
+                        setCurriculumFilterDept('');
+                        setCurriculumFilterGrade('');
+                    }
+                }}
+                direction="right"
+            >
+                <DrawerContent className={ASSIGN_DRAWER_CONTENT}>
+                    <div className={ASSIGN_DRAWER_PANEL}>
+                        <DrawerHeader className="px-4 pb-2">
+                            <div className="relative flex min-h-10 items-center justify-center">
+                                <DrawerTitle className="text-base font-black text-foreground font-sukhumvit">
+                                    มอบหมายหลักสูตร
+                                </DrawerTitle>
+                                <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setCurriculumDrawerOpen(false)}
+                                        className={DRAWER_HEADER_ICON_BTN}
+                                        aria-label="ปิด"
+                                    >
+                                        <HiXMark className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            </div>
+                            {selectedClassroom && (
+                                <p className="mt-1 text-center text-[11px] font-bold text-muted-foreground font-sukhumvit">
+                                    {selectedClassroom.className}
+                                    {selectedClassroom.gradeLevel ? ` · ${selectedClassroom.gradeLevel}` : ''}
+                                </p>
+                            )}
+                        </DrawerHeader>
+
+                        <div className="space-y-2 px-4 pb-3">
+                            <div className="flex h-10 items-center gap-2 rounded-xl border-none bg-slate-50/70 px-3">
+                                <HiMagnifyingGlass className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                <input
+                                    value={curriculumSearch}
+                                    onChange={(e) => setCurriculumSearch(e.target.value)}
+                                    placeholder="ค้นหาหลักสูตร..."
+                                    className="min-w-0 flex-1 bg-transparent text-xs font-bold text-foreground outline-none placeholder:text-muted-foreground font-sukhumvit"
+                                />
+                            </div>
+                            <div className="flex h-9 items-center rounded-full border border-border bg-muted/50 px-1 shadow-sm">
+                                <PanelCapsuleSelect
+                                    value={curriculumFilterYear}
+                                    onChange={setCurriculumFilterYear}
+                                    placeholder="ทุกปีการศึกษา"
+                                    options={ACADEMIC_YEARS.map((y) => ({
+                                        value: y,
+                                        label: `ปี ${y}`,
+                                    }))}
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <div className="flex h-9 items-center rounded-full border border-border bg-muted/50 px-1 shadow-sm">
+                                    <PanelCapsuleSelect
+                                        value={curriculumFilterDept}
+                                        onChange={(v) => {
+                                            setCurriculumFilterDept((v || '') as Department | '');
+                                            setCurriculumFilterGrade('');
+                                        }}
+                                        placeholder="ทุกแผนก"
+                                        options={(
+                                            Object.entries(DEPARTMENT_CONFIG) as [Department, (typeof DEPARTMENT_CONFIG)[Department]][]
+                                        ).map(([id, cfg]) => ({ value: id, label: cfg.label }))}
+                                    />
+                                </div>
+                                <div className="flex h-9 items-center rounded-full border border-border bg-muted/50 px-1 shadow-sm">
+                                    <PanelCapsuleSelect
+                                        value={curriculumFilterGrade}
+                                        onChange={setCurriculumFilterGrade}
+                                        placeholder="ทุกระดับ"
+                                        options={curriculumDrawerGradeOptions.map((g) => ({ value: g, label: g }))}
+                                    />
+                                </div>
+                            </div>
+                            {hasCurriculumDrawerFilters && (
+                                <button
+                                    type="button"
+                                    onClick={clearCurriculumDrawerFilters}
+                                    className="w-full rounded-xl py-2 text-[12px] font-black text-destructive transition-colors hover:bg-destructive/5 font-sukhumvit"
+                                >
+                                    ล้างตัวกรอง
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 scrollbar-hide">
+                            {curriculumDrawerCandidates.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+                                    <HiOutlineBookOpen className="h-8 w-8 text-muted-foreground/40" />
+                                    <p className="text-[13px] font-bold text-muted-foreground font-sukhumvit">
+                                        ไม่พบหลักสูตร
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col gap-2">
+                                    <p className="px-0.5 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                                        {curriculumDrawerCandidates.length} หลักสูตร
+                                    </p>
+                                    {curriculumDrawerCandidates.map((pkg) => {
+                                        const selected = drawerCurriculumId === pkg.id;
+                                        const current = selectedClassroom?.curriculumPackageId === pkg.id;
+                                        return (
+                                            <button
+                                                key={pkg.id}
+                                                type="button"
+                                                onClick={() => setDrawerCurriculumId(pkg.id)}
+                                                className={cn(
+                                                    'flex w-full items-center gap-3 rounded-2xl border px-3 py-2.5 text-left transition-colors',
+                                                    selected
+                                                        ? 'border-primary/30 bg-primary/5'
+                                                        : 'border-border bg-card hover:bg-muted/40',
+                                                )}
+                                            >
+                                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-muted/60 text-muted-foreground">
+                                                    <HiOutlineBookOpen className="h-4 w-4" />
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                                        {pkg.name || pkg.id}
+                                                    </p>
+                                                    <p className="truncate text-[11px] font-medium text-muted-foreground font-sarabun">
+                                                        {[pkg.versionName, pkg.gradeLevel || pkg.assignedGrades?.join(', ')]
+                                                            .filter(Boolean)
+                                                            .join(' · ') || '—'}
+                                                        {current ? ' · ใช้อยู่' : ''}
+                                                    </p>
+                                                </div>
+                                                <span
+                                                    className={cn(
+                                                        'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-black',
+                                                        selected
+                                                            ? 'border-primary bg-primary text-primary-foreground'
+                                                            : 'border-border text-transparent',
+                                                    )}
+                                                    aria-hidden
+                                                >
+                                                    ✓
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="shrink-0 border-t border-border px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                            <Button
+                                type="button"
+                                disabled={!drawerCurriculumId || !selectedClassroomId}
+                                onClick={() => void confirmAssignCurriculum()}
+                                className="h-10 w-full rounded-xl font-bold"
+                            >
+                                {drawerCurriculumId ? 'มอบหมายหลักสูตร' : 'เลือกหลักสูตร'}
+                            </Button>
+                        </div>
+                    </div>
+                </DrawerContent>
+            </Drawer>
         </div>
     );
 }

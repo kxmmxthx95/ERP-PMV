@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { HiOutlineFunnel } from 'react-icons/hi2';
+import { HiOutlineFunnel, HiXMark } from 'react-icons/hi2';
 import {
   Drawer,
+  DrawerClose,
   DrawerContent,
   DrawerDescription,
   DrawerFooter,
@@ -9,6 +10,8 @@ import {
   DrawerTitle,
 } from '@/components/ui/drawer';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
 import type { Department } from '@/types/curriculum';
 
 export const EXAM_DEPT_FILTER_OPTIONS = [
@@ -35,16 +38,13 @@ export function ExamMobileFilterTriggerButton({
     <button
       type="button"
       onClick={onClick}
-      className={cn(
-        'pointer-events-auto relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50',
-        className,
-      )}
+      className={cn(HEADER_ICON_BTN, 'pointer-events-auto', className)}
       title={title}
       aria-label={title}
     >
-      <HiOutlineFunnel className="h-4 w-4" />
+      <HiOutlineFunnel size={16} />
       {hasActiveFilters && (
-        <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-rose-500" aria-hidden />
+        <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-destructive" aria-hidden />
       )}
     </button>
   );
@@ -98,10 +98,24 @@ export function ExamMobileFilterDrawer({
         )}
       >
         <DrawerHeader className={isSide ? 'text-left' : 'text-center'}>
-          <DrawerTitle className="text-base font-black text-slate-900">{title}</DrawerTitle>
-          {description && (
-            <DrawerDescription className="text-xs text-slate-500">{description}</DrawerDescription>
-          )}
+          <div className="flex items-start justify-between gap-3">
+            <div className={cn('min-w-0 flex-1', !isSide && 'text-center')}>
+              <DrawerTitle className="text-base font-black text-slate-900">{title}</DrawerTitle>
+              {description && (
+                <DrawerDescription className="text-xs text-slate-500">{description}</DrawerDescription>
+              )}
+            </div>
+            <DrawerClose asChild>
+              <button
+                type="button"
+                className={HEADER_ICON_BTN}
+                title="หุบ"
+                aria-label="หุบ"
+              >
+                <HiXMark size={16} />
+              </button>
+            </DrawerClose>
+          </div>
         </DrawerHeader>
         <div className={cn('space-y-5 px-4', isSide && 'flex-1 overflow-y-auto')}>{children}</div>
         {footer && <DrawerFooter className="flex-row gap-2">{footer}</DrawerFooter>}
@@ -112,13 +126,9 @@ export function ExamMobileFilterDrawer({
 
 export function ExamFilterShowResultsButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="h-11 flex-1 rounded-xl bg-slate-900 text-[13px] font-black text-white shadow-md transition-colors hover:bg-slate-800"
-    >
+    <Button type="button" onClick={onClick} className="h-11 flex-1 text-[13px] font-black">
       แสดงผล
-    </button>
+    </Button>
   );
 }
 

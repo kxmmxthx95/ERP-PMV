@@ -10,7 +10,7 @@ import {
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import { useSchedule } from '@/hooks/useSchedule';
-import type { ClassRoom, NewClassRoom, ClassRoomCard } from '@/types/class';
+import type { ClassRoom, NewClassRoom, ClassRoomCard, EnrolledCourse } from '@/types/class';
 import { GRADE_LEVEL_ORDER } from '@/types/class';
 import type { Department } from '@/types/curriculum';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
@@ -99,6 +99,16 @@ export const SUBJECT_GROUPS = Object.values(SUBJECT_GROUP_CONFIG);
 const TEACHING_PERIODS_PER_WEEK = (PERIOD_COUNT - 1) * 5; // 8 × 5 = 40 คาบ
 void LUNCH_PERIOD; // used in calculation above
 const CACHE_CLASSROOMS = 'cache:classroom-manager:classes';
+
+/** flatten ครูผู้สอนทุกคนใน enrolledCourses — เก็บลง teacherIds เพื่อ query ตรงด้วย array-contains */
+function deriveTeacherIds(enrolledCourses: EnrolledCourse[]): string[] {
+  const ids = new Set<string>();
+  enrolledCourses.forEach((ec) => {
+    const id = String(ec.teacherId ?? '').trim();
+    if (id) ids.add(id);
+  });
+  return [...ids];
+}
 
 function computeEnrollmentCounts(
   enrollmentDocs: EnrollmentLike[],
@@ -236,6 +246,7 @@ export function useClassroomManager() {
   // ── CRUD ──────────────────────────────────────────────────────────────────────
 
   const addClass = async (data: NewClassRoom): Promise<ClassRoom> => {
+    const enrolledCourses = data.enrolledCourses ?? [];
     const newClassData = {
       ...data,
       className: `${data.gradeLevel}/${data.roomNumber}`,
@@ -244,7 +255,8 @@ export function useClassroomManager() {
       capacity: data.maxStudents,
       department: data.departmentId,
       homeroomTeacherIds: data.homeroomTeacherIds ?? (data.homeroomTeacherId ? [data.homeroomTeacherId] : []),
-      enrolledCourses: data.enrolledCourses ?? [],
+      enrolledCourses,
+      teacherIds: deriveTeacherIds(enrolledCourses),
       createdAt: new Date().toISOString().slice(0, 10),
     };
     const docRef = await addDoc(collection(db, 'classes'), newClassData);
@@ -254,7 +266,7 @@ export function useClassroomManager() {
 
   const updateClass = async (id: string, data: Partial<Omit<ClassRoom, 'id' | 'createdAt'>>) => {
     const updateData = { ...data };
-    
+
     // Sync alias fields if their primary fields are being updated
     if (data.academicYearId) (updateData as any).academicYear = data.academicYearId;
     if (data.maxStudents !== undefined) (updateData as any).capacity = data.maxStudents;
@@ -271,6 +283,12 @@ export function useClassroomManager() {
       );
       updateData.homeroomTeacherIds = normalizedIds;
       updateData.homeroomTeacherId = normalizedIds[0] ?? '';
+    }
+
+    // teacherIds เป็น field ที่ derive จาก enrolledCourses — sync ทุกครั้งที่ enrolledCourses เปลี่ยน
+    // (ใช้ query "ห้องที่ครูคนนี้สอน" ตรงๆ แทนโหลดทั้ง collection มาสแกน enrolledCourses ทีละห้อง)
+    if (data.enrolledCourses !== undefined) {
+      updateData.teacherIds = deriveTeacherIds(data.enrolledCourses);
     }
 
     await updateDoc(doc(db, 'classes', id), updateData as any);

@@ -91,6 +91,11 @@ export function gpaStyle(gpa: number): { text: string; bg: string } {
   return { text: '#dc2626', bg: '#fee2e2' };
 }
 
+/** Map a 0–100 category/total % to the same color scale as GPA pills. */
+export function percentScoreStyle(percent: number): { text: string; bg: string } {
+  return gpaStyle((categoryScoreToPercent(percent) / 100) * 4);
+}
+
 export function isPassingGpa(gpa: number): boolean {
   return gpa >= 1;
 }

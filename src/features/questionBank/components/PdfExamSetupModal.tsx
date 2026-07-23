@@ -56,10 +56,11 @@ interface Props {
   set: QuestionSet;
   questions: Question[];
   onSavePdfMeta: (patch: Pick<QuestionSet, 'examPdfUrl' | 'examPdfFileName' | 'pdfOptionCount' | 'examPdfHiddenPages'>) => Promise<void>;
+  /** คืน false = ผู้ใช้ยกเลิก (เช่น ปิด dialog เตือนห้องสอบ active) — ไม่ต้องปิด sheet */
   onSaveAnswerKey: (
     optionCount: PdfOptionCount,
     entries: PdfAnswerKeyEntry[],
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }
 
 const PDF_OPTION_GRID_COLS: Record<PdfOptionCount, string> = {
@@ -386,8 +387,8 @@ export default function PdfExamSetupModal({
     setIsSaving(true);
     try {
       await onSavePdfMeta(buildPdfMetaPatch());
-      await onSaveAnswerKey(optionCount, entries);
-      onClose();
+      const saved = await onSaveAnswerKey(optionCount, entries);
+      if (saved) onClose();
     } finally {
       setIsSaving(false);
     }

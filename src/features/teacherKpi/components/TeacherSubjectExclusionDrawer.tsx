@@ -124,6 +124,14 @@ export function TeacherSubjectExclusionDrawer({
                       )}
                       {' '}({subject.completedSessions}/{subject.expectedSessions} คาบ)
                     </p>
+                    <span
+                      className={cn(
+                        'mt-1 inline-block rounded-full px-2 py-0.5 font-sukhumvit text-[9px] font-black uppercase tracking-wide',
+                        subject.inSchedule ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600',
+                      )}
+                    >
+                      {subject.inSchedule ? 'อยู่ในตารางสอนแล้ว' : 'ยังไม่มีในตารางสอน'}
+                    </span>
                   </div>
                   <span
                     className={cn(

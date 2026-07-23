@@ -1,11 +1,15 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  GraduationCap, ChevronDown, Settings2, RefreshCw, BookOpen, AlertCircle, ClipboardList,
-  ArrowLeft, Users, TrendingUp, Monitor, Link2, Link2Off,
+  GraduationCap, RefreshCw, AlertCircle,
+  ArrowLeft, Link2, Link2Off,
 } from 'lucide-react';
-import { HiBookOpen, HiAdjustmentsHorizontal, HiClipboardDocumentList, HiCalendarDays, HiBars3 } from 'react-icons/hi2';
+import {
+  HiBookOpen, HiAdjustmentsHorizontal, HiClipboardDocumentList, HiCalendarDays,
+  HiBars3, HiOutlineFunnel, HiChevronRight, HiMagnifyingGlass, HiXMark, HiArrowLeft,
+  HiAcademicCap,
+} from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
 import { toast } from 'sonner';
 import { collection, doc, getDocs, query, updateDoc, where } from 'firebase/firestore';
@@ -18,12 +22,43 @@ import { rawPointsToPercent, averagePercentScores } from '@/types/grades';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import GradeTable from './components/GradeTable';
+import ExamRoomScoreTable, { type ExamRoomScoreRow } from './components/ExamRoomScoreTable';
 import GradeConfigPanel from './components/GradeConfigPanel';
 import StudentGradeBookPanel from './components/StudentGradeBookPanel';
+import AttendanceDateRangeFilter, { type AttendanceDateRange } from './components/AttendanceDateRangeFilter';
+import {
+  SubjectFolderCard,
+  SubjectFolderCardsGridSkeleton,
+} from '@/components/SubjectFolderCard';
+import GradeBookClassSidebar from './components/GradeBookClassSidebar';
+import SidebarCollapseButton from './components/SidebarCollapseButton';
+import {
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
+import { Skeleton } from '@/components/ui/skeleton';
 import { GLASS } from '@/components/layouts/PortalLayout';
 import { cn } from '@/lib/utils';
+import { getLocalDateString } from '@/lib/dateUtils';
+import { Button } from '@/components/ui/button';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
+import {
+  DEFAULT_COLOR_ID,
+  GRADE_BOOK_FOLDER_COLOR_KEY,
+  loadFolderCardColors,
+  saveFolderCardColors,
+  type FolderCardColorId,
+} from '@/lib/subjectFolderCardColors';
+import { getClassesByYearStore } from '@/lib/firestoreShared/studentSummaryStore';
+import { teachersCollectionStore } from '@/lib/firestoreShared/teachersStore';
+import {
+  ExamFilterShowResultsButton,
+  ExamMobileFilterDrawer,
+} from '@/features/exam/components/ExamMobileFilterMenuButton';
 import type { GradeWeightConfig } from '@/types/grades';
-import { CATEGORY_CONFIG, DEPARTMENT_CONFIG, type Department, type Subject } from '@/types/curriculum';
+import { type Department, type Subject } from '@/types/curriculum';
 import { GRADE_LEVEL_ORDER } from '@/types/class';
 import { matchesTeacherIdentity } from '@/lib/teachers/teacherIdentity';
 import {
@@ -40,8 +75,10 @@ import type { ExamRoom, ExamAttempt } from '@/types/exam';
 
 type Tab = 'table' | 'config' | 'exams' | 'attendance';
 
+const GRADE_BOOK_FEATURE_TITLE = 'สมุดคะแนน';
+
 const GRADE_BOOK_MENU = {
-  label: 'สมุดคะแนน',
+  label: GRADE_BOOK_FEATURE_TITLE,
   icon: GraduationCap,
 };
 
@@ -51,6 +88,99 @@ const GRADE_BOOK_TAB_CONFIG: Record<Tab, { label: string; icon: IconType }> = {
   exams: { label: 'คะแนนการสอบ', icon: HiClipboardDocumentList },
   attendance: { label: 'การเข้าเรียน', icon: HiCalendarDays },
 };
+
+function GradeBookMobileRowSkeleton() {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <Skeleton className="h-9 w-9 shrink-0 rounded-full bg-muted" />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <Skeleton className="h-4 w-[72%] rounded bg-muted" />
+            <Skeleton className="h-3.5 w-[40%] rounded bg-muted/70" />
+          </div>
+        </div>
+        <Skeleton className="h-6 w-14 shrink-0 rounded-full bg-muted/70" />
+      </div>
+      <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-border pt-2.5">
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className="space-y-1">
+            <Skeleton className="h-3 w-[80%] rounded bg-muted/60" />
+            <Skeleton className="h-4 w-10 rounded bg-muted" />
+          </div>
+        ))}
+      </div>
+      <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
+        <Skeleton className="h-3 w-12 rounded bg-muted/60" />
+        <Skeleton className="h-4 w-10 rounded bg-muted" />
+      </div>
+    </div>
+  );
+}
+
+function GradeBookTableSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="flex flex-col gap-3" aria-busy="true" aria-label="กำลังโหลดตารางคะแนน">
+      <div className="flex flex-col gap-2.5 px-0.5 md:hidden">
+        {Array.from({ length: Math.min(rows, 6) }, (_, i) => (
+          <GradeBookMobileRowSkeleton key={i} />
+        ))}
+      </div>
+      <div className="hidden rounded-2xl border border-border bg-card md:block">
+        <Skeleton className="h-11 rounded-none border-b border-border bg-muted/60" />
+        {Array.from({ length: rows }, (_, i) => (
+          <div key={i} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0">
+            <Skeleton className="h-4 w-14 shrink-0 rounded bg-muted" />
+            <Skeleton className="h-9 w-9 shrink-0 rounded-full bg-muted" />
+            <Skeleton className="h-4 min-w-0 flex-1 rounded bg-muted" />
+            <Skeleton className="h-4 w-10 rounded bg-muted/70" />
+            <Skeleton className="h-4 w-10 rounded bg-muted/70" />
+            <Skeleton className="h-4 w-10 rounded bg-muted/70" />
+            <Skeleton className="h-6 w-12 rounded-full bg-muted/70" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GradeConfigPanelSkeleton() {
+  return (
+    <div className="flex flex-col gap-6" aria-busy="true" aria-label="กำลังโหลดตั้งค่าเกรด">
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className="space-y-1">
+              <Skeleton className="h-3 w-[70%] rounded bg-muted/60" />
+              <Skeleton className="h-10 w-full rounded-xl bg-muted" />
+            </div>
+          ))}
+        </div>
+        <Skeleton className="h-2 w-full rounded-full bg-muted" />
+      </div>
+      <div className="space-y-3">
+        <Skeleton className="h-3 w-36 rounded bg-muted/60" />
+        <div className="overflow-hidden rounded-2xl border border-border bg-card">
+          <Skeleton className="h-11 rounded-none border-b border-border bg-muted/40" />
+          {Array.from({ length: 5 }, (_, i) => (
+            <Skeleton key={i} className="mx-4 my-3 h-9 rounded-xl bg-muted/70" />
+          ))}
+        </div>
+      </div>
+      <Skeleton className="h-10 w-full rounded-xl bg-muted" />
+    </div>
+  );
+}
+
+function ExamCardsSkeleton({ count = 4 }: { count?: number }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-hidden>
+      {Array.from({ length: count }, (_, i) => (
+        <Skeleton key={i} className="h-28 rounded-2xl bg-slate-100" />
+      ))}
+    </div>
+  );
+}
 
 /** Whether online exam room scores should flow into the grade table. */
 function shouldSyncExamRoomScores(room: ExamRoom): boolean {
@@ -93,36 +223,6 @@ const EXAM_TYPE_COLOR: Record<ExamType, { text: string; bg: string }> = {
   makeup: { text: '#059669', bg: '#d1fae5' },
 };
 
-function SelectField({
-  label, value, onChange, children, disabled = false,
-}: {
-  label?: string;
-  value: string;
-  onChange: (v: string) => void;
-  children: React.ReactNode;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      {label && (
-        <label className="h-[50px] text-[10px] font-black text-slate-500 uppercase tracking-widest font-sukhumvit">{label}</label>
-      )}
-      <div className="relative">
-        <select
-          value={value}
-          disabled={disabled}
-          onChange={e => onChange(e.target.value)}
-          className="w-full min-w-0 h-9 sm:h-10 rounded-2xl sm:rounded-3xl pl-2 sm:pl-3 pr-6 sm:pr-8 text-[10px] sm:text-xs font-medium font-sarabun appearance-none outline-none disabled:opacity-50 disabled:cursor-not-allowed truncate"
-          style={{ background: 'rgba(255,255,255,0.7)', border: '1px solid rgba(200,180,255,0.4)' }}
-        >
-          {children}
-        </select>
-        <ChevronDown size={12} className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-      </div>
-    </div>
-  );
-}
-
 export default function GradeBookPage() {
   const { user, role } = useAuth();
   const { year: academicYear, activeSemester, activeYear } = useActiveAcademicYear();
@@ -130,15 +230,44 @@ export default function GradeBookPage() {
   const teachingMgr = useTeachingManager(user?.uid ?? '', canViewAllSubjects);
   const gradeBook = useGradeBook();
   const curriculum = useCurriculum();
-  const { coursesByVersion, loadCoursesForVersion, versions } = useCurriculumVersioned();
+  const {
+    coursesByVersion,
+    loadCoursesForVersion,
+    versions,
+    isLoading: curriculumVersionsLoading,
+  } = useCurriculumVersioned();
+
+  const yearId = academicYear ? String(academicYear) : '';
+  const classesStore = getClassesByYearStore(yearId || '_');
+  const classesReady = useSyncExternalStore(
+    classesStore.subscribe,
+    classesStore.getReady,
+    () => true,
+  );
+  const teachersReady = useSyncExternalStore(
+    teachersCollectionStore.subscribe,
+    teachersCollectionStore.getReady,
+    () => true,
+  );
+
+  // Same browse split as แผนการสอน: teacher (or admin linked as teacher) → folder grid;
+  // pure admin/sysadmin → class sidebar.
+  const showPersonalSubjectFolders =
+    role === 'teacher' || teachingMgr.currentTeacher != null;
+  const showAdminClassBrowser = canViewAllSubjects && !showPersonalSubjectFolders;
 
   const [filterDepartment, setFilterDepartment] = useState<string>('');
   const [filterGradeLevel, setFilterGradeLevel] = useState<string>('');
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedSubjectId, setSelectedSubjectId] = useState('');
   const [selectedSemester, setSelectedSemester] = useState<1 | 2>((activeSemester as 1 | 2) ?? 1);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const [activeTab, setActiveTab] = useState<Tab>('table');
+  const [attendanceDateRange, setAttendanceDateRange] = useState<AttendanceDateRange>(() => ({
+    from: '',
+    to: getLocalDateString(),
+  }));
 
   const [examLoading, setExamLoading] = useState(false);
   const [examError, setExamError] = useState<string | null>(null);
@@ -157,20 +286,64 @@ export default function GradeBookPage() {
   const [headerCenterMobileEl, setHeaderCenterMobileEl] = useState<HTMLElement | null>(null);
   const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
   const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
+  const [headerRightActionsEl, setHeaderRightActionsEl] = useState<HTMLElement | null>(null);
+  const [breadcrumbExtraEl, setBreadcrumbExtraEl] = useState<HTMLElement | null>(null);
+  const [breadcrumbPageEl, setBreadcrumbPageEl] = useState<HTMLElement | null>(null);
   const [mobileTabMenuOpen, setMobileTabMenuOpen] = useState(false);
-  const [semesterMenuOpen, setSemesterMenuOpen] = useState(false);
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
+  const [subjectSearchQuery, setSubjectSearchQuery] = useState('');
+  const [folderColors, setFolderColors] = useState<Record<string, FolderCardColorId>>(() =>
+    loadFolderCardColors(GRADE_BOOK_FOLDER_COLOR_KEY),
+  );
 
   const handleBackFromSubject = useCallback(() => {
     setSelectedSubjectId('');
     setSelectedExamId('');
     setSelectedOnlineRoomId('');
-    if (role === 'teacher') setSelectedClassId('');
-  }, [role]);
+    if (showPersonalSubjectFolders) setSelectedClassId('');
+  }, [showPersonalSubjectFolders]);
+
+  // Personal folders: header back steps out of subject view → subject grid.
+  // Admin class browser: portal back goes to menu (sidebar handles class nav).
+  useEffect(() => {
+    if (!showPersonalSubjectFolders || !selectedSubjectId) return;
+
+    const isPortalBackButton = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      const btn = target.closest('button');
+      if (!btn) return false;
+      if (btn.id === 'portal-default-mobile-back') return true;
+      const title = btn.getAttribute('title') ?? '';
+      const label = btn.getAttribute('aria-label') ?? '';
+      return title === 'กลับไปเมนู' || title === 'กลับเมนู' || label === 'กลับไปเมนู';
+    };
+
+    const onClick = (e: MouseEvent) => {
+      if (!isPortalBackButton(e.target)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      handleBackFromSubject();
+    };
+
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [showPersonalSubjectFolders, selectedSubjectId, handleBackFromSubject]);
+
+  const setFolderColor = useCallback((key: string, id: FolderCardColorId) => {
+    setFolderColors((prev) => {
+      const next = { ...prev, [key]: id };
+      saveFolderCardColors(next, GRADE_BOOK_FOLDER_COLOR_KEY);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     setHeaderCenterMobileEl(document.getElementById('header-portal-center-mobile'));
     setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
     setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
+    setHeaderRightActionsEl(document.getElementById('header-portal-right-actions'));
+    setBreadcrumbExtraEl(document.getElementById('header-portal-breadcrumb-extra'));
+    setBreadcrumbPageEl(document.getElementById('header-portal-breadcrumb-page'));
   }, []);
 
   useEffect(() => {
@@ -178,7 +351,6 @@ export default function GradeBookPage() {
     const onChange = () => {
       setIsMdOrBelow(!mq.matches);
       setMobileTabMenuOpen(false);
-      setSemesterMenuOpen(false);
     };
     onChange();
     mq.addEventListener('change', onChange);
@@ -187,18 +359,17 @@ export default function GradeBookPage() {
 
   useEffect(() => {
     setMobileTabMenuOpen(false);
-    setSemesterMenuOpen(false);
   }, [activeTab, selectedSubjectId]);
 
   useEffect(() => {
     const defaultBack = document.getElementById('portal-default-mobile-back');
     if (!defaultBack) return;
-    defaultBack.style.display = isMdOrBelow && selectedSubjectId ? 'none' : '';
-  }, [isMdOrBelow, selectedSubjectId]);
+    defaultBack.style.display = isMdOrBelow && showPersonalSubjectFolders && selectedSubjectId ? 'none' : '';
+  }, [isMdOrBelow, showPersonalSubjectFolders, selectedSubjectId]);
 
   // Preload versioned curriculum courses so subject names resolve on teacher cards
   useEffect(() => {
-    const classSource = role === 'teacher' ? teachingMgr.yearClasses : teachingMgr.classes;
+    const classSource = showPersonalSubjectFolders ? teachingMgr.yearClasses : teachingMgr.classes;
     const versionIds = new Set<string>();
     for (const cls of classSource) {
       const pkgId = cls.curriculumPackageId ?? (cls as { curriculumId?: string }).curriculumId;
@@ -210,11 +381,29 @@ export default function GradeBookPage() {
         loadCoursesForVersion(versionId);
       }
     });
-  }, [teachingMgr.classes, teachingMgr.yearClasses, role, versions, coursesByVersion, loadCoursesForVersion]);
+  }, [teachingMgr.classes, teachingMgr.yearClasses, showPersonalSubjectFolders, versions, coursesByVersion, loadCoursesForVersion]);
+
+  const pendingCurriculumLoads = useMemo(() => {
+    const classSource = showPersonalSubjectFolders ? teachingMgr.yearClasses : teachingMgr.classes;
+    const needed = new Set<string>();
+    for (const cls of classSource) {
+      const pkgId = cls.curriculumPackageId ?? (cls as { curriculumId?: string }).curriculumId;
+      if (pkgId) needed.add(String(pkgId));
+    }
+    return [...needed].filter(
+      (id) => versions.some((v) => v.id === id) && !coursesByVersion[id],
+    );
+  }, [teachingMgr.yearClasses, teachingMgr.classes, showPersonalSubjectFolders, versions, coursesByVersion]);
+
+  const isSubjectGridLoading =
+    !classesReady
+    || curriculumVersionsLoading
+    || pendingCurriculumLoads.length > 0
+    || (showPersonalSubjectFolders && !teachersReady);
 
   const availableClasses = useMemo(() => {
-    const all = role === 'teacher' ? teachingMgr.yearClasses : teachingMgr.classes;
-    if (role === 'teacher' && teachingMgr.teacherIdentityKeys.size > 0) {
+    const all = showPersonalSubjectFolders ? teachingMgr.yearClasses : teachingMgr.classes;
+    if (showPersonalSubjectFolders && teachingMgr.teacherIdentityKeys.size > 0) {
       return all.filter(c =>
         (c.enrolledCourses ?? []).some(ec =>
           matchesTeacherIdentity(ec.teacherId, teachingMgr.teacherIdentityKeys),
@@ -222,13 +411,7 @@ export default function GradeBookPage() {
       );
     }
     return all;
-  }, [teachingMgr.classes, teachingMgr.yearClasses, teachingMgr.teacherIdentityKeys, role]);
-
-  const availableDepartments = useMemo(() => {
-    const depts = new Set<string>();
-    availableClasses.forEach(c => c.departmentId && depts.add(c.departmentId));
-    return Array.from(depts);
-  }, [availableClasses]);
+  }, [teachingMgr.classes, teachingMgr.yearClasses, teachingMgr.teacherIdentityKeys, showPersonalSubjectFolders]);
 
   const availableGrades = useMemo(() => {
     if (!filterDepartment) return [];
@@ -239,10 +422,39 @@ export default function GradeBookPage() {
     return Array.from(grades).sort((a, b) => (GRADE_LEVEL_ORDER[a] ?? 99) - (GRADE_LEVEL_ORDER[b] ?? 99));
   }, [availableClasses, filterDepartment]);
 
-  const filteredClasses = useMemo(() => {
+  const classOptions = useMemo(() => {
     if (!filterDepartment || !filterGradeLevel) return [];
-    return availableClasses.filter(c => c.departmentId === filterDepartment && c.gradeLevel === filterGradeLevel);
+    return availableClasses
+      .filter((c) => c.departmentId === filterDepartment && c.gradeLevel === filterGradeLevel)
+      .slice()
+      .sort((a, b) =>
+        (a.roomNumber || a.className).localeCompare(b.roomNumber || b.className, undefined, { numeric: true }),
+      );
   }, [availableClasses, filterDepartment, filterGradeLevel]);
+
+  const handleSelectDept = useCallback((dept: Department) => {
+    setFilterDepartment(dept);
+    setFilterGradeLevel('');
+    setSelectedClassId('');
+    setSelectedSubjectId('');
+    setSelectedExamId('');
+    setSelectedOnlineRoomId('');
+  }, []);
+
+  const handleSelectGrade = useCallback((level: string) => {
+    setFilterGradeLevel(level);
+    setSelectedClassId('');
+    setSelectedSubjectId('');
+    setSelectedExamId('');
+    setSelectedOnlineRoomId('');
+  }, []);
+
+  const handleSelectClass = useCallback((classId: string) => {
+    setSelectedClassId(classId);
+    setSelectedSubjectId('');
+    setSelectedExamId('');
+    setSelectedOnlineRoomId('');
+  }, []);
 
   const selectedClass = useMemo(
     () => availableClasses.find(c => c.id === selectedClassId) ?? null,
@@ -293,7 +505,7 @@ export default function GradeBookPage() {
     (selectedClass.enrolledCourses ?? []).forEach(ec => {
       const passSemester = ec.semester == null || ec.semester === selectedSemester;
       const passTeacher =
-        role !== 'teacher' ||
+        !showPersonalSubjectFolders ||
         matchesTeacherIdentity(ec.teacherId, teachingMgr.teacherIdentityKeys);
       if (passSemester && passTeacher) byId.add(ec.subjectId);
     });
@@ -302,16 +514,22 @@ export default function GradeBookPage() {
       .map(id => subjectById.get(id))
       .filter((s): s is Subject => Boolean(s))
       .sort((a, b) => (a.code || '').localeCompare(b.code || '') || a.name.localeCompare(b.name, 'th'));
-  }, [selectedClass, selectedSemester, role, teachingMgr.teacherIdentityKeys, subjectById]);
+  }, [selectedClass, selectedSemester, showPersonalSubjectFolders, teachingMgr.teacherIdentityKeys, subjectById]);
 
   const selectedSubject = useMemo(
     () => availableSubjects.find(s => s.id === selectedSubjectId) ?? null,
     [availableSubjects, selectedSubjectId],
   );
 
+  const breadcrumbSubjectLabel = selectedSubject && selectedClass
+    ? `${selectedSubject.name} · ${selectedClass.className}`
+    : selectedSubject
+      ? selectedSubject.name
+      : null;
+
   // For teacher role: one card per (class, subject) teaching assignment
   const myTeachingCards = useMemo(() => {
-    if (role !== 'teacher') return [];
+    if (!showPersonalSubjectFolders) return [];
     const cards: Array<{
       classId: string;
       className: string;
@@ -355,7 +573,18 @@ export default function GradeBookPage() {
       if (a.className !== b.className) return a.className.localeCompare(b.className, 'th');
       return a.subjectCode.localeCompare(b.subjectCode);
     });
-  }, [availableClasses, teachingMgr, role, selectedSemester, subjectById]);
+  }, [availableClasses, teachingMgr, showPersonalSubjectFolders, selectedSemester, subjectById]);
+
+  const filteredTeachingCards = useMemo(() => {
+    const q = subjectSearchQuery.trim().toLowerCase();
+    if (!q) return myTeachingCards;
+    return myTeachingCards.filter((card) =>
+      card.subjectName.toLowerCase().includes(q)
+      || card.className.toLowerCase().includes(q)
+      || card.subjectCode.toLowerCase().includes(q)
+      || card.gradeLevel.toLowerCase().includes(q),
+    );
+  }, [myTeachingCards, subjectSearchQuery]);
 
   const selectedExam = useMemo(
     () => subjectExams.find(ex => ex.id === selectedExamId) ?? null,
@@ -368,6 +597,8 @@ export default function GradeBookPage() {
       studentId: student.id,
       studentName: `${student.prefix}${student.firstName} ${student.lastName}`,
       studentCode: student.studentCode ?? '',
+      photoURL: student.photoURL,
+      gender: student.gender,
     }));
     const scoreMap = new Map((examScoresByExamId[selectedExamId] ?? []).map(sc => [sc.studentId, sc]));
     return students.map(st => {
@@ -380,6 +611,21 @@ export default function GradeBookPage() {
       };
     });
   }, [selectedClassId, selectedExamId, teachingMgr, examScoresByExamId]);
+
+  const examRoomScoreTableRows = useMemo((): ExamRoomScoreRow[] => {
+    if (!selectedExam) return [];
+    return selectedExamRows.map((row) => ({
+      studentId: row.studentId,
+      studentName: row.studentName,
+      studentCode: row.studentCode,
+      photoURL: row.photoURL,
+      gender: row.gender,
+      status: row.absent ? 'absent' : 'present',
+      scorePercent: typeof row.score === 'number'
+        ? Math.round(rawPointsToPercent(row.score, selectedExam.maxScore))
+        : null,
+    }));
+  }, [selectedExamRows, selectedExam]);
 
   const examCards = useMemo(() => {
     return subjectExams.map(exam => {
@@ -401,18 +647,11 @@ export default function GradeBookPage() {
 
   // computed: online exam room cards
   const onlineRoomCards = useMemo(() => {
-    return onlineRooms.map(room => {
-      const attempts = onlineAttemptsByRoomId[room.id] ?? [];
-      const gradedAttempts = attempts.filter(a => resolveAttemptTotalScore(a) !== null);
-      const classStudentCount = teachingMgr.getStudentsForClass(room.classId ?? '').length;
-      const totalCount = attempts.length > 0 ? attempts.length : classStudentCount;
-      const avg = gradedAttempts.length > 0
-        ? Math.round((gradedAttempts.reduce((s, a) => s + (a.score as number), 0) / gradedAttempts.length) * 10) / 10
-        : null;
-      const maxScore = room.totalPoints ?? 100;
-      return { ...room, gradedCount: gradedAttempts.length, totalCount, avgScore: avg, maxScore };
-    });
-  }, [onlineRooms, onlineAttemptsByRoomId, teachingMgr]);
+    return onlineRooms.map(room => ({
+      ...room,
+      maxScore: room.totalPoints ?? 100,
+    }));
+  }, [onlineRooms]);
 
   // computed: rows for selected online room detail
   const selectedOnlineRoom = useMemo(
@@ -450,6 +689,8 @@ export default function GradeBookPage() {
         studentId: student.id,
         studentName: `${student.prefix}${student.firstName} ${student.lastName}`,
         studentCode: student.studentCode ?? '',
+        photoURL: student.photoURL,
+        gender: student.gender,
         status: att?.status ?? null,
         score: resolveAttemptTotalScore(att),
         scorePercent: scorePercent !== null ? Math.round(scorePercent) : null,
@@ -457,6 +698,22 @@ export default function GradeBookPage() {
       };
     });
   }, [selectedOnlineRoomId, selectedClassId, teachingMgr, onlineAttemptsByRoomId, onlineRooms]);
+
+  const onlineRoomScoreTableRows = useMemo((): ExamRoomScoreRow[] => {
+    return selectedOnlineRoomRows.map((row) => ({
+      studentId: row.studentId,
+      studentName: row.studentName,
+      studentCode: row.studentCode,
+      photoURL: row.photoURL,
+      gender: row.gender,
+      status: row.status === 'graded'
+        ? 'graded'
+        : row.status === 'submitted'
+          ? 'submitted'
+          : 'none',
+      scorePercent: row.scorePercent,
+    }));
+  }, [selectedOnlineRoomRows]);
 
   const classRosterKey = useMemo(() => {
     if (!selectedClassId) return '';
@@ -817,10 +1074,60 @@ export default function GradeBookPage() {
 
   const activeTabConfig = GRADE_BOOK_TAB_CONFIG[activeTab];
   const ActiveTabIcon = activeTabConfig.icon;
+  const gradeBookMatchesSelection = Boolean(
+    gradeBook.config
+    && gradeBook.config.classId === selectedClassId
+    && gradeBook.config.subjectId === selectedSubjectId
+    && gradeBook.config.semester === selectedSemester
+    && String(gradeBook.config.academicYearId) === String(academicYear),
+  );
+  const isGradeBookContentLoading = Boolean(
+    selectedSubjectId
+    && activeTab !== 'exams'
+    && !gradeBook.error
+    && (
+      gradeBook.isLoading
+      || !teachingMgr.isRosterDataLoaded
+      || !gradeBookMatchesSelection
+    ),
+  );
   const showMobileTabSwitcher = Boolean(selectedSubjectId);
-  const showMobileSemesterButton = isMdOrBelow && !selectedSubjectId;
+  const attendanceDateFilter = activeTab === 'attendance' && selectedSubjectId ? (
+    <AttendanceDateRangeFilter
+      yearStartDate={activeYear?.startDate ?? ''}
+      yearEndDate={activeYear?.endDate ?? ''}
+      onRangeChange={setAttendanceDateRange}
+    />
+  ) : null;
+  const showTeacherSemesterFilter = showPersonalSubjectFolders && !selectedSubjectId;
+  const showClassFilterButton = showAdminClassBrowser && !selectedSubjectId;
+  const showFilterButton = showClassFilterButton || showTeacherSemesterFilter;
+  const defaultSemester = (activeSemester as 1 | 2) ?? 1;
+  const hasActiveFilters = showClassFilterButton
+    ? selectedSemester !== defaultSemester
+    : selectedSemester !== defaultSemester || subjectSearchQuery.trim().length > 0;
 
-  const mobileBackPortal = isMdOrBelow && selectedSubjectId && headerMobileBackEl && createPortal(
+  const openFilterDrawer = () => {
+    setFilterDrawerOpen(true);
+    setMobileTabMenuOpen(false);
+  };
+
+  const filterTriggerButton = (
+    <button
+      type="button"
+      onClick={openFilterDrawer}
+      className={HEADER_ICON_BTN}
+      title="ตัวกรอง"
+      aria-label="ตัวกรอง"
+    >
+      <HiOutlineFunnel size={16} />
+      {hasActiveFilters && (
+        <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-destructive" aria-hidden />
+      )}
+    </button>
+  );
+
+  const mobileBackPortal = isMdOrBelow && showPersonalSubjectFolders && selectedSubjectId && headerMobileBackEl && createPortal(
     <button
       type="button"
       onClick={handleBackFromSubject}
@@ -834,64 +1141,18 @@ export default function GradeBookPage() {
   );
 
   const mobileActionsPortal = isMdOrBelow && headerMobileActionsEl && createPortal(
-    <div className="pointer-events-auto relative flex items-center gap-1.5 lg:hidden">
-      {showMobileSemesterButton && (
-        <>
-          <button
-            type="button"
-            onClick={() => {
-              setSemesterMenuOpen((open) => !open);
-              setMobileTabMenuOpen(false);
-            }}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-800 shadow-sm transition-colors hover:bg-slate-50"
-            title={`ภาคเรียนที่ ${selectedSemester}`}
-            aria-label="เลือกภาคเรียน"
-            aria-expanded={semesterMenuOpen}
-          >
-            <span className="font-sukhumvit text-[11px] font-black tabular-nums">{selectedSemester}</span>
-          </button>
-
-          {semesterMenuOpen && (
-            <>
-              <button
-                type="button"
-                className="fixed inset-0 z-[90]"
-                aria-label="ปิดเมนูภาคเรียน"
-                onClick={() => setSemesterMenuOpen(false)}
-              />
-              <div className="absolute right-0 top-full z-[100] mt-1.5 w-44 rounded-2xl border border-slate-200 bg-white p-1 shadow-xl">
-                {[1, 2].map((sem) => {
-                  const isActive = selectedSemester === sem;
-                  return (
-                    <button
-                      key={sem}
-                      type="button"
-                      onClick={() => {
-                        setSelectedSemester(sem as 1 | 2);
-                        setSemesterMenuOpen(false);
-                      }}
-                      className={cn(
-                        'flex w-full items-center rounded-xl px-3 py-2.5 text-left font-sukhumvit text-[12px] font-bold transition-colors',
-                        isActive ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50',
-                      )}
-                    >
-                      ภาคเรียนที่ {sem}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </>
-      )}
+    <div className={cn('pointer-events-auto relative flex lg:hidden', HEADER_ICON_BTN_GROUP)}>
+      {showFilterButton && filterTriggerButton}
 
       {selectedSubjectId && (
         <>
+          {attendanceDateFilter}
+
           <motion.button
             type="button"
             whileTap={{ scale: 0.95 }}
             onClick={handleReload}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+            className={HEADER_ICON_BTN}
             title="โหลดข้อมูลใหม่"
             aria-label="โหลดข้อมูลใหม่"
           >
@@ -903,9 +1164,8 @@ export default function GradeBookPage() {
               type="button"
               onClick={() => {
                 setMobileTabMenuOpen((open) => !open);
-                setSemesterMenuOpen(false);
               }}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+              className={HEADER_ICON_BTN}
               title="เมนูแท็บ"
               aria-label="เปิดเมนูแท็บ"
               aria-expanded={mobileTabMenuOpen}
@@ -953,6 +1213,13 @@ export default function GradeBookPage() {
     headerMobileActionsEl,
   );
 
+  const desktopFilterPortal = !isMdOrBelow && headerRightActionsEl && createPortal(
+    <div className={cn('pointer-events-auto hidden lg:flex', HEADER_ICON_BTN_GROUP)}>
+      {showFilterButton && filterTriggerButton}
+    </div>,
+    headerRightActionsEl,
+  );
+
   const mobileHeaderPortal = isMdOrBelow && headerCenterMobileEl && createPortal(
     <div className="pointer-events-auto flex min-w-0 max-w-[calc(100vw-112px)] items-center justify-center lg:hidden">
       {showMobileTabSwitcher ? (
@@ -975,160 +1242,228 @@ export default function GradeBookPage() {
   );
 
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <div
+      className={cn(
+        'flex min-h-0 w-full flex-1 flex-col overflow-hidden font-sukhumvit',
+        'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+      )}
+    >
       {mobileHeaderPortal}
       {mobileBackPortal}
       {mobileActionsPortal}
-      {selectedClassId && selectedSubjectId && (
-        <motion.div
-          initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-          className="hidden md:flex rounded-xl p-4 flex-col gap-3 shrink-0"
-          style={GLASS}
-        >
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleBackFromSubject}
-              className="w-9 h-9 flex items-center justify-center rounded-2xl bg-white/60 text-slate-500 hover:bg-white/80 transition-colors shadow-sm shrink-0"
+      {desktopFilterPortal}
+      {breadcrumbPageEl && breadcrumbSubjectLabel && createPortal(
+        <BreadcrumbLink asChild>
+          <button
+            type="button"
+            onClick={handleBackFromSubject}
+            className="font-black text-slate-500 transition-colors hover:text-slate-800"
+            title="กลับไปเลือกรายวิชา"
+          >
+            {GRADE_BOOK_FEATURE_TITLE}
+          </button>
+        </BreadcrumbLink>,
+        breadcrumbPageEl,
+      )}
+      {breadcrumbExtraEl && breadcrumbSubjectLabel && createPortal(
+        <>
+          <BreadcrumbSeparator className="[&>svg]:size-3.5 text-slate-300">
+            <HiChevronRight />
+          </BreadcrumbSeparator>
+          <BreadcrumbItem className="min-w-0">
+            <BreadcrumbPage
+              className="max-w-[220px] truncate font-black text-slate-800"
+              title={breadcrumbSubjectLabel}
             >
-              <ArrowLeft size={16} />
-            </button>
-            <div className="hidden md:flex gap-1 p-1 rounded-2xl" style={{ background: 'rgba(241,245,249,0.8)' }}>
-              {([
-                { key: 'table' as Tab, icon: <BookOpen size={11} />, label: 'ตารางคะแนนรวม' },
-                { key: 'config' as Tab, icon: <Settings2 size={11} />, label: 'ตั้งค่าเกรด' },
-                { key: 'exams' as Tab, icon: <ClipboardList size={11} />, label: 'คะแนนการสอบ' },
-                { key: 'attendance' as Tab, icon: <HiCalendarDays size={11} />, label: 'การเข้าเรียน' },
-              ] as const).map(tab => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-[11px] font-bold font-sukhumvit transition-all"
-                  style={{
-                    background: activeTab === tab.key ? '#0f172a' : 'transparent',
-                    color: activeTab === tab.key ? '#fff' : '#64748b',
-                  }}
-                >
-                  {tab.icon} {tab.label}
-                </button>
-              ))}
-            </div>
-
-            <motion.button
-              whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-              onClick={handleReload}
-              className="ml-auto w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 transition-colors shrink-0"
-            >
-              <RefreshCw size={13} />
-            </motion.button>
-          </div>
-        </motion.div>
+              {breadcrumbSubjectLabel}
+            </BreadcrumbPage>
+          </BreadcrumbItem>
+        </>,
+        breadcrumbExtraEl,
       )}
 
-      <div className="flex-1 overflow-y-auto min-h-0 scrollbar-hide space-y-3">
-        {role !== 'teacher' && !selectedSubjectId && (
-          <div className="grid grid-cols-3 md:grid-cols-4 gap-1 sm:gap-2 min-w-0">
-            <SelectField
-              value={filterDepartment}
-              onChange={v => {
-                setFilterDepartment(v);
-                setFilterGradeLevel('');
-                setSelectedClassId('');
-                setSelectedSubjectId('');
-                setSelectedExamId('');
-              }}
-            >
-              <option value="">— เลือกแผนก —</option>
-              {availableDepartments.map(d => (
-                <option key={d} value={d}>{DEPARTMENT_CONFIG[d as Department]?.label ?? d}</option>
-              ))}
-            </SelectField>
-
-            <SelectField
-              value={filterGradeLevel}
-              disabled={!filterDepartment}
-              onChange={v => {
-                setFilterGradeLevel(v);
-                setSelectedClassId('');
-                setSelectedSubjectId('');
-                setSelectedExamId('');
-              }}
-            >
-              <option value="">— เลือกระดับชั้น —</option>
-              {availableGrades.map(g => (
-                <option key={g} value={g}>{g}</option>
-              ))}
-            </SelectField>
-
-            <SelectField
-              value={selectedClassId}
-              disabled={!filterDepartment || !filterGradeLevel}
-              onChange={v => {
-                setSelectedClassId(v);
-                setSelectedSubjectId('');
-                setSelectedExamId('');
-              }}
-            >
-              <option value="">— เลือกห้องเรียน —</option>
-              {filteredClasses.map(c => (
-                <option key={c.id} value={c.id}>{c.className}</option>
-              ))}
-            </SelectField>
-
-            <div className="hidden md:block">
-            <SelectField
-              value={String(selectedSemester)}
-              onChange={v => setSelectedSemester(Number(v) as 1 | 2)}
-            >
-              <option value="1">ภาคเรียนที่ 1</option>
-              <option value="2">ภาคเรียนที่ 2</option>
-            </SelectField>
+      {showFilterButton && (
+        <ExamMobileFilterDrawer
+          open={filterDrawerOpen}
+          onOpenChange={setFilterDrawerOpen}
+          direction="right"
+          title="ตัวกรองภาคเรียน"
+          description={
+            showTeacherSemesterFilter
+              ? 'เลือกภาคเรียน หรือค้นหาชื่อวิชา/ห้องเรียน'
+              : 'เลือกภาคเรียน'
+          }
+          footer={<ExamFilterShowResultsButton onClick={() => setFilterDrawerOpen(false)} />}
+        >
+          <div className="space-y-4">
+            <div>
+              <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-muted-foreground">ภาคเรียน</p>
+              <div className="grid grid-cols-2 gap-2">
+                {[1, 2].map((sem) => (
+                  <Button
+                    key={sem}
+                    type="button"
+                    variant={selectedSemester === sem ? 'default' : 'outline'}
+                    className="h-11 justify-start px-4"
+                    onClick={() => setSelectedSemester(sem as 1 | 2)}
+                  >
+                    ภาคเรียนที่ {sem}
+                  </Button>
+                ))}
+              </div>
             </div>
+
+            {showTeacherSemesterFilter && (
+              <div>
+                <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-muted-foreground">ค้นหา</p>
+                <div className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3">
+                  <HiMagnifyingGlass className="h-4 w-4 shrink-0 text-slate-400" />
+                  <input
+                    value={subjectSearchQuery}
+                    onChange={(e) => setSubjectSearchQuery(e.target.value)}
+                    placeholder="ค้นหาวิชา ห้อง หรือรหัสวิชา..."
+                    className="min-w-0 flex-1 border-none bg-transparent font-sukhumvit text-[12px] font-bold text-slate-800 outline-none placeholder:text-slate-400"
+                  />
+                  {subjectSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSubjectSearchQuery('')}
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
+                      aria-label="ล้างคำค้นหา"
+                    >
+                      <HiXMark className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+          </div>
+        </ExamMobileFilterDrawer>
+      )}
+
+      <div
+        className={cn(
+          'flex min-h-0 flex-1',
+          showAdminClassBrowser
+            ? 'flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch'
+            : 'flex-col overflow-hidden',
+        )}
+      >
+        {showAdminClassBrowser && (
+          <div
+            className={cn(
+              'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
+              sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+              selectedClassId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+            )}
+          >
+            {!classesReady ? (
+              <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto overscroll-y-contain scrollbar-hide rounded-2xl border border-border bg-card p-4">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} className="h-14 w-full shrink-0 rounded-2xl" />
+                ))}
+              </div>
+            ) : (
+              <GradeBookClassSidebar
+                selectedDept={filterDepartment}
+                selectedGrade={filterGradeLevel}
+                selectedClassId={selectedClassId}
+                gradeOptions={availableGrades}
+                classOptions={classOptions}
+                onSelectDept={handleSelectDept}
+                onSelectGrade={handleSelectGrade}
+                onSelectClass={handleSelectClass}
+                collapsed={sidebarCollapsed}
+                headerAction={(
+                  <SidebarCollapseButton
+                    collapsed={sidebarCollapsed}
+                    onToggle={() => setSidebarCollapsed((v) => !v)}
+                  />
+                )}
+              />
+            )}
           </div>
         )}
 
-        {role !== 'teacher' && selectedClassId && !selectedSubjectId && (
+        <div
+          className={cn(
+            'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden',
+            showAdminClassBrowser && 'rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            showAdminClassBrowser && !selectedClassId && 'hidden lg:flex',
+          )}
+        >
+          {selectedClassId && selectedSubjectId && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="hidden shrink-0 flex-col gap-3 pb-3 md:flex"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex gap-1 rounded-2xl bg-muted/80 p-1">
+                  {(Object.entries(GRADE_BOOK_TAB_CONFIG) as [Tab, typeof GRADE_BOOK_TAB_CONFIG[Tab]][]).map(([key, cfg]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setActiveTab(key)}
+                      className={cn(
+                        'rounded-xl px-3 py-1.5 text-[11px] font-bold font-sukhumvit transition-all',
+                        activeTab === key
+                          ? 'bg-foreground text-background shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {cfg.label}
+                    </button>
+                  ))}
+                </div>
+
+                {attendanceDateFilter}
+
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  type="button"
+                  onClick={handleReload}
+                  className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground transition-colors hover:bg-muted/80"
+                >
+                  <RefreshCw size={13} />
+                </motion.button>
+              </div>
+            </motion.div>
+          )}
+
+          <div className="flex min-h-0 flex-1 flex-col space-y-3 overflow-y-auto overscroll-y-contain scrollbar-hide">
+        {showAdminClassBrowser && selectedClassId && !selectedSubjectId && (
           <div className="flex flex-col gap-2">
-              {availableSubjects.length === 0 ? (
+              {isSubjectGridLoading ? (
+                <SubjectFolderCardsGridSkeleton count={6} />
+              ) : availableSubjects.length === 0 ? (
                 <div className="rounded-2xl px-4 py-3 text-[12px] text-slate-400 font-sarabun border border-dashed border-slate-200 bg-white/60">
                   ยังไม่มีรายวิชาที่ลงทะเบียนสำหรับภาคเรียนที่ {selectedSemester}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                <div className="grid w-full grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 xl:grid-cols-4">
                   {availableSubjects.map(subject => {
-                    const isActive = selectedSubjectId === subject.id;
-                    const cat = CATEGORY_CONFIG[subject.category];
+                    const key = `${selectedClassId}|${subject.id}`;
                     return (
-                      <button
+                      <SubjectFolderCard
                         key={subject.id}
-                        type="button"
+                        title={subject.name}
+                        subtitle={selectedClass?.className ?? ''}
+                        meta={
+                          subject.code ? (
+                            <p className="pt-0.5 text-[10px] font-bold text-muted-foreground">{subject.code}</p>
+                          ) : undefined
+                        }
+                        colorId={folderColors[key] ?? DEFAULT_COLOR_ID}
+                        onColorChange={(id) => setFolderColor(key, id)}
                         onClick={() => {
                           setSelectedSubjectId(subject.id);
                           setSelectedExamId('');
                         }}
-                        className="text-left rounded-2xl p-3 border transition-all"
-                        style={{
-                          background: isActive ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.8)',
-                          borderColor: isActive ? 'rgba(15,23,42,0.95)' : 'rgba(226,232,240,0.9)',
-                        }}
-                      >
-                        <div className="flex items-center gap-2 mb-1">
-                          <span
-                            className="text-[9px] font-bold px-2 py-0.5 rounded-lg font-sukhumvit"
-                            style={{ background: isActive ? 'rgba(255,255,255,0.12)' : cat.bg, color: isActive ? '#fff' : cat.color }}
-                          >
-                            {cat.label}
-                          </span>
-                          {subject.code && (
-                            <span className={`text-[10px] font-sarabun ${isActive ? 'text-white/70' : 'text-slate-400'}`}>
-                              {subject.code}
-                            </span>
-                          )}
-                        </div>
-                        <p className={`text-[12px] font-bold font-sukhumvit line-clamp-2 ${isActive ? 'text-white' : 'text-slate-800'}`}>
-                          {subject.name}
-                        </p>
-                      </button>
+                        showPaper
+                      />
                     );
                   })}
                 </div>
@@ -1136,98 +1471,76 @@ export default function GradeBookPage() {
           </div>
         )}
 
-        {role === 'teacher' && !selectedSubjectId && (
-          <div className="hidden md:flex items-center gap-2 flex-wrap">
-            {[1, 2].map(sem => (
-              <button
-                key={sem}
-                type="button"
-                onClick={() => setSelectedSemester(sem as 1 | 2)}
-                className="px-3 py-1.5 rounded-full text-[11px] font-bold font-sukhumvit transition-all"
-                style={{
-                  background: selectedSemester === sem ? '#0f172a' : 'rgba(241,245,249,0.8)',
-                  color: selectedSemester === sem ? '#fff' : '#64748b',
-                }}
-              >
-                ภาคเรียนที่ {sem}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* ── Teacher: subject card grid ── */}
-        {role === 'teacher' && !selectedSubjectId ? (
-          myTeachingCards.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-40 gap-2">
-              <GraduationCap size={28} className="text-slate-300" />
-              <p className="text-[13px] text-slate-400 font-sarabun">ยังไม่มีรายวิชาที่ได้รับมอบหมายสำหรับภาคเรียนที่ {selectedSemester}</p>
+        {/* ── Teacher / personal: subject folder grid (like แผนการสอน) ── */}
+        {showPersonalSubjectFolders && !selectedSubjectId ? (
+          isSubjectGridLoading ? (
+            <SubjectFolderCardsGridSkeleton count={9} />
+          ) : myTeachingCards.length === 0 ? (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex flex-col items-center justify-center gap-4 py-20"
+            >
+              <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-muted">
+                <GraduationCap size={28} className="text-muted-foreground/50" />
+              </div>
+              <div className="text-center">
+                <p className="font-black text-foreground font-sukhumvit">ยังไม่มีรายวิชาที่ได้รับมอบหมาย</p>
+                <p className="mt-1 text-sm text-muted-foreground font-sarabun">
+                  สำหรับภาคเรียนที่ {selectedSemester} — ระบบดึงจากวิชาที่มอบหมายในตารางสอน
+                </p>
+              </div>
+            </motion.div>
+          ) : filteredTeachingCards.length === 0 ? (
+            <div className="flex h-40 flex-col items-center justify-center gap-2">
+              <GraduationCap size={28} className="text-muted-foreground/40" />
+              <p className="text-[13px] text-muted-foreground font-sarabun">
+                {`ไม่พบรายวิชาที่ตรงกับ "${subjectSearchQuery.trim()}"`}
+              </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {myTeachingCards.map(card => {
-                const cat = CATEGORY_CONFIG[card.category as keyof typeof CATEGORY_CONFIG] ?? { label: card.category, bg: '#f1f5f9', color: '#64748b' };
+            <div
+              className="grid w-full grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 xl:grid-cols-4"
+            >
+              {filteredTeachingCards.map(card => {
+                const key = `${card.classId}|${card.subjectId}`;
                 return (
-                  <motion.button
-                    key={`${card.classId}_${card.subjectId}`}
-                    whileHover={{ scale: 1.02, y: -2 }}
-                    whileTap={{ scale: 0.98 }}
+                  <SubjectFolderCard
+                    key={key}
+                    title={card.subjectName}
+                    subtitle={card.className}
+                    meta={
+                      <p className="pt-0.5 text-[11px] font-black text-muted-foreground">
+                        {card.studentCount} คน
+                      </p>
+                    }
+                    colorId={folderColors[key] ?? DEFAULT_COLOR_ID}
+                    onColorChange={(id) => setFolderColor(key, id)}
                     onClick={() => {
                       setSelectedClassId(card.classId);
                       setSelectedSubjectId(card.subjectId);
                       setSelectedExamId('');
                       setSelectedOnlineRoomId('');
                     }}
-                    className="text-left rounded-[1.5rem] p-4 border transition-all flex flex-col gap-3"
-                    style={{
-                      background: 'rgba(255,255,255,0.88)',
-                      borderColor: 'rgba(226,232,240,0.9)',
-                      boxShadow: '0 2px 12px rgba(0,0,0,0.05)',
-                    }}
-                  >
-                    {/* Category + code row */}
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="text-[9px] font-bold px-2 py-0.5 rounded-lg font-sukhumvit"
-                        style={{ background: cat.bg, color: cat.color }}
-                      >
-                        {cat.label}
-                      </span>
-                      {card.subjectCode && (
-                        <span className="text-[10px] font-sarabun text-slate-400">{card.subjectCode}</span>
-                      )}
-                      <span
-                        className="ml-auto text-[9px] font-bold px-2 py-0.5 rounded-full font-sukhumvit"
-                        style={{ background: 'rgba(124,58,237,0.08)', color: '#7c3aed' }}
-                      >
-                        เทอม {selectedSemester}
-                      </span>
-                    </div>
-
-                    {/* Subject name */}
-                    <p className="text-[14px] font-black text-slate-800 font-sukhumvit line-clamp-2 leading-snug">
-                      {card.subjectName}
-                    </p>
-
-                    {/* Class info */}
-                    <div className="flex items-center gap-3 pt-2 border-t border-slate-100">
-                      <div className="flex flex-col">
-                        <span className="text-[11px] font-bold text-slate-700 font-sukhumvit">{card.className}</span>
-                        <span className="text-[10px] text-slate-400 font-sarabun">{card.gradeLevel}</span>
-                      </div>
-                    </div>
-                  </motion.button>
+                    showPaper={card.studentCount > 0}
+                  />
                 );
               })}
             </div>
           )
-        ) : !filterDepartment && role !== 'teacher' ? (
-          <div className="flex items-center justify-center h-40 text-slate-400 text-sm font-sarabun">เริ่มจากเลือกแผนกก่อน</div>
-        ) : !filterGradeLevel && role !== 'teacher' ? (
-          <div className="flex items-center justify-center h-40 text-slate-400 text-sm font-sarabun">เลือกระดับชั้นเพื่อไป Step ถัดไป</div>
-        ) : !selectedClassId && role !== 'teacher' ? (
-          <div className="flex items-center justify-center h-40 text-slate-400 text-sm font-sarabun">เลือกห้องเรียนเพื่อแสดงรายวิชา</div>
+        ) : showAdminClassBrowser && !selectedClassId ? (
+          <div className="flex min-h-full w-full flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center">
+            <HiAcademicCap className="h-8 w-8 text-muted-foreground/40" />
+            <p className="text-[13px] font-black text-muted-foreground font-sukhumvit">
+              {!filterDepartment
+                ? 'เลือกแผนกจากแถบด้านซ้าย'
+                : !filterGradeLevel
+                  ? 'เลือกระดับชั้นเพื่อดูห้องเรียน'
+                  : 'เลือกห้องเรียนเพื่อดูรายวิชา'}
+            </p>
+          </div>
         ) : !selectedSubjectId ? (
-          <div className="flex items-center justify-center h-40 text-slate-400 text-sm font-sarabun">เลือกวิชาเพื่อดูการสอบและคะแนนนักเรียน</div>
+          null
         ) : activeTab === 'exams' ? (
           /* ── Exams Tab ── */
           <AnimatePresence mode="wait">
@@ -1238,20 +1551,13 @@ export default function GradeBookPage() {
                 className="flex flex-col gap-4"
               >
                 {examLoading ? (
-                  <div className="py-10 text-center text-[12px] text-slate-400 font-sarabun">กำลังโหลดการสอบ...</div>
+                  <ExamCardsSkeleton count={4} />
                 ) : examError ? (
                   <div className="py-10 text-center text-[12px] text-rose-500 font-sarabun">{examError}</div>
                 ) : (
                   <>
                     {/* ── ส่วน: ห้องสอบออนไลน์ ── */}
                     <div className="flex flex-col gap-3">
-                      <div className="flex items-center gap-2">
-                        <p className="text-[12px] font-black text-slate-700 font-sukhumvit">ห้องสอบออนไลน์</p>
-                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full font-sukhumvit"
-                          style={{ background: 'rgba(124,58,237,0.08)', color: '#7c3aed' }}>
-                          เก็บคะแนนอัตโนมัติ
-                        </span>
-                      </div>
                       {onlineRoomCards.length === 0 ? (
                         <p className="text-[11px] text-slate-400 font-sarabun py-4 text-center">
                           ยังไม่มีห้องสอบออนไลน์สำหรับวิชานี้
@@ -1268,8 +1574,6 @@ export default function GradeBookPage() {
                             };
                             const scoreType = room.settings?.scoreCollectionType ?? 'classwork';
                             const typeCfg = scoreTypeCfg[scoreType] ?? scoreTypeCfg.classwork;
-                            const pct = room.totalCount > 0
-                              ? Math.round((room.gradedCount / room.totalCount) * 100) : 0;
                             const isTogglingScoreLink = togglingScoreLinkRoomId === room.id;
                             const isScoreLinked = room.settings?.scoreCollectionLinked !== false;
                             return (
@@ -1314,47 +1618,35 @@ export default function GradeBookPage() {
                                     <p className="text-[10px] text-slate-400 font-sarabun">
                                       {room.maxScore} คะแนน · รอบที่ {room.completedRounds}/{room.settings?.maxAttempts === 0 ? '∞' : (room.settings?.maxAttempts ?? 1)}
                                     </p>
-                                    <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
-                                      <div className="flex items-center gap-1 text-[10px] font-sarabun text-slate-500">
-                                        <Users size={10} /><span>{room.gradedCount}/{room.totalCount} คน</span>
-                                      </div>
-                                      <div className="flex items-center gap-1 text-[10px] font-sarabun text-slate-500">
-                                        <TrendingUp size={10} /><span>เฉลี่ย {room.avgScore ?? '-'}</span>
-                                      </div>
-                                      <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                                        <div className="h-full rounded-full transition-all"
-                                          style={{ width: `${pct}%`, background: '#7c3aed' }} />
-                                      </div>
-                                      <div className="flex items-center gap-1 shrink-0">
-                                        <button
-                                          type="button"
-                                          onClick={(e) => handleToggleOnlineRoomScoreLink(room, e)}
-                                          disabled={isTogglingScoreLink}
-                                          title={isScoreLinked
-                                            ? 'ยกเลิกการเชื่อมต่อคะแนนจากห้องสอบนี้'
-                                            : 'เชื่อมต่อคะแนนกับห้องสอบนี้'}
-                                          className="w-8 h-8 shrink-0 rounded-xl flex items-center justify-center border transition-all hover:opacity-80 disabled:opacity-40"
-                                          style={isScoreLinked
-                                            ? {
-                                                background: 'rgba(225,29,72,0.08)',
-                                                borderColor: 'rgba(225,29,72,0.22)',
-                                                color: '#e11d48',
-                                              }
-                                            : {
-                                                background: 'rgba(5,150,105,0.1)',
-                                                borderColor: 'rgba(5,150,105,0.25)',
-                                                color: '#059669',
-                                              }}
-                                        >
-                                          {isTogglingScoreLink ? (
-                                            <div className={`w-3.5 h-3.5 border-2 rounded-full animate-spin ${isScoreLinked ? 'border-rose-300 border-t-rose-600' : 'border-emerald-300 border-t-emerald-600'}`} />
-                                          ) : isScoreLinked ? (
-                                            <Link2Off size={14} strokeWidth={2.5} />
-                                          ) : (
-                                            <Link2 size={14} strokeWidth={2.5} />
-                                          )}
-                                        </button>
-                                      </div>
+                                    <div className="flex items-center justify-end pt-1 border-t border-slate-100">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleToggleOnlineRoomScoreLink(room, e)}
+                                        disabled={isTogglingScoreLink}
+                                        title={isScoreLinked
+                                          ? 'ยกเลิกการเชื่อมต่อคะแนนจากห้องสอบนี้'
+                                          : 'เชื่อมต่อคะแนนกับห้องสอบนี้'}
+                                        className="w-8 h-8 shrink-0 rounded-xl flex items-center justify-center border transition-all hover:opacity-80 disabled:opacity-40"
+                                        style={isScoreLinked
+                                          ? {
+                                              background: 'rgba(225,29,72,0.08)',
+                                              borderColor: 'rgba(225,29,72,0.22)',
+                                              color: '#e11d48',
+                                            }
+                                          : {
+                                              background: 'rgba(5,150,105,0.1)',
+                                              borderColor: 'rgba(5,150,105,0.25)',
+                                              color: '#059669',
+                                            }}
+                                      >
+                                        {isTogglingScoreLink ? (
+                                          <div className={`w-3.5 h-3.5 border-2 rounded-full animate-spin ${isScoreLinked ? 'border-rose-300 border-t-rose-600' : 'border-emerald-300 border-t-emerald-600'}`} />
+                                        ) : isScoreLinked ? (
+                                          <Link2Off size={14} strokeWidth={2.5} />
+                                        ) : (
+                                          <Link2 size={14} strokeWidth={2.5} />
+                                        )}
+                                      </button>
                                     </div>
                                   </>
                                 ) : (
@@ -1378,60 +1670,26 @@ export default function GradeBookPage() {
                 initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
                 className="flex flex-col gap-3"
               >
-                <button
-                  onClick={() => setSelectedOnlineRoomId('')}
-                  className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold font-sukhumvit text-slate-600 bg-white/80 border border-slate-200 hover:bg-slate-50 transition-colors"
-                >
-                  <ArrowLeft size={12} />กลับรายการสอบ
-                </button>
-
-                <div className="rounded-[1.5rem] p-4 flex flex-col gap-3"
-                  style={{ ...GLASS, background: 'rgba(255,255,255,0.82)' }}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Monitor size={13} className="text-violet-500 shrink-0" />
-                      <p className="text-[13px] font-black text-slate-800 font-sukhumvit line-clamp-1">
-                        {selectedOnlineRoom.title}
-                      </p>
-                    </div>
-                    <span className="text-[11px] text-slate-400 font-sarabun shrink-0">
-                      {selectedOnlineRoomRows.length} คน
-                    </span>
+                <div className="flex items-center gap-2 px-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOnlineRoomId('')}
+                    className="shrink-0 flex h-8 w-8 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition-colors hover:bg-muted"
+                    aria-label="กลับรายการสอบ"
+                    title="กลับรายการสอบ"
+                  >
+                    <HiArrowLeft size={16} />
+                  </button>
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <p className="line-clamp-1 text-[13px] font-black text-foreground font-sukhumvit">
+                      {selectedOnlineRoom.title}
+                    </p>
                   </div>
-                  <div className="rounded-2xl overflow-hidden border border-slate-100">
-                    <div className="grid grid-cols-[2rem_1fr_6rem_6rem] gap-2 px-4 py-2 bg-slate-50">
-                      <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit">#</span>
-                      <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit">นักเรียน</span>
-                      <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit text-center">สถานะ</span>
-                      <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit text-center">คะแนน (%)</span>
-                    </div>
-                    <div className="divide-y divide-slate-100 bg-white/80">
-                      {selectedOnlineRoomRows.map((row, idx) => (
-                        <div key={row.studentId} className="grid grid-cols-[2rem_1fr_6rem_6rem] gap-2 px-4 py-2.5 items-center">
-                          <span className="text-[10px] font-bold text-slate-400 font-sukhumvit">{idx + 1}</span>
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-bold text-slate-800 font-sukhumvit truncate">{row.studentName}</p>
-                            <p className="text-[9px] text-slate-400 font-sarabun">{row.studentCode}</p>
-                          </div>
-                          <span className="text-center">
-                            {row.status === 'graded' ? (
-                              <span className="text-[9px] font-bold text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full font-sukhumvit">ตรวจแล้ว</span>
-                            ) : row.status === 'submitted' ? (
-                              <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-sukhumvit">ส่งแล้ว</span>
-                            ) : (
-                              <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full font-sukhumvit">ไม่มีข้อมูล</span>
-                            )}
-                          </span>
-                          <span className="text-center text-[11px] font-black text-slate-700 font-sukhumvit">
-                            {row.scorePercent !== null
-                              ? `${row.scorePercent}%`
-                              : '-'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  <span className="shrink-0 text-[11px] text-muted-foreground font-sarabun">
+                    {onlineRoomScoreTableRows.length} คน
+                  </span>
                 </div>
+                <ExamRoomScoreTable rows={onlineRoomScoreTableRows} />
               </motion.div>
             ) : (
               /* ── Manual exam detail (เดิม) ── */
@@ -1440,10 +1698,13 @@ export default function GradeBookPage() {
                 className="flex flex-col gap-3"
               >
                 <button
+                  type="button"
                   onClick={() => setSelectedExamId('')}
-                  className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold font-sukhumvit text-slate-600 bg-white/80 border border-slate-200 hover:bg-slate-50 transition-colors"
+                  className="self-start flex h-8 w-8 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition-colors hover:bg-muted"
+                  aria-label="กลับรายการสอบ"
+                  title="กลับรายการสอบ"
                 >
-                  <ArrowLeft size={12} />กลับรายการสอบ
+                  <HiArrowLeft size={16} />
                 </button>
 
                 {examCards.length > 0 && (
@@ -1487,46 +1748,17 @@ export default function GradeBookPage() {
                   {selectedExam && (
                     <motion.div key={selectedExam.id}
                       initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
-                      className="rounded-[1.5rem] p-4"
-                      style={{ ...GLASS, background: 'rgba(255,255,255,0.82)' }}
+                      className="flex flex-col gap-3"
                     >
-                      <div className="flex items-center justify-between gap-2 mb-3">
-                        <p className="text-[13px] font-black text-slate-800 font-sukhumvit">
+                      <div className="flex items-center justify-between gap-2 px-0.5">
+                        <p className="text-[13px] font-black text-foreground font-sukhumvit">
                           คะแนนนักเรียน: {selectedExam.title}
                         </p>
-                        <span className="text-[11px] text-slate-400 font-sarabun">{selectedExamRows.length} คน</span>
+                        <span className="text-[11px] text-muted-foreground font-sarabun">
+                          {examRoomScoreTableRows.length} คน
+                        </span>
                       </div>
-                      <div className="rounded-2xl overflow-hidden border border-slate-100">
-                        <div className="grid grid-cols-[2rem_1fr_6rem_6rem] gap-2 px-4 py-2 bg-slate-50">
-                          <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit">#</span>
-                          <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit">นักเรียน</span>
-                          <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit text-center">สถานะ</span>
-                          <span className="text-[9px] font-black text-slate-400 uppercase font-sukhumvit text-center">คะแนน (%)</span>
-                        </div>
-                        <div className="divide-y divide-slate-100 bg-white/80">
-                          {selectedExamRows.map((row, idx) => (
-                            <div key={row.studentId} className="grid grid-cols-[2rem_1fr_6rem_6rem] gap-2 px-4 py-2.5 items-center">
-                              <span className="text-[10px] font-bold text-slate-400 font-sukhumvit">{idx + 1}</span>
-                              <div className="min-w-0">
-                                <p className="text-[11px] font-bold text-slate-800 font-sukhumvit truncate">{row.studentName}</p>
-                                <p className="text-[9px] text-slate-400 font-sarabun">{row.studentCode}</p>
-                              </div>
-                              <span className="text-center">
-                                {row.absent ? (
-                                  <span className="text-[9px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full font-sukhumvit">ขาดสอบ</span>
-                                ) : (
-                                  <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-sukhumvit">เข้าสอบ</span>
-                                )}
-                              </span>
-                              <span className="text-center text-[11px] font-black text-slate-700 font-sukhumvit">
-                                {typeof row.score === 'number'
-                                  ? `${Math.round(rawPointsToPercent(row.score, selectedExam.maxScore))}%`
-                                  : '-'}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                      <ExamRoomScoreTable rows={examRoomScoreTableRows} />
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -1535,13 +1767,8 @@ export default function GradeBookPage() {
           </AnimatePresence>
         ) : activeTab === 'attendance' ? (
           /* ── Attendance Tab ── */
-          gradeBook.isLoading ? (
-            <div className="flex items-center justify-center h-32">
-              <div className="flex flex-col items-center gap-3">
-                <div className="w-8 h-8 border-3 border-violet-200 border-t-violet-500 rounded-full animate-spin" />
-                <p className="text-[12px] text-slate-400 font-sarabun">กำลังโหลดข้อมูลคะแนนรวม...</p>
-              </div>
-            </div>
+          isGradeBookContentLoading ? (
+            <GradeBookTableSkeleton />
           ) : gradeBook.error ? (
             <div className="flex items-center justify-center h-32">
               <div className="flex items-center gap-2 text-rose-500 bg-rose-50 px-4 py-3 rounded-2xl border border-rose-200">
@@ -1555,8 +1782,7 @@ export default function GradeBookPage() {
                 summaries={displaySummaries}
                 config={gradeBook.config}
                 view="attendance"
-                yearStartDate={activeYear?.startDate ?? ''}
-                yearEndDate={activeYear?.endDate ?? ''}
+                attendanceDateRange={attendanceDateRange}
               />
             )
           )
@@ -1564,13 +1790,8 @@ export default function GradeBookPage() {
           /* ── Table & Config Tabs ── */
           <>
             {/* Grade book */}
-            {gradeBook.isLoading ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="flex flex-col items-center gap-3">
-                  <div className="w-8 h-8 border-3 border-violet-200 border-t-violet-500 rounded-full animate-spin" />
-                  <p className="text-[12px] text-slate-400 font-sarabun">กำลังโหลดข้อมูลคะแนนรวม...</p>
-                </div>
-              </div>
+            {isGradeBookContentLoading ? (
+              activeTab === 'config' ? <GradeConfigPanelSkeleton /> : <GradeBookTableSkeleton />
             ) : gradeBook.error ? (
               <div className="flex items-center justify-center h-32">
                 <div className="flex items-center gap-2 text-rose-500 bg-rose-50 px-4 py-3 rounded-2xl border border-rose-200">
@@ -1588,8 +1809,6 @@ export default function GradeBookPage() {
                         summaries={displaySummaries}
                         config={gradeBook.config}
                         showAsPercentage
-                        yearStartDate={activeYear?.startDate ?? ''}
-                        yearEndDate={activeYear?.endDate ?? ''}
                       />
                     )}
                   </motion.div>
@@ -1612,6 +1831,8 @@ export default function GradeBookPage() {
             )}
           </>
         )}
+          </div>
+        </div>
       </div>
     </div>
   );

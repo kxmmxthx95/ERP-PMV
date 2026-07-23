@@ -20,10 +20,12 @@ import {
   useSaveMorningRollCall,
   useTodayRollCallSessions,
 } from '@/hooks/useMorningRollCall';
-import { useMorningRollCallClassStudents } from '@/hooks/useMorningRollCallClassStudents';
+import {
+  useHomeroomStudentCounts,
+  useMorningRollCallClassStudents,
+} from '@/hooks/useMorningRollCallClassStudents';
 import { useStudentLeaveRequests } from '@/hooks/useLeaveRequests';
 import { applyApprovedLeaveToMorningRollCallRows } from '@/lib/attendance/leaveRequestStudentMatch';
-import type { Student } from '@/types/student';
 import type { MorningRollCallSession, RollCallStatus, StudentRollCall } from '@/types/morningRollCall';
 import { WIDGET_CARD, WIDGET_GLASS, DAY_CANDY_SURFACE_CLASS, getDayCandyBoxShadow, getDayCandyStyle } from '../widgetStyles';
 import { WidgetSkeleton } from '../components/WidgetSkeleton';
@@ -31,53 +33,23 @@ import type { ClassRoom } from '@/types/class';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription } from '@/components/ui/drawer';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
+import { ROLL_CALL_OPTIONS } from '@/features/attendance/rollCallUi';
+
+const DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh flex-col bg-transparent p-0 before:hidden',
+  'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+  'sm:h-full sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md sm:p-2',
+);
+
+const DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-col overflow-hidden bg-white',
+  'sm:rounded-4xl sm:border sm:border-slate-200/70 sm:shadow-xl',
+);
 
 type MarkableStatus = Exclude<RollCallStatus, 'unmarked'>;
 
 type StudentRow = StudentRollCall & { enrollmentIndex: number };
-
-const ROLL_CALL_OPTIONS: {
-  value: MarkableStatus;
-  label: string;
-  className: string;
-  activeClassName: string;
-  cardClassName: string;
-  badgeClassName: string;
-}[] = [
-  {
-    value: 'present',
-    label: 'มา',
-    className: 'border-emerald-200 text-emerald-600 bg-white',
-    activeClassName: 'border-emerald-500 bg-emerald-500 text-white',
-    cardClassName: 'bg-emerald-50/90 border-emerald-200',
-    badgeClassName: 'bg-emerald-100 text-emerald-700',
-  },
-  {
-    value: 'late',
-    label: 'สาย',
-    className: 'border-amber-200 text-amber-700 bg-white',
-    activeClassName: 'border-amber-500 bg-amber-500 text-white',
-    cardClassName: 'bg-amber-50/90 border-amber-200',
-    badgeClassName: 'bg-amber-100 text-amber-700',
-  },
-  {
-    value: 'absent',
-    label: 'ขาด',
-    className: 'border-rose-200 text-rose-700 bg-white',
-    activeClassName: 'border-rose-500 bg-rose-500 text-white',
-    cardClassName: 'bg-rose-50/90 border-rose-200',
-    badgeClassName: 'bg-rose-100 text-rose-700',
-  },
-  {
-    value: 'leave',
-    label: 'ลา',
-    className: 'border-blue-200 text-blue-700 bg-white',
-    activeClassName: 'border-blue-500 bg-blue-500 text-white',
-    cardClassName: 'bg-blue-50/90 border-blue-200',
-    badgeClassName: 'bg-blue-100 text-blue-700',
-  },
-];
-
 
 const ROLL_CALL_SPLIT_SHELL =
   'rounded-2xl flex w-full h-[142px] min-h-[142px] overflow-hidden gap-2 self-stretch cursor-pointer active:scale-[0.99] transition-transform';
@@ -145,15 +117,6 @@ function StatusDonut({
 }
 
 
-function countDisplayableStudents(students: Student[]): number {
-  return students.filter((student) => {
-    const studentName = `${student.prefix || ''}${student.firstName || ''} ${student.lastName || ''}`.trim();
-    const studentCode = student.studentCode || '';
-    return Boolean(studentName || studentCode);
-  }).length;
-}
-
-
 export default function MorningRollCallWidget() {
   const { user, userData } = useAuth();
   const { year, activeSemester, isLoaded } = useActiveAcademicYear();
@@ -177,22 +140,13 @@ export default function MorningRollCallWidget() {
     [homeRoomClasses],
   );
   const primaryClass = sortedHomeroomClasses[0];
-  const {
-    students: primaryClassStudents,
-    studentIds: primaryStudentIds,
-    rosterIdsReady: primaryRosterIdsReady,
-    loadingRoster: loadingPrimaryRoster,
-  } = useMorningRollCallClassStudents(
+  // 1.2 Defer — card only needs a count; fetch student docs when drawer opens a class
+  const { countsByClassId, ready: studentCountsReady } = useHomeroomStudentCounts(
     year ?? undefined,
-    primaryClass?.id ?? null,
+    sortedHomeroomClasses,
     activeSemester as 1 | 2,
   );
-  const displayStudentCount = useMemo(() => {
-    if (primaryClassStudents.length > 0) {
-      return countDisplayableStudents(primaryClassStudents);
-    }
-    return primaryStudentIds.length;
-  }, [primaryClassStudents, primaryStudentIds.length]);
+  const displayStudentCount = primaryClass ? (countsByClassId[primaryClass.id] ?? 0) : 0;
   const queryClient = useQueryClient();
   const { mutate: saveRollCall, isPending: isSaving } = useSaveMorningRollCall();
   const { sessions: todaySessions, loading: loadingSessions } = useTodayRollCallSessions(year ?? undefined);
@@ -539,7 +493,7 @@ export default function MorningRollCallWidget() {
         : `${primaryClassName} · ${checkedStudentTotal} น.`
       : `วัน${dayLabels[todayNum]} · ${todayDateLabel}`;
 
-  if (!isLoaded || loadingSessions || loadingHomeroomClasses || (primaryClass && (!primaryRosterIdsReady || loadingPrimaryRoster))) {
+  if (!isLoaded || loadingSessions || loadingHomeroomClasses || (primaryClass && !studentCountsReady)) {
     return <WidgetSkeleton variant="wide" />;
   }
 
@@ -658,16 +612,8 @@ export default function MorningRollCallWidget() {
       )}
 
       <Drawer open={drawerOpen} onOpenChange={setDrawerOpen} direction="right">
-        <DrawerContent
-          className={[
-            'h-dvh flex flex-col p-0 rounded-none',
-            'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
-            'data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none',
-            'sm:h-full sm:rounded-l-3xl',
-            'sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md',
-            'sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl',
-          ].join(' ')}
-        >
+        <DrawerContent className={DRAWER_CONTENT_CLASS}>
+          <div className={DRAWER_PANEL_CLASS}>
           <DrawerHeader className="px-4 pb-2">
             <div className="relative flex items-center justify-center min-h-10">
               {selectedClassId && !isReadOnly && !isRollCallBlocked && (
@@ -705,12 +651,12 @@ export default function MorningRollCallWidget() {
                   <DrawerTitle className="text-base font-black text-slate-800">เช็คชื่อเข้าแถววันนี้</DrawerTitle>
                 )}
               </div>
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 shrink-0 flex items-center gap-2">
+              <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
                 {selectedClassId && (
                   <button
                     type="button"
                     onClick={resetEditor}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 active:scale-[0.98] transition"
+                    className={DRAWER_HEADER_ICON_BTN}
                     aria-label="กลับไปรายการห้อง"
                   >
                     <HiArrowLeft className="w-4 h-4" />
@@ -719,7 +665,7 @@ export default function MorningRollCallWidget() {
                 <button
                   type="button"
                   onClick={() => setDrawerOpen(false)}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 active:scale-[0.98] transition"
+                  className={DRAWER_HEADER_ICON_BTN}
                   aria-label="ปิด"
                 >
                   <HiXMark className="w-4 h-4" />
@@ -877,7 +823,7 @@ export default function MorningRollCallWidget() {
           </div>
 
           {selectedClassId && !isRollCallBlocked && rowsToUse.length > 0 && (
-            <div className="px-4 pb-4 pt-2 border-t border-slate-100 bg-white">
+            <div className="px-4 pb-4 pt-2 border-t border-slate-100 bg-white shrink-0">
               <button
                 type="button"
                 onClick={handleSave}
@@ -896,6 +842,7 @@ export default function MorningRollCallWidget() {
               </button>
             </div>
           )}
+          </div>
         </DrawerContent>
       </Drawer>
 

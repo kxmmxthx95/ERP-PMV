@@ -1,11 +1,11 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  HiChevronLeft,
   HiHome,
   HiAcademicCap,
-  HiCalendar,
   HiCalendarDays,
+  HiOutlineFunnel,
+  HiChevronLeft,
 } from 'react-icons/hi2';
 import { createPortal } from 'react-dom';
 import { useScheduleManager } from './hooks/useScheduleManager';
@@ -14,15 +14,14 @@ import { ClassView } from './views/ClassView';
 import { TeacherView } from './views/TeacherView';
 import ScheduleSlotModal from './components/ScheduleSlotModal';
 import ScheduleSettingsModal from './components/ScheduleSettingsModal';
-import ScheduleTeacherSyncButton from './components/ScheduleTeacherSyncButton';
-import type { Subject } from '@/types/curriculum';
 import {
-  Carousel,
-  CarouselContent,
-  CarouselItem,
-  CarouselNext,
-  CarouselPrevious,
-} from '@/components/ui/carousel';
+  ExamFilterShowResultsButton,
+  ExamMobileFilterDrawer,
+} from '@/features/exam/components/ExamMobileFilterMenuButton';
+import { Button } from '@/components/ui/button';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
+import { cn } from '@/lib/utils';
+import type { Subject } from '@/types/curriculum';
 
 type ScheduleSubjectCard = Pick<Subject, 'id' | 'code' | 'name' | 'credits' | 'hoursPerWeek' | 'subjectGroup' | 'category'> & {
   semester?: number;
@@ -32,8 +31,8 @@ type ScheduleSubjectCard = Pick<Subject, 'id' | 'code' | 'name' | 'credits' | 'h
 };
 
 const VIEW_TABS = [
-  { id: 'class', label: 'รายห้อง', icon: HiHome },
-  { id: 'teacher', label: 'รายครู', icon: HiAcademicCap },
+  { id: 'class', label: 'ตารางเรียน', icon: HiHome },
+  { id: 'teacher', label: 'ตารางสอน', icon: HiAcademicCap },
 ] as const;
 
 const DEPT_OPTIONS = [
@@ -42,6 +41,10 @@ const DEPT_OPTIONS = [
   { id: 'primary', label: 'ประถม' },
   { id: 'secondary', label: 'มัธยม' },
 ] as const;
+
+const DEPT_STEP_OPTIONS = DEPT_OPTIONS.filter((opt) => opt.id !== 'all');
+
+type FilterStep = 1 | 2 | 3;
 
 export default function ScheduleEditor() {
   const {
@@ -77,19 +80,17 @@ export default function ScheduleEditor() {
     filteredClasses,
     availableGrades,
     exportRef,
-    pendingTeacherSync,
-    isSyncingTeachers,
-    syncTeachersFromClassManagement,
   } = useScheduleManager();
   // Portals
   const [rightTarget, setRightTarget] = useState<HTMLElement | null>(null);
-  const [headerFiltersPortalEl, setHeaderFiltersPortalEl] = useState<HTMLElement | null>(null);
   const [headerCenterMobilePortalEl, setHeaderCenterMobilePortalEl] = useState<HTMLElement | null>(null);
   const [mobileActionsPortalEl, setMobileActionsPortalEl] = useState<HTMLElement | null>(null);
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
+  const [filterStep, setFilterStep] = useState<FilterStep>(1);
+  const [semesterChosenInFilter, setSemesterChosenInFilter] = useState(false);
 
   React.useEffect(() => {
     setRightTarget(document.getElementById('header-portal-right-actions'));
-    setHeaderFiltersPortalEl(document.getElementById('header-portal-filters'));
     setHeaderCenterMobilePortalEl(document.getElementById('header-portal-center-mobile'));
     setMobileActionsPortalEl(document.getElementById('header-portal-mobile-actions'));
   }, []);
@@ -206,13 +207,38 @@ export default function ScheduleEditor() {
     [filteredClasses],
   );
 
-  const syncDisabled = viewMode !== 'class' || !selectedClassId;
-  const syncDisabledReason = viewMode !== 'class'
-    ? 'ใช้ได้ในโหมดรายห้อง'
-    : !selectedClassId
-      ? 'เลือกห้องเรียนก่อน'
-      : undefined;
-  const selectedClassLabel = roomOptions.find((room) => room.id === selectedClassId)?.label;
+  const hasActiveFilters = filterDept !== 'all' || (viewMode === 'class' && filterGrade !== 'all');
+
+  const filterStepTitle =
+    filterStep === 1
+      ? 'เลือกภาคเรียน'
+      : filterStep === 2
+        ? 'เลือกแผนก'
+        : viewMode === 'teacher'
+          ? 'เลือกตารางสอน'
+          : 'เลือกรายชั้น';
+
+  const filterStepDescription =
+    filterStep === 1
+      ? 'ขั้นตอนที่ 1 จาก 3'
+      : filterStep === 2
+        ? 'ขั้นตอนที่ 2 จาก 3'
+        : 'ขั้นตอนที่ 3 จาก 3';
+
+  const openFilterDrawer = () => {
+    setFilterStep(1);
+    setSemesterChosenInFilter(false);
+    setFilterDrawerOpen(true);
+  };
+
+  const handleClearFilters = () => {
+    setFilterDept('all');
+    setFilterGrade('all');
+    setSelectedClassId('');
+    setSelectedTeacherId('');
+    setSemesterChosenInFilter(false);
+    setFilterStep(1);
+  };
 
   useEffect(() => {
     if (viewMode !== 'class') return;
@@ -225,123 +251,260 @@ export default function ScheduleEditor() {
     if (!stillValid) setSelectedClassId(roomOptions[0].id);
   }, [viewMode, filterDept, filterGrade, roomOptions, selectedClassId, setSelectedClassId]);
 
-  const tabLongPressRef = useRef<number | null>(null);
-  const tabLongPressFiredRef = useRef(false);
-
-  const clearTabLongPress = () => {
-    if (tabLongPressRef.current) {
-      window.clearTimeout(tabLongPressRef.current);
-      tabLongPressRef.current = null;
-    }
-  };
-
-  const mobileViewModeSwitcher = (
-    <div className="grid grid-cols-2 gap-1 rounded-xl bg-black/[0.04] p-1">
-      {VIEW_TABS.map((m) => {
-        const Icon = m.icon;
-        const active = viewMode === m.id;
-        return (
-          <button
-            key={m.id}
-            onTouchStart={() => {
-              tabLongPressFiredRef.current = false;
-              clearTabLongPress();
-              tabLongPressRef.current = window.setTimeout(() => {
-                tabLongPressFiredRef.current = true;
-                setViewMode(m.id);
-                setIsEditMode(true);
-                if (navigator.vibrate) navigator.vibrate(40);
-                clearTabLongPress();
-              }, 500);
-            }}
-            onTouchEnd={() => {
-              clearTabLongPress();
-              if (!tabLongPressFiredRef.current) {
-                // Normal tap: if already in edit mode → exit, else switch tab
-                if (isEditMode) {
-                  setIsEditMode(false);
-                } else {
-                  setViewMode(m.id);
-                }
-              }
-              tabLongPressFiredRef.current = false;
-            }}
-            onTouchCancel={clearTabLongPress}
-            onClick={() => {
-              // Desktop fallback (no touch events)
-              if (isEditMode) {
-                setIsEditMode(false);
-              } else {
-                setViewMode(m.id);
-              }
-            }}
-            className={`h-9 rounded-lg text-[11px] font-black transition-all flex items-center justify-center gap-1.5 select-none ${
-              isEditMode && active
-                ? 'bg-rose-600 text-white shadow-sm'
-                : active
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-black/55 hover:bg-white/50'
-            }`}
-          >
-            <Icon className="w-4 h-4" />
-            <span>{m.label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-
   return (
     <div ref={exportRef} className="flex flex-col h-full text-black font-sukhumvit">
-      {headerFiltersPortalEl && createPortal(
-        <div className="hidden md:flex items-center gap-1.5 h-11 p-1 rounded-full bg-white/60 backdrop-blur-xl border border-white shadow-[0_8px_32px_rgba(0,0,0,0.04)] pointer-events-auto">
-          <AnimatePresence mode="wait">
-            {viewMode === 'class' && filterDept !== 'all' && filterGrade !== 'all' ? (
-              <motion.div key="room-mode-desktop" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} className="flex items-center gap-1">
-                <button onClick={() => setFilterGrade('all')} className="w-9 h-9 flex items-center justify-center rounded-full text-slate-500 hover:text-slate-800 hover:bg-black/5 transition-all">
-                  <HiChevronLeft size={16} />
-                </button>
-                <span className="text-[10px] font-black text-slate-400 px-1">{filterGrade}</span>
-                <div className="w-px h-4 bg-black/10" />
-                {roomOptions.map((room) => (
-                  <button key={room.id} onClick={() => setSelectedClassId(room.id)} className={`h-9 px-4 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${selectedClassId === room.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'}`}>{room.label || room.className}</button>
-                ))}
-              </motion.div>
-            ) : viewMode === 'class' && filterDept !== 'all' ? (
-              <motion.div key="grade-mode-desktop" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} className="flex items-center gap-1">
-                <button onClick={() => { setFilterDept('all'); setFilterGrade('all'); }} className="w-9 h-9 flex items-center justify-center rounded-full text-slate-500 hover:text-slate-800 hover:bg-black/5 transition-all">
-                  <HiChevronLeft size={16} />
-                </button>
-                {filteredGrades.map((grade) => (
-                  <button key={grade} onClick={() => setFilterGrade(grade)} className={`h-9 px-4 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${filterGrade === grade ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'}`}>{grade}</button>
-                ))}
-              </motion.div>
-            ) : (
-              <motion.div key="dept-mode-desktop" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }} className="flex items-center gap-1">
-                {DEPT_OPTIONS.filter((opt) => opt.id !== 'all').map((opt) => {
-                  const active = filterDept === opt.id;
-                  return (
-                    <button key={opt.id} onClick={() => { setFilterDept(opt.id as 'all' | 'early' | 'primary' | 'secondary'); if (viewMode === 'class') setFilterGrade('all'); }} className={`h-9 px-6 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${active ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'}`}>{opt.label}</button>
-                  );
-                })}
-              </motion.div>
+      <ExamMobileFilterDrawer
+        open={filterDrawerOpen}
+        onOpenChange={setFilterDrawerOpen}
+        title={filterStepTitle}
+        description={filterStepDescription}
+        direction="right"
+        footer={(
+          <>
+            {filterStep > 1 && (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 flex-1"
+                onClick={() => setFilterStep((s) => (s === 3 ? 2 : 1))}
+              >
+                <HiChevronLeft className="h-4 w-4" />
+                ย้อนกลับ
+              </Button>
             )}
-          </AnimatePresence>
-        </div>,
-        headerFiltersPortalEl!
-      )}
+            {filterStep === 3 && (
+              <ExamFilterShowResultsButton onClick={() => setFilterDrawerOpen(false)} />
+            )}
+            {hasActiveFilters && filterStep === 1 && (
+              <Button
+                type="button"
+                variant="destructive"
+                className="h-11 flex-1"
+                onClick={handleClearFilters}
+              >
+                ล้างตัวกรอง
+              </Button>
+            )}
+          </>
+        )}
+      >
+        <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+          {VIEW_TABS.map((m) => {
+            const Icon = m.icon;
+            const active = viewMode === m.id;
+            return (
+              <Button
+                key={m.id}
+                type="button"
+                variant={active ? 'default' : 'ghost'}
+                className="h-10 gap-1.5"
+                onClick={() => {
+                  if (viewMode === m.id) return;
+                  setViewMode(m.id);
+                  setFilterGrade('all');
+                  if (m.id === 'class') setSelectedTeacherId('');
+                  if (m.id === 'teacher') setSelectedClassId('');
+                }}
+                aria-pressed={active}
+              >
+                <Icon className="h-4 w-4" />
+                {m.label}
+              </Button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {([1, 2, 3] as const).map((step) => (
+            <div
+              key={step}
+              className={cn(
+                'h-1.5 flex-1 rounded-full transition-colors',
+                step <= filterStep ? 'bg-primary' : 'bg-muted',
+              )}
+            />
+          ))}
+        </div>
+
+        <div className="min-w-0">
+        <AnimatePresence mode="wait">
+          {filterStep === 1 && (
+            <motion.div
+              key="step-semester"
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              transition={{ duration: 0.15 }}
+              className="grid grid-cols-1 gap-2"
+              role="group"
+              aria-label="เลือกภาคเรียน"
+            >
+              {[
+                { value: 1 as const, title: 'ภาคเรียนที่ 1', description: 'เทอมต้น' },
+                { value: 2 as const, title: 'ภาคเรียนที่ 2', description: 'เทอมปลาย' },
+              ].map((opt) => {
+                const active = semesterChosenInFilter && semester === opt.value;
+                return (
+                  <Button
+                    key={opt.value}
+                    type="button"
+                    variant={active ? 'default' : 'outline'}
+                    className="h-auto flex-col items-start gap-0.5 px-4 py-3.5"
+                    onClick={() => {
+                      setSemester(opt.value);
+                      setSemesterChosenInFilter(true);
+                      setFilterStep(2);
+                    }}
+                  >
+                    <span className="text-sm font-semibold">{opt.title}</span>
+                    <span className={cn('text-xs font-medium', active ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
+                      {opt.description}
+                    </span>
+                  </Button>
+                );
+              })}
+            </motion.div>
+          )}
+
+          {filterStep === 2 && (
+            <motion.div
+              key="step-dept"
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              transition={{ duration: 0.15 }}
+              className="grid grid-cols-1 gap-2"
+            >
+              {DEPT_STEP_OPTIONS.map((opt) => {
+                const active = filterDept === opt.id;
+                return (
+                  <Button
+                    key={opt.id}
+                    type="button"
+                    variant={active ? 'default' : 'outline'}
+                    className="h-12 justify-start px-4"
+                    onClick={() => {
+                      setFilterDept(opt.id);
+                      setFilterGrade('all');
+                      setSelectedClassId('');
+                      setFilterStep(3);
+                    }}
+                  >
+                    {opt.label}
+                  </Button>
+                );
+              })}
+            </motion.div>
+          )}
+
+          {filterStep === 3 && viewMode === 'class' && (
+            <motion.div
+              key="step-class"
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              transition={{ duration: 0.15 }}
+              className="space-y-5"
+            >
+              <div>
+                <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                  ระดับชั้น
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {filteredGrades.map((grade) => (
+                    <Button
+                      key={grade}
+                      type="button"
+                      size="sm"
+                      variant={filterGrade === grade ? 'default' : 'secondary'}
+                      className="w-full"
+                      onClick={() => {
+                        setFilterGrade(grade);
+                        setSelectedClassId('');
+                      }}
+                    >
+                      {grade}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {filterGrade !== 'all' && (
+                <div>
+                  <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                    ห้องเรียน
+                  </p>
+                  {roomOptions.length === 0 ? (
+                    <p className="text-[12px] font-bold text-muted-foreground">ไม่พบห้องในระดับนี้</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {roomOptions.map((room) => (
+                        <Button
+                          key={room.id}
+                          type="button"
+                          size="sm"
+                          variant={selectedClassId === room.id ? 'default' : 'secondary'}
+                          onClick={() => {
+                            setSelectedClassId(room.id);
+                            setFilterDrawerOpen(false);
+                          }}
+                        >
+                          {room.label || room.className}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {filterStep === 3 && viewMode === 'teacher' && (
+            <motion.div
+              key="step-teacher"
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              transition={{ duration: 0.15 }}
+              className="space-y-2"
+            >
+              {headerTeachers.length === 0 ? (
+                <p className="text-[12px] font-bold text-muted-foreground">ไม่พบครูในแผนกนี้</p>
+              ) : (
+                headerTeachers.map((teacher) => (
+                  <Button
+                    key={teacher.id}
+                    type="button"
+                    variant={selectedTeacherId === teacher.id ? 'default' : 'outline'}
+                    className="h-11 w-full justify-start px-4"
+                    onClick={() => {
+                      setSelectedTeacherId(teacher.id);
+                      setFilterDrawerOpen(false);
+                    }}
+                  >
+                    {teacher.name}
+                  </Button>
+                ))
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+        </div>
+      </ExamMobileFilterDrawer>
 
       {headerCenterMobilePortalEl && createPortal(
-        <div className="md:hidden pointer-events-auto flex items-center gap-1.5">
+        <div className="md:hidden pointer-events-auto flex items-center gap-1.5 min-w-0">
           <HiCalendarDays className="w-4 h-4 text-slate-500 shrink-0" />
           <span className="text-[13px] font-black text-slate-800 tracking-tight leading-none whitespace-nowrap">
-            ตารางเรียน
+            {VIEW_TABS.find((t) => t.id === viewMode)?.label ?? 'ตารางเรียน'}
           </span>
           {viewMode === 'class' && selectedClassId && (
             <>
-              <span className="text-slate-300 text-xs">·</span>
-              <span className="text-[11px] font-black text-blue-600 whitespace-nowrap">
-                {selectedClassLabel ?? ''}
+              <span className="text-slate-300 text-xs shrink-0">·</span>
+              <span className="text-[11px] font-black text-blue-600 whitespace-nowrap truncate max-w-[100px]">
+                {roomOptions.find((r) => r.id === selectedClassId)?.label
+                  || roomOptions.find((r) => r.id === selectedClassId)?.className
+                  || ''}
               </span>
             </>
           )}
@@ -358,80 +521,46 @@ export default function ScheduleEditor() {
       )}
 
       {mobileActionsPortalEl && createPortal(
-        <ScheduleTeacherSyncButton
-          pendingUpdates={pendingTeacherSync}
-          isSyncing={isSyncingTeachers}
-          onSync={syncTeachersFromClassManagement}
-          classLabel={selectedClassLabel}
-          iconOnly
-          disabled={syncDisabled}
-          disabledReason={syncDisabledReason}
-        />,
+        <div className={cn('flex', HEADER_ICON_BTN_GROUP)}>
+          <ScheduleSettingsModal
+            targetId={viewMode === 'teacher' ? selectedTeacherId : selectedClassId}
+          />
+          <button
+            type="button"
+            onClick={openFilterDrawer}
+            className={HEADER_ICON_BTN}
+            title="ตัวกรอง"
+            aria-label="ตัวกรอง"
+          >
+            <HiOutlineFunnel size={16} />
+            {hasActiveFilters && (
+              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-destructive" aria-hidden />
+            )}
+          </button>
+        </div>,
         mobileActionsPortalEl,
       )}
 
-      {/* Portal: View Mode Switcher */}
+      {/* Portal: Settings + Filter */}
       {rightTarget && createPortal(
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="hidden md:flex items-center h-10 border border-black/[0.07] p-1 rounded-full bg-white/50 backdrop-blur-md gap-0.5"
-        >
-          {VIEW_TABS.map(m => {
-            const Icon = m.icon;
-            return (
-              <button
-                key={m.id}
-                onClick={() => setViewMode(m.id)}
-                className={`flex items-center justify-center h-8 w-9 rounded-full transition-all ${viewMode === m.id
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-black/35 hover:text-black/60 hover:bg-black/[0.02]'
-                  }`}
-                title={m.label}
-              >
-                <Icon className="w-4 h-4" />
-              </button>
-            );
-          })}
-
-          <div className="w-[1px] h-4 bg-black/[0.07] mx-1" />
-
-          <div className="flex items-center gap-0.5">
-            {[1, 2].map(s => {
-              const Icon = s === 1 ? HiCalendar : HiCalendarDays;
-              return (
-                <button
-                  key={s}
-                  onClick={() => setSemester(s as 1 | 2)}
-                  className={`h-8 px-2.5 rounded-full text-[10px] font-black transition-all flex items-center gap-1 ${semester === s
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-black/35 hover:bg-slate-200/50'
-                    }`}
-                  title={`ภาคเรียนที่ ${s}`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  <span>{s}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="w-[1px] h-4 bg-black/[0.07] mx-1" />
-
-          <ScheduleTeacherSyncButton
-            pendingUpdates={pendingTeacherSync}
-            isSyncing={isSyncingTeachers}
-            onSync={syncTeachersFromClassManagement}
-            classLabel={selectedClassLabel}
-            disabled={syncDisabled}
-            disabledReason={syncDisabledReason}
+        <div className={cn('hidden md:flex', HEADER_ICON_BTN_GROUP)}>
+          <ScheduleSettingsModal
+            targetId={viewMode === 'teacher' ? selectedTeacherId : selectedClassId}
           />
-
-          <ScheduleSettingsModal 
-            targetId={viewMode === 'teacher' ? selectedTeacherId : selectedClassId} 
-          />
-        </motion.div>,
-        rightTarget!
+          <button
+            type="button"
+            onClick={openFilterDrawer}
+            className={HEADER_ICON_BTN}
+            title="ตัวกรองตารางเรียน"
+            aria-label="ตัวกรองตารางเรียน"
+          >
+            <HiOutlineFunnel size={16} />
+            {hasActiveFilters && (
+              <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-destructive" aria-hidden />
+            )}
+          </button>
+        </div>,
+        rightTarget,
       )}
 
       {/* Legacy inline class/room filters removed per new capsule flow */}
@@ -441,46 +570,6 @@ export default function ScheduleEditor() {
       {/* ── Main Layout ── */}
       <div className="flex flex-1 min-h-0">
         <div className="flex-1 min-w-0 overflow-auto px-3 md:px-6 scrollbar-hide">
-          {/* Mobile: Class room picker (sticky below header) removed as it is handled by the capsule filter */}
-
-          {viewMode === 'teacher' && headerTeachers.length > 0 && (
-            <div className="hidden md:block mb-3 mt-1 overflow-hidden rounded-2xl border border-white/70 bg-white/80 p-2.5 shadow-[0_8px_24px_rgba(15,23,42,0.07)] backdrop-blur-xl">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-[10px] font-black uppercase tracking-widest text-black/40">รายชื่อครู</p>
-                <span className="rounded-full border border-black/[0.08] bg-black/[0.03] px-2 py-0.5 text-[9px] font-black text-black/45">
-                  {headerTeachers.length} คน
-                </span>
-              </div>
-
-              <Carousel opts={{ align: 'start', dragFree: true }} className="px-8">
-                <CarouselContent className="-ml-2">
-                  {headerTeachers.map((teacher) => {
-                    const active = selectedTeacherId === teacher.id;
-                    return (
-                      <CarouselItem
-                        key={teacher.id}
-                        className="basis-auto pl-2"
-                      >
-                        <button
-                          onClick={() => setSelectedTeacherId(teacher.id)}
-                          className={`h-8 rounded-full px-3 text-[10px] font-black transition-all whitespace-nowrap ${
-                            active
-                              ? 'bg-blue-600 text-white shadow-sm'
-                              : 'bg-black/[0.04] text-black/55 hover:bg-black/[0.07]'
-                          }`}
-                        >
-                          {teacher.name}
-                        </button>
-                      </CarouselItem>
-                    );
-                  })}
-                </CarouselContent>
-                <CarouselPrevious className="left-1 top-1/2 z-10 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/90 text-black/55 shadow-sm hover:bg-white" />
-                <CarouselNext className="right-1 top-1/2 z-10 h-7 w-7 -translate-y-1/2 border-black/10 bg-white/90 text-black/55 shadow-sm hover:bg-white" />
-              </Carousel>
-            </div>
-          )}
-
           <AnimatePresence mode="wait">
             <motion.div
               key={viewMode}
@@ -493,12 +582,7 @@ export default function ScheduleEditor() {
                 <ClassView
                   grid={grid}
                   selectedClassId={selectedClassId}
-                  setSelectedClassId={setSelectedClassId}
                   filterDept={filterDept}
-                  setFilterDept={setFilterDept}
-                  filterGrade={filterGrade}
-                  setFilterGrade={setFilterGrade}
-                  filteredClasses={filteredClasses}
                   isEditMode={isEditMode}
                   setIsEditMode={setIsEditMode}
                   openSlotModal={openSlotModal}
@@ -509,7 +593,6 @@ export default function ScheduleEditor() {
                   teachers={teachers}
                   excessEntryIds={excessEntryIds}
                   draggableSubjects={availableSubjects}
-                  mobileHeaderContent={mobileViewModeSwitcher}
                   jointClassEntryIds={jointClassEntryIds}
                   jointClassPartnersByEntryId={jointClassPartnersByEntryId}
                 />
@@ -517,9 +600,7 @@ export default function ScheduleEditor() {
               {viewMode === 'teacher' && (
                 <TeacherView
                   selectedTeacherId={selectedTeacherId}
-                  setSelectedTeacherId={setSelectedTeacherId}
                   filterDept={filterDept}
-                  setFilterDept={setFilterDept}
                   isEditMode={isEditMode}
                   setIsEditMode={setIsEditMode}
                   grid={grid}
@@ -530,7 +611,6 @@ export default function ScheduleEditor() {
                   teachers={teachers}
                   allClasses={classes}
                   draggableSubjects={availableSubjects}
-                  mobileHeaderContent={mobileViewModeSwitcher}
                   jointClassEntryIds={jointClassEntryIds}
                   jointClassPartnersByEntryId={jointClassPartnersByEntryId}
                 />

@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -7,7 +6,6 @@ import {
   ArrowLeft,
   CheckCircle,
   CheckSquare,
-  RotateCcw,
   Clock,
   Coffee,
   FileCheck,
@@ -18,21 +16,15 @@ import {
   Trash2,
   UserCheck,
   UserX,
-  Users, CalendarDays, BarChart3,
+  Users,
 } from 'lucide-react';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
 import type { AttendanceRecord, AttendanceStatus, NewAttendanceRecord } from '@/types/teaching';
 import type { LeaveRequest } from '@/types/leave';
-import type { ClassRoom } from '@/types/class';
-import type { Subject } from '@/types/curriculum';
+import { GRADE_LEVEL_ORDER, type ClassRoom } from '@/types/class';
+import type { Department, Subject } from '@/types/curriculum';
 import type { TeacherProfile } from '@/types/teacher';
 import { useSchedule } from '@/hooks/useSchedule';
 import { useSoundEffects } from '@/hooks/useSoundEffects';
@@ -42,8 +34,183 @@ import {
   type ScheduleEntry
 } from '@/types/schedule';
 import { useScheduleSettings } from '@/hooks/useScheduleSettings';
-import { subjectColorByName } from '../../schedule/constants/colors';
+import { subjectColorByName, subjectGradient, withAlpha } from '../../schedule/constants/colors';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
+import { PickerCoverflow } from '@/components/school/DepartmentPickerCoverflow';
+import {
+  ClassSelectionFlow,
+  DEPARTMENT_GRADES,
+  type DepartmentFilter,
+} from '@/components/school/ClassSelectionFlow';
+import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import {
+  TeacherAttendanceMonthCalendar,
+  TeacherDaySubjectsDrawer,
+  toSchoolDay,
+} from '@/features/teaching/components/TeacherAttendanceCalendar';
+import { toDateStr } from '@/features/calendar/utils';
+import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
+import { resolveSemesterDateRange } from '@/features/microSyllabus/utils/teachingPlanCalendar';
+import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
+import { departmentToSemesterKey } from '@/lib/teacherKpi/semesterDates';
+import { getSchedulesByYearSemesterStore } from '@/lib/firestoreShared/schedulesStore';
+import { getClassesByYearStore } from '@/lib/firestoreShared/studentSummaryStore';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from '@/components/ui/drawer';
+import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
+import { HiArrowLeft, HiPencilSquare } from 'react-icons/hi2';
+import { useAuth } from '@/hooks/useAuth';
+import {
+  buildTeacherIdentityKeys,
+  matchesTeacherIdentity,
+  resolveTeacherFromAuth,
+} from '@/lib/teachers/teacherIdentity';
+import { findApprovedLeaveForStudentOnDate } from '@/lib/attendance/leaveRequestStudentMatch';
+import SummaryTab from '@/features/attendance/components/SummaryTab';
+
+const ATTENDANCE_DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh flex-col bg-transparent p-0 before:hidden',
+  'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+  'sm:h-full sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md sm:p-2',
+);
+
+const ATTENDANCE_DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-col overflow-hidden bg-white',
+  'sm:rounded-4xl sm:border sm:border-slate-200/70 sm:shadow-xl',
+);
+
+function ClassPickerSkeleton() {
+  return (
+    <div className="flex w-full flex-col items-center gap-8 px-2" aria-busy="true" aria-label="กำลังโหลด">
+      <div className="relative mx-auto h-[min(420px,58vh)] w-full max-w-5xl">
+        <Skeleton className="absolute left-1/2 top-1/2 h-[min(368px,50vh)] w-[min(230px,62vw)] -translate-x-[calc(50%+260px)] -translate-y-1/2 scale-92 rounded-[2rem] bg-slate-200/50" />
+        <Skeleton className="absolute left-1/2 top-1/2 h-[min(368px,50vh)] w-[min(230px,62vw)] -translate-x-[calc(50%-260px)] -translate-y-1/2 scale-92 rounded-[2rem] bg-slate-200/50" />
+        <Skeleton className="absolute left-1/2 top-1/2 z-10 h-[min(400px,54vh)] w-[min(250px,68vw)] -translate-x-1/2 -translate-y-1/2 rounded-[2rem] bg-slate-200/80">
+          <div className="absolute top-6 left-6 right-6 space-y-3">
+            <Skeleton className="h-8 w-[70%] rounded-lg bg-slate-300/70" />
+            <Skeleton className="h-4 w-[45%] rounded-lg bg-slate-300/50" />
+          </div>
+        </Skeleton>
+      </div>
+      <div className="flex items-center gap-2">
+        <Skeleton className="h-2 w-8 rounded-full bg-slate-300" />
+        <Skeleton className="h-2 w-2 rounded-full bg-slate-200" />
+        <Skeleton className="h-2 w-2 rounded-full bg-slate-200" />
+      </div>
+    </div>
+  );
+}
+
+function MonthCalendarSkeleton() {
+  return (
+    <div
+      className="flex h-full min-h-0 w-full flex-col max-lg:overflow-y-auto"
+      aria-busy="true"
+      aria-label="กำลังโหลดตาราง"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-1.5 pt-0">
+        <Skeleton className="h-8 w-8 rounded-xl bg-slate-100" />
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-4 w-28 rounded-lg bg-slate-100" />
+          <Skeleton className="h-7 w-12 rounded-xl bg-slate-100" />
+        </div>
+        <Skeleton className="h-8 w-8 rounded-xl bg-slate-100" />
+      </div>
+      <div className="grid shrink-0 grid-cols-7 px-1 pb-1 pt-0">
+        {Array.from({ length: 7 }, (_, index) => (
+          <Skeleton key={index} className="mx-auto mb-2 h-3 w-4 rounded bg-slate-50" />
+        ))}
+      </div>
+      <div className="grid shrink-0 grid-cols-7 gap-1 px-1 pb-2 max-lg:auto-rows-[minmax(52px,auto)] lg:min-h-0 lg:flex-1 lg:auto-rows-fr">
+        {Array.from({ length: 35 }, (_, index) => (
+          <Skeleton
+            key={index}
+            className="min-h-[52px] rounded-xl bg-slate-100 lg:h-full lg:min-h-[80px]"
+          />
+        ))}
+      </div>
+      <div className="space-y-2 px-1 pb-2 lg:hidden">
+        <Skeleton className="h-3 w-28 rounded bg-slate-50" />
+        {Array.from({ length: 3 }, (_, index) => (
+          <Skeleton key={index} className="h-16 rounded-2xl bg-slate-100" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StudentRosterSkeleton({ count = 6 }: { count?: number }) {
+  return (
+    <div className="flex flex-col gap-2.5" aria-busy="true" aria-label="กำลังโหลดรายชื่อนักเรียน">
+      {Array.from({ length: count }, (_, index) => (
+        <div key={index} className="rounded-2xl border border-slate-200 bg-white p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-3.5 w-[55%] rounded-lg bg-slate-100" />
+              <Skeleton className="h-3 w-[28%] rounded-lg bg-slate-50" />
+            </div>
+            <Skeleton className="h-6 w-12 rounded-lg bg-slate-100" />
+          </div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {Array.from({ length: 4 }, (_, btn) => (
+              <Skeleton key={btn} className="h-9 rounded-xl bg-slate-100" />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Same options as TodayScheduleWidget class-attendance drawer */
+const WIDGET_ATTENDANCE_OPTIONS: {
+  value: AttendanceStatus;
+  label: string;
+  className: string;
+  activeClassName: string;
+  cardClassName: string;
+  badgeClassName: string;
+}[] = [
+  {
+    value: 'present',
+    label: 'มา',
+    className: 'border-emerald-200 text-emerald-600 bg-white',
+    activeClassName: 'border-emerald-500 bg-emerald-500 text-white',
+    cardClassName: 'bg-emerald-50/90 border-emerald-200',
+    badgeClassName: 'bg-emerald-100 text-emerald-700',
+  },
+  {
+    value: 'late',
+    label: 'สาย',
+    className: 'border-amber-200 text-amber-700 bg-white',
+    activeClassName: 'border-amber-500 bg-amber-500 text-white',
+    cardClassName: 'bg-amber-50/90 border-amber-200',
+    badgeClassName: 'bg-amber-100 text-amber-700',
+  },
+  {
+    value: 'absent',
+    label: 'ขาด',
+    className: 'border-rose-200 text-rose-700 bg-white',
+    activeClassName: 'border-rose-500 bg-rose-500 text-white',
+    cardClassName: 'bg-rose-50/90 border-rose-200',
+    badgeClassName: 'bg-rose-100 text-rose-700',
+  },
+  {
+    value: 'leave',
+    label: 'ลา',
+    className: 'border-blue-200 text-blue-700 bg-white',
+    activeClassName: 'border-blue-500 bg-blue-500 text-white',
+    cardClassName: 'bg-blue-50/90 border-blue-200',
+    badgeClassName: 'bg-blue-100 text-blue-700',
+  },
+];
 
 
 interface StudentRosterItem {
@@ -84,9 +251,10 @@ interface AttendanceSheetProps {
   onSave: (records: NewAttendanceRecord[]) => Promise<void>;
   attendance?: AttendanceRecord[];
   leaveRequests?: LeaveRequest[];
+  /** false while enrollments/students still loading — shows roster skeleton */
+  isRosterDataLoaded?: boolean;
 }
 
-type DepartmentFilter = 'all' | 'early' | 'primary' | 'secondary';
 type AttendanceSubview = 'today' | 'history' | 'summary';
 
 interface ScheduleGridProps {
@@ -97,27 +265,10 @@ interface ScheduleGridProps {
   attendance: AttendanceRecord[];
   teachersById: Record<string, TeacherProfile>;
   getStudentsForClass: (classId: string) => StudentRosterItem[];
+  /** teacher = own timetable (show class name, any day clickable) */
+  variant?: 'class' | 'teacher';
+  classNameById?: Record<string, string>;
 }
-
-const DEPARTMENT_OPTIONS: Array<{ id: DepartmentFilter; label: string }> = [
-  { id: 'all', label: 'ทั้งหมด' },
-  { id: 'early', label: 'อนุบาล' },
-  { id: 'primary', label: 'ประถม' },
-  { id: 'secondary', label: 'มัธยม' },
-];
-
-const DEPARTMENT_GRADES: Record<DepartmentFilter, string[]> = {
-  all: [],
-  early: ['อ.1', 'อ.2', 'อ.3'],
-  primary: ['ป.1', 'ป.2', 'ป.3', 'ป.4', 'ป.5', 'ป.6'],
-  secondary: ['ม.1', 'ม.2', 'ม.3', 'ม.4', 'ม.5', 'ม.6'],
-};
-
-const SUBVIEW_OPTIONS: Array<{ id: AttendanceSubview; label: string; icon: any }> = [
-  { id: 'today', label: 'วันนี้', icon: CalendarDays },
-  { id: 'history', label: 'ย้อนหลัง', icon: History },
-  { id: 'summary', label: 'สรุปผล', icon: BarChart3 },
-];
 
 const STATUS_CONFIG: Record<AttendanceStatus, {
   label: string;
@@ -136,6 +287,227 @@ const STATUS_CONFIG: Record<AttendanceStatus, {
 };
 
 const STATUS_BUTTONS: AttendanceStatus[] = ['present', 'late', 'absent', 'leave'];
+
+function TeacherAttendanceDrawer({
+  open,
+  onOpenChange,
+  onBackToSubjects,
+  period,
+  subjectName,
+  className,
+  rows,
+  loading,
+  saving,
+  locked,
+  readOnly,
+  readOnlyReason,
+  muteStatusColors,
+  canSetLeave,
+  onUnlock,
+  onSave,
+  onToggleAllPresent,
+  allPresentActive,
+  onSetStatus,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onBackToSubjects: () => void;
+  period: number;
+  subjectName: string;
+  className: string;
+  rows: StudentRow[];
+  loading?: boolean;
+  saving: boolean;
+  locked: boolean;
+  /** Past/future — ห้ามแก้ไข */
+  readOnly?: boolean;
+  readOnlyReason?: string;
+  /** Future date — ปุ่มสถานะสีเทา */
+  muteStatusColors?: boolean;
+  canSetLeave: (studentId: string) => boolean;
+  onUnlock: () => void;
+  onSave: () => void;
+  onToggleAllPresent: () => void;
+  allPresentActive: boolean;
+  onSetStatus: (studentId: string, status: AttendanceStatus) => void;
+}) {
+  const editingLocked = locked || !!readOnly;
+
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange} direction="right">
+      <DrawerContent className={ATTENDANCE_DRAWER_CONTENT_CLASS}>
+        <div className={ATTENDANCE_DRAWER_PANEL_CLASS}>
+          <DrawerHeader className="shrink-0 px-4 pb-2 pt-4">
+            <div className="relative flex min-h-10 items-center justify-center">
+              {rows.length > 0 && !readOnly && !loading && (
+                locked ? (
+                  <button
+                    type="button"
+                    onClick={onUnlock}
+                    className="absolute left-0 top-1/2 -translate-y-1/2 inline-flex items-center gap-1.5 text-[11px] font-black text-blue-600 hover:text-blue-700 transition-colors"
+                  >
+                    <HiPencilSquare className="h-4 w-4" />
+                    แก้ไข
+                  </button>
+                ) : (
+                  <label className="absolute left-0 top-1/2 -translate-y-1/2 inline-flex cursor-pointer select-none items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={allPresentActive}
+                      onChange={onToggleAllPresent}
+                      className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span className="text-[11px] font-black text-slate-700">เช็กทั้งหมด</span>
+                  </label>
+                )
+              )}
+              {readOnly && (
+                <span className="absolute left-0 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-400">
+                  {readOnlyReason || 'ดูอย่างเดียว'}
+                </span>
+              )}
+
+              <div className="min-w-0 px-12 text-center">
+                <DrawerTitle className="text-base font-black text-slate-800">
+                  เช็กชื่อคาบที่ {period}
+                </DrawerTitle>
+                <DrawerDescription className="text-xs text-slate-500">
+                  {subjectName}
+                  {className ? ` · ${className}` : ''}
+                </DrawerDescription>
+              </div>
+
+              <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                <button
+                  type="button"
+                  onClick={onBackToSubjects}
+                  className={DRAWER_HEADER_ICON_BTN}
+                  aria-label="กลับไปหน้ารายวิชา"
+                  title="กลับไปหน้ารายวิชา"
+                >
+                  <HiArrowLeft className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </DrawerHeader>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+            {loading && rows.length === 0 ? (
+              <StudentRosterSkeleton />
+            ) : rows.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold text-slate-500">
+                ไม่พบรายชื่อนักเรียนในห้องนี้
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {rows.map((student) => {
+                  const statusOption = student.status
+                    ? WIDGET_ATTENDANCE_OPTIONS.find((opt) => opt.value === student.status)
+                    : null;
+                  const leaveAllowed = canSetLeave(student.studentId);
+                  const showGrayStatus = !!muteStatusColors;
+
+                  return (
+                    <div
+                      key={student.studentId}
+                      className={cn(
+                        'rounded-2xl border p-3 transition-colors duration-200',
+                        showGrayStatus
+                          ? 'border-slate-200 bg-white'
+                          : (statusOption?.cardClassName ?? 'border-slate-200 bg-white'),
+                      )}
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-[13px] font-black text-slate-800">
+                            {student.studentName}
+                          </p>
+                          <p className="text-[11px] font-bold text-slate-400">{student.studentCode}</p>
+                        </div>
+                        <span
+                          className={cn(
+                            'rounded-lg px-2 py-1 text-[10px] font-black',
+                            showGrayStatus
+                              ? 'bg-slate-100 text-slate-400'
+                              : (statusOption?.badgeClassName ?? 'bg-slate-100 text-slate-500'),
+                          )}
+                        >
+                          {showGrayStatus ? 'ยังไม่ถึงวัน' : (statusOption?.label ?? 'ยังไม่เช็ก')}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {WIDGET_ATTENDANCE_OPTIONS.map((opt) => {
+                          const isActive = !showGrayStatus && student.status === opt.value;
+                          const leaveBlocked = opt.value === 'leave' && !leaveAllowed;
+                          const disabled = editingLocked || leaveBlocked;
+                          return (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              disabled={disabled}
+                              title={
+                                showGrayStatus
+                                  ? 'ยังไม่ถึงวันสอน'
+                                  : leaveBlocked
+                                    ? 'ลาได้เฉพาะเมื่อมีใบลาที่อนุมัติแล้ว'
+                                    : undefined
+                              }
+                              onClick={() => onSetStatus(student.studentId, opt.value)}
+                              className={cn(
+                                'h-9 rounded-lg border text-[11px] font-black transition active:scale-[0.98]',
+                                showGrayStatus
+                                  ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                                  : isActive
+                                    ? opt.activeClassName
+                                    : opt.className,
+                                !showGrayStatus && disabled && 'cursor-not-allowed opacity-60',
+                              )}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {rows.length > 0 && !readOnly && (
+            <div className="shrink-0 border-t border-slate-100 bg-white px-4 pt-2 pb-4">
+              <button
+                type="button"
+                onClick={() => {
+                  if (locked) {
+                    onUnlock();
+                    return;
+                  }
+                  onSave();
+                }}
+                disabled={saving}
+                className={cn(
+                  'h-11 w-full rounded-xl text-sm font-black transition active:scale-[0.99] disabled:opacity-60',
+                  locked
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                    : 'bg-slate-900 text-white hover:bg-slate-800',
+                )}
+              >
+                {saving
+                  ? 'กำลังบันทึก...'
+                  : locked
+                    ? 'แก้ไข'
+                    : `บันทึกเช็กชื่อ (${rows.length} คน)`}
+              </button>
+            </div>
+          )}
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
 
 function formatSessionDate(date: string) {
   const parsed = new Date(date);
@@ -169,28 +541,6 @@ function normalizeThaiName(value: string): string {
   return value.replace(/\s+/g, '').trim();
 }
 
-function withAlpha(color: string, alpha: number): string {
-  const m = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)/i);
-  if (!m) return color;
-  const [, r, g, b] = m;
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-function subjectGradient(
-  color: { bg: string; border: string; text: string; accent: string },
-  isCurrent = false,
-): string {
-  const strong = withAlpha(color.accent, isCurrent ? 0.94 : 0.9);
-  const mid = withAlpha(color.accent, isCurrent ? 0.82 : 0.76);
-  const soft = withAlpha(color.bg, isCurrent ? 0.88 : 0.82);
-  const sheen = withAlpha(color.accent, isCurrent ? 0.38 : 0.28);
-  return [
-    `radial-gradient(120% 130% at 100% 100%, ${sheen} 0%, transparent 56%)`,
-    'radial-gradient(140% 120% at 0% 0%, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 52%)',
-    `linear-gradient(160deg, ${strong} 0%, ${mid} 46%, ${soft} 100%)`,
-  ].join(', ');
-}
-
 const REST_GRADIENT = [
   'radial-gradient(125% 120% at 100% 0%, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 56%)',
   'linear-gradient(160deg, rgba(16,185,129,0.95) 0%, rgba(45,212,191,0.9) 100%)',
@@ -204,10 +554,13 @@ function ScheduleGrid({
   attendance,
   teachersById,
   getStudentsForClass,
+  variant = 'class',
+  classNameById = {},
 }: ScheduleGridProps) {
   const { periodCount, lunchPeriods, breakPeriods, periodTimes } = useScheduleSettings(classId || undefined);
   const periods = Array.from({ length: periodCount }, (_, i) => i + 1);
   const todayDay = new Date().getDay() || 7;
+  const isTeacherView = variant === 'teacher';
   const [mobileDay, setMobileDay] = useState<number>(
     SCHOOL_DAYS.includes(todayDay as (typeof SCHOOL_DAYS)[number]) ? todayDay : SCHOOL_DAYS[0]
   );
@@ -272,6 +625,8 @@ function ScheduleGrid({
     }
 
     const isToday = entry.day === todayDay;
+    const canClick = isTeacherView || isToday;
+    const classLabel = classNameById[entry.classId] || entry.classId;
     const teacherParts = entry.teacherName ? entry.teacherName.trim().split(/\s+/) : [];
     const teacherFirst = teacherParts.length >= 2 ? teacherParts.slice(0, -1).join(' ') : (entry.teacherName || '-');
     const teacherLast = teacherParts.length >= 2 ? teacherParts[teacherParts.length - 1] : '';
@@ -285,13 +640,13 @@ function ScheduleGrid({
     return (
       <motion.button
         key={entry.id}
-        whileHover={isToday ? { opacity: 0.95 } : {}}
-        whileTap={isToday ? { scale: 0.98 } : {}}
-        onClick={() => isToday && onSlotClick(entry)}
-        disabled={!isToday}
+        whileHover={canClick ? { opacity: 0.95 } : {}}
+        whileTap={canClick ? { scale: 0.98 } : {}}
+        onClick={() => canClick && onSlotClick(entry)}
+        disabled={!canClick}
         className={`group relative w-full overflow-hidden rounded-xl cursor-pointer transition-all duration-150 flex flex-col justify-between text-left ${
           compact ? 'p-2' : 'p-2.5'
-        } ${!isToday ? 'opacity-40 grayscale-[0.4] scale-[0.98] cursor-not-allowed' : ''}`}
+        } ${!canClick ? 'opacity-40 grayscale-[0.4] scale-[0.98] cursor-not-allowed' : ''}`}
         style={{
           background: subjectGradient(color, isCurrent),
           minHeight: compact ? 62 : 70,
@@ -327,34 +682,44 @@ function ScheduleGrid({
             >
               {entry.subjectName}
             </p>
-          </div>
-
-          <div className="shrink-0 text-right flex items-center gap-1.5 self-end mb-0.5 pl-1.5">
-            <div className="flex flex-col items-end leading-tight">
-              <span
-                className="text-[8.5px] font-bold text-white leading-tight whitespace-nowrap block"
+            {isTeacherView && (
+              <p
+                className="mt-1 text-[9px] font-bold text-white/90 truncate"
                 style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
               >
-                {teacherFirst}
-              </span>
-              {teacherLast && (
+                {classLabel}
+              </p>
+            )}
+          </div>
+
+          {!isTeacherView && (
+            <div className="shrink-0 text-right flex items-center gap-1.5 self-end mb-0.5 pl-1.5">
+              <div className="flex flex-col items-end leading-tight">
                 <span
-                  className="text-[8.5px] font-bold text-white/90 leading-tight whitespace-nowrap block"
+                  className="text-[8.5px] font-bold text-white leading-tight whitespace-nowrap block"
                   style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
                 >
-                  {teacherLast}
+                  {teacherFirst}
                 </span>
-              )}
+                {teacherLast && (
+                  <span
+                    className="text-[8.5px] font-bold text-white/90 leading-tight whitespace-nowrap block"
+                    style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
+                  >
+                    {teacherLast}
+                  </span>
+                )}
+              </div>
+              <Avatar
+                className={`${compact ? 'w-6 h-6' : 'w-7 h-7'} rounded-full shrink-0 border border-white/40 shadow-sm`}
+              >
+                <AvatarImage src={teacherPhotoURL} alt={entry.teacherName} />
+                <AvatarFallback className="bg-white/85 text-[9px] font-black text-slate-700">
+                  {teacherInitials}
+                </AvatarFallback>
+              </Avatar>
             </div>
-            <Avatar
-              className={`${compact ? 'w-6 h-6' : 'w-7 h-7'} rounded-full shrink-0 border border-white/40 shadow-sm`}
-            >
-              <AvatarImage src={teacherPhotoURL} alt={entry.teacherName} />
-              <AvatarFallback className="bg-white/85 text-[9px] font-black text-slate-700">
-                {teacherInitials}
-              </AvatarFallback>
-            </Avatar>
-          </div>
+          )}
         </div>
 
         <div className="absolute right-2 top-2 flex items-center gap-1">
@@ -574,9 +939,32 @@ export default function AttendanceSheet({
   onSave,
   attendance = [],
   leaveRequests = [],
+  isRosterDataLoaded = true,
 }: AttendanceSheetProps) {
   const [searchParams] = useSearchParams();
+  const { role } = useAuth();
+  const isTeacherPicker = role === 'teacher';
+  const isAdminOverview = role === 'admin' || role === 'sysadmin';
+  const { activeYear } = useActiveAcademicYear();
+  const { events: calendarEvents } = useAcademicCalendar(role ?? undefined);
   const { entries: scheduleEntries } = useSchedule();
+  const deptSemesterSettings = useSyncExternalStore(
+    deptSemestersStore.subscribe,
+    deptSemestersStore.getSnapshot,
+    deptSemestersStore.getSnapshot,
+  );
+  const scheduleStore = getSchedulesByYearSemesterStore(academicYearId || '2568', semester);
+  const classesStore = getClassesByYearStore(academicYearId || '2568');
+  const scheduleReady = useSyncExternalStore(
+    scheduleStore.subscribe,
+    scheduleStore.getReady,
+    scheduleStore.getReady,
+  );
+  const classesReady = useSyncExternalStore(
+    classesStore.subscribe,
+    classesStore.getReady,
+    classesStore.getReady,
+  );
   const todayDate = (() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -585,6 +973,9 @@ export default function AttendanceSheet({
   const [selectedSubjectId, setSelectedSubjectId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedDate, setSelectedDate] = useState(todayDate);
+  const isPastSession = selectedDate < todayDate;
+  const isFutureSession = selectedDate > todayDate;
+  const isAttendanceReadOnly = isPastSession || isFutureSession;
   const [selectedPeriod, setSelectedPeriod] = useState(1);
   const [viewMode, setViewMode] = useState<'schedule' | 'attendance'>('schedule');
   const [rows, setRows] = useState<StudentRow[]>([]);
@@ -595,25 +986,25 @@ export default function AttendanceSheet({
   const [selectedDept, setSelectedDept] = useState<DepartmentFilter>('all');
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [attendanceDrawerOpen, setAttendanceDrawerOpen] = useState(false);
+  const [daySubjectsDrawerOpen, setDaySubjectsDrawerOpen] = useState(false);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(null);
+  const [allPresentSnapshot, setAllPresentSnapshot] = useState<StudentRow[] | null>(null);
 
   const [subView, setSubView] = useState<AttendanceSubview>('today');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<ScheduleEntry | null>(null);
-  const [filtersTarget, setFiltersTarget] = useState<HTMLElement | null>(null);
-
+  const [adminSummary, setAdminSummary] = useState<{
+    subjectId: string;
+    classId: string;
+  } | null>(null);
   const rowsRef = useRef<StudentRow[]>([]);
   const teachersById = useMemo(
     () => Object.fromEntries(teachers.map((teacher) => [teacher.id, teacher])),
     [teachers],
   );
-
-  useEffect(() => {
-    setFiltersTarget(
-      document.getElementById('header-portal-center')
-      || document.getElementById('header-portal-filters')
-    );
-  }, []);
 
   const buildRowsForSession = useCallback(
     (subjectId: string, classId: string, date: string, period: number) => {
@@ -678,7 +1069,14 @@ export default function AttendanceSheet({
         setSelectedDept(targetClass.departmentId as DepartmentFilter || 'secondary');
         setSelectedLevel(targetClass.gradeLevel);
         setSelectedRoom(targetClass.roomNumber);
+        setSelectedClassId(targetClass.id);
       }
+    }
+
+    // Admin/sysadmin → summary table (no mark UI)
+    if (isAdminOverview && pSubjectId && pClassId) {
+      setAdminSummary({ subjectId: pSubjectId, classId: pClassId });
+      return;
     }
 
     if (pSubjectId && pClassId && pPeriod) {
@@ -703,10 +1101,15 @@ export default function AttendanceSheet({
         const nextRows = buildRowsForSession(pSubjectId, pClassId, finalDate, periodNum);
         setRows(nextRows);
         
-        setViewMode('attendance');
+        if (role === 'teacher') {
+          setAttendanceDrawerOpen(true);
+          setViewMode('schedule');
+        } else {
+          setViewMode('attendance');
+        }
       }
     }
-  }, [searchParams, buildRowsForSession, todayDate, scheduleEntries, classes]);
+  }, [searchParams, buildRowsForSession, todayDate, scheduleEntries, classes, role, isAdminOverview, mySubjects]);
 
   const filteredClasses = useMemo(() => {
     let list = classes;
@@ -731,13 +1134,189 @@ export default function AttendanceSheet({
     )).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [classes, selectedDept, selectedLevel]);
 
+  const gradeOptions = useMemo(() => {
+    if (selectedDept === 'all') return [];
+    const grades = new Set<string>();
+    classes
+      .filter((c) => c.departmentId === selectedDept)
+      .forEach((c) => {
+        if (c.gradeLevel) grades.add(c.gradeLevel);
+      });
+    const fromClasses = Array.from(grades).sort(
+      (a, b) => (GRADE_LEVEL_ORDER[a] ?? 99) - (GRADE_LEVEL_ORDER[b] ?? 99),
+    );
+    if (fromClasses.length > 0) return fromClasses;
+    return DEPARTMENT_GRADES[selectedDept] ?? [];
+  }, [classes, selectedDept]);
+
+  const adminClassOptions = useMemo(() => {
+    if (selectedDept === 'all' || !selectedLevel) return [] as ClassRoom[];
+    return classes
+      .filter((c) => c.departmentId === selectedDept && c.gradeLevel === selectedLevel)
+      .slice()
+      .sort((a, b) =>
+        (a.roomNumber || a.className).localeCompare(b.roomNumber || b.className, undefined, {
+          numeric: true,
+        }),
+      );
+  }, [classes, selectedDept, selectedLevel]);
+
+  const teacherIdentityKeys = useMemo(() => {
+    if (!isTeacherPicker) return new Set<string>();
+    const profile = resolveTeacherFromAuth(teacherId, teachers);
+    return buildTeacherIdentityKeys(teacherId, profile);
+  }, [isTeacherPicker, teacherId, teachers]);
+
+  const teacherScheduleEntries = useMemo(() => {
+    if (!isTeacherPicker) return [];
+    return scheduleEntries.filter(
+      (entry) =>
+        String(entry.year) === String(academicYearId)
+        && Number(entry.semester) === Number(semester)
+        && matchesTeacherIdentity(entry.teacherId, teacherIdentityKeys),
+    );
+  }, [academicYearId, isTeacherPicker, scheduleEntries, semester, teacherIdentityKeys]);
+
+  const teachingWeekdays = useMemo(() => {
+    const set = new Set<number>();
+    for (const entry of teacherScheduleEntries) set.add(entry.day);
+    return set;
+  }, [teacherScheduleEntries]);
+
+  const periodsByWeekday = useMemo(() => {
+    const map = new Map<number, number[]>();
+    for (const entry of teacherScheduleEntries) {
+      const periods = map.get(entry.day) ?? [];
+      if (!periods.includes(entry.period)) periods.push(entry.period);
+      map.set(entry.day, periods);
+    }
+    for (const periods of map.values()) periods.sort((a, b) => a - b);
+    return map;
+  }, [teacherScheduleEntries]);
+
+  const scheduleSlots = useMemo(
+    () =>
+      teacherScheduleEntries.map((entry) => ({
+        day: entry.day,
+        classId: entry.classId,
+        subjectId: entry.subjectId,
+        period: entry.period,
+      })),
+    [teacherScheduleEntries],
+  );
+
+  const checkedSessionKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const record of attendance) {
+      if (String(record.academicYearId) !== String(academicYearId)) continue;
+      if (Number(record.semester) !== Number(semester)) continue;
+      if (
+        !matchesTeacherIdentity(record.teacherId, teacherIdentityKeys)
+        && record.teacherId !== teacherId
+      ) {
+        continue;
+      }
+      keys.add(`${record.date}|${record.classId}|${record.subjectId}|${Number(record.period)}`);
+    }
+    return keys;
+  }, [academicYearId, attendance, semester, teacherId, teacherIdentityKeys]);
+
+  const teacherDeptKey = useMemo(() => {
+    const profile = teachers.find((t) => t.id === teacherId || t.userId === teacherId);
+    return departmentToSemesterKey(profile?.department);
+  }, [teacherId, teachers]);
+
+  const academicYearRange = useMemo(
+    () =>
+      resolveSemesterDateRange(
+        academicYearId || activeYear?.year || '',
+        semester,
+        activeYear,
+        calendarEvents,
+        deptSemesterSettings,
+        isTeacherPicker ? teacherDeptKey : undefined,
+      ),
+    [
+      academicYearId,
+      activeYear,
+      calendarEvents,
+      deptSemesterSettings,
+      isTeacherPicker,
+      semester,
+      teacherDeptKey,
+    ],
+  );
+
+  const selectedDayEntries = useMemo(() => {
+    if (!selectedCalendarDate) return [];
+    const schoolDay = toSchoolDay(selectedCalendarDate);
+    return teacherScheduleEntries
+      .filter((entry) => entry.day === schoolDay)
+      .sort((a, b) => a.period - b.period || a.classId.localeCompare(b.classId));
+  }, [selectedCalendarDate, teacherScheduleEntries]);
+
+  const classNameById = useMemo(
+    () => Object.fromEntries(classes.map((c) => [c.id, c.className])),
+    [classes],
+  );
+
   const effectiveSelectedClassId = useMemo(() => {
+    if (selectedEntry?.classId) return selectedEntry.classId;
+    if (isAdminOverview && selectedClassId) return selectedClassId;
+    if (selectedClassId && (isTeacherPicker || filteredClasses.some(cls => cls.id === selectedClassId))) {
+      return selectedClassId;
+    }
     if (!selectedRoom) return '';
     if (selectedClassId && filteredClasses.some(cls => cls.id === selectedClassId)) {
       return selectedClassId;
     }
     return filteredClasses[0]?.id ?? '';
-  }, [filteredClasses, selectedClassId, selectedRoom]);
+  }, [filteredClasses, isAdminOverview, isTeacherPicker, selectedClassId, selectedEntry?.classId, selectedRoom]);
+
+  const adminSubjectCards = useMemo(() => {
+    if (!isAdminOverview || !effectiveSelectedClassId) return [];
+    const map = new Map<string, {
+      subjectId: string;
+      subjectCode: string;
+      subjectName: string;
+      subjectGroup?: string;
+      classId: string;
+      className: string;
+      teacherId: string;
+      teacherName: string;
+      teacherFirstName: string;
+      teacherLastName: string;
+      teacherPhotoURL?: string;
+    }>();
+    for (const e of scheduleEntries) {
+      if (String(e.year) !== String(academicYearId)) continue;
+      if (Number(e.semester) !== Number(semester)) continue;
+      if (e.classId !== effectiveSelectedClassId) continue;
+      if (map.has(e.subjectId)) continue;
+      const teacher = teachersById[e.teacherId];
+      const parts = (e.teacherName || '').trim().split(/\s+/).filter(Boolean);
+      const teacherFirstName = teacher?.firstName
+        || (parts.length >= 2 ? parts.slice(0, -1).join(' ') : (e.teacherName || ''));
+      const teacherLastName = teacher?.lastName
+        || (parts.length >= 2 ? parts[parts.length - 1]! : '');
+      map.set(e.subjectId, {
+        subjectId: e.subjectId,
+        subjectCode: e.subjectCode,
+        subjectName: e.subjectName,
+        subjectGroup: e.subjectGroup,
+        classId: e.classId,
+        className: classNameById[e.classId] ?? e.classId,
+        teacherId: e.teacherId,
+        teacherName: e.teacherName,
+        teacherFirstName,
+        teacherLastName,
+        teacherPhotoURL: teacher?.photoURL,
+      });
+    }
+    return [...map.values()].sort((a, b) =>
+      a.subjectCode.localeCompare(b.subjectCode, 'th'),
+    );
+  }, [academicYearId, classNameById, effectiveSelectedClassId, isAdminOverview, scheduleEntries, semester, teachersById]);
 
   const { periodTimes } = useScheduleSettings(effectiveSelectedClassId);
 
@@ -761,8 +1340,8 @@ export default function AttendanceSheet({
       scheduleEntries.filter(
         entry =>
           entry.classId === effectiveSelectedClassId &&
-          entry.year === academicYearId &&
-          entry.semester === semester,
+          String(entry.year) === String(academicYearId) &&
+          Number(entry.semester) === Number(semester),
       ),
     [academicYearId, effectiveSelectedClassId, scheduleEntries, semester],
   );
@@ -771,11 +1350,11 @@ export default function AttendanceSheet({
     () =>
       attendance.filter(
         record =>
-          record.teacherId === teacherId &&
-          record.academicYearId === academicYearId &&
-          record.semester === semester,
+          (matchesTeacherIdentity(record.teacherId, teacherIdentityKeys) || record.teacherId === teacherId) &&
+          String(record.academicYearId) === String(academicYearId) &&
+          Number(record.semester) === Number(semester),
       ),
-    [academicYearId, attendance, semester, teacherId],
+    [academicYearId, attendance, semester, teacherId, teacherIdentityKeys],
   );
 
   const sessionStats = useMemo(() => {
@@ -823,56 +1402,67 @@ export default function AttendanceSheet({
   const { playPop, playSuccess } = useSoundEffects();
 
 
-  // Auto-sync rows when students data becomes available (เช่น Firestore โหลดเสร็จหลัง slot ถูกเลือก)
+  // Auto-sync rows when students/attendance data becomes available
+  // (เช่น Firestore โหลดเสร็จหลังเลือกคาบ — รวม drawer ของครูที่ viewMode ยังเป็น schedule)
   useEffect(() => {
-    if (viewMode !== 'attendance' || !effectiveSelectedClassId) return;
+    const drawerActive = isTeacherPicker && attendanceDrawerOpen;
+    const pageActive = viewMode === 'attendance' && !!effectiveSelectedClassId;
+    if (!drawerActive && !pageActive) return;
+
     const targetSubjectId = selectedEntry?.subjectId || selectedSubjectId;
+    const targetClassId = selectedEntry?.classId || effectiveSelectedClassId;
     const targetPeriod = selectedEntry?.period || selectedPeriod;
-    if (!targetSubjectId || !targetPeriod) return;
+    if (!targetSubjectId || !targetClassId || !targetPeriod) return;
 
     const freshRows = buildRowsForSession(
       targetSubjectId,
-      effectiveSelectedClassId,
+      targetClassId,
       selectedDate,
-      targetPeriod
+      targetPeriod,
     );
     if (freshRows.length === 0) return;
 
     const currentRows = rowsRef.current;
     const hasCountChanged = freshRows.length !== currentRows.length;
+    const hasStatusFromServer = freshRows.some((fr) => fr.status != null);
+    const currentAllUnchecked = currentRows.every((r) => r.status == null);
 
     // ตรวจสอบว่ามีการลาที่เพิ่งได้รับอนุมัติ แต่ยังไม่ถูก reflect ใน rows ปัจจุบัน
     const newlyApprovedLeaveStudents = freshRows.filter(fr => {
-      if (fr.status !== 'leave') return false;
+      if (fr.status !== 'leave' || !fr.autoFilledLeave) return false;
       const existing = currentRows.find(r => r.studentId === fr.studentId);
       return !existing || existing.status !== 'leave';
     });
 
-    if (hasCountChanged) {
-      // นักเรียนเพิ่ม/ลด → rebuild ทั้งหมด
+    if (hasCountChanged || (hasStatusFromServer && currentAllUnchecked)) {
       setRows(freshRows);
+      if (hasStatusFromServer && currentAllUnchecked) {
+        setSaved(true);
+        setAllPresentSnapshot(null);
+      }
       return;
     }
 
     if (newlyApprovedLeaveStudents.length > 0) {
-      // มีการลาใหม่อนุมัติ → merge เฉพาะนักเรียนที่ยังไม่ถูกครูแก้ไข (status === null หรือยังเป็น leave เดิม)
-      // ไม่ overwrite สถานะที่ครูกรอกไปแล้ว
       setRows(prev =>
         prev.map(row => {
           const freshRow = newlyApprovedLeaveStudents.find(fr => fr.studentId === row.studentId);
           if (!freshRow) return row;
-          // แก้เฉพาะนักเรียนที่ยังไม่มีสถานะ หรือมีสถานะ leave อยู่แล้ว (ไม่ overwrite งาน manual ของครู)
           if (row.status === null || row.status === 'leave') {
             return { ...row, status: 'leave', note: freshRow.note, autoFilledLeave: true };
           }
           return row;
-        })
+        }),
       );
     }
   }, [
+    attendance,
+    attendanceDrawerOpen,
     buildRowsForSession,
     effectiveSelectedClassId,
+    isTeacherPicker,
     selectedDate,
+    selectedEntry?.classId,
     selectedEntry?.period,
     selectedEntry?.subjectId,
     selectedPeriod,
@@ -881,39 +1471,91 @@ export default function AttendanceSheet({
   ]);
 
   const setStatus = (studentId: string, status: AttendanceStatus) => {
+    if (isAttendanceReadOnly) {
+      toast.error(isPastSession ? 'ไม่สามารถเช็กชื่อย้อนหลังได้' : 'ยังไม่ถึงวันสอน ไม่สามารถเช็กชื่อได้');
+      return;
+    }
+
+    const row = rowsRef.current.find((r) => r.studentId === studentId);
+    if (!row) return;
+
+    const nextStatus = row.status === status ? null : status;
+    if (nextStatus === 'leave') {
+      const approved = findApprovedLeaveForStudentOnDate(
+        leaveRequests,
+        { id: studentId, studentCode: row.studentCode },
+        selectedDate,
+        row.studentName,
+      );
+      if (!approved) {
+        toast.error('เช็ก «ลา» ได้เฉพาะเมื่อมีใบลาที่อนุมัติแล้ว');
+        return;
+      }
+    }
+
     playPop();
     setRows(prev =>
-      prev.map(row => {
-        if (row.studentId === studentId) {
-          // If clicking the same status, toggle it back to null
-          const newStatus = row.status === status ? null : status;
-          return { ...row, status: newStatus, autoFilledLeave: false };
-        }
-        return row;
+      prev.map(r => {
+        if (r.studentId !== studentId) return r;
+        return {
+          ...r,
+          status: nextStatus,
+          autoFilledLeave: nextStatus === 'leave' ? true : false,
+        };
       }),
     );
     setSaved(false);
+    setAllPresentSnapshot(null);
   };
 
 
-  const handleSlotClick = (entry: ScheduleEntry) => {
-    const nextDate = resolveNearestClassDate(entry.day);
+  const handleSlotClick = (entry: ScheduleEntry, dateOverride?: string) => {
+    const nextDate = dateOverride ?? resolveNearestClassDate(entry.day);
     const nextRows = buildRowsForSession(entry.subjectId, entry.classId, nextDate, entry.period);
+    const matchedClass = classes.find((c) => c.id === entry.classId);
+    const past = nextDate < todayDate;
+    const future = nextDate > todayDate;
+    const hasSavedStatuses = nextRows.some((row) => row.status != null && !row.autoFilledLeave);
 
     setSelectedEntry(entry);
     setSelectedClassId(entry.classId);
     setSelectedSubjectId(entry.subjectId);
     setSelectedPeriod(entry.period);
     setSelectedDate(nextDate);
+    if (matchedClass) {
+      setSelectedLevel(matchedClass.gradeLevel);
+      setSelectedRoom(matchedClass.roomNumber);
+      if (matchedClass.departmentId) setSelectedDept(matchedClass.departmentId);
+    }
     setRows(nextRows);
     setSearchQuery('');
-    setSaved(false);
+    setSaved(past || future || hasSavedStatuses);
+    setAllPresentSnapshot(null);
     setSubView('today');
-    setViewMode('attendance');
+    if (isTeacherPicker) {
+      setAttendanceDrawerOpen(true);
+      setViewMode('schedule');
+    } else {
+      setViewMode('attendance');
+    }
+  };
+
+  const handleCalendarDaySelect = (day: Date) => {
+    const dateStr = toDateStr(day);
+    if (dateStr < academicYearRange.start || dateStr > academicYearRange.end) return;
+    setSelectedCalendarDate(day);
+    setDaySubjectsDrawerOpen(true);
+  };
+
+  const handleDaySubjectSelect = (entry: ScheduleEntry) => {
+    if (!selectedCalendarDate) return;
+    setDaySubjectsDrawerOpen(false);
+    handleSlotClick(entry, toDateStr(selectedCalendarDate));
   };
 
   // ── Auto-select current session ──────────────────────────────────────────
   useEffect(() => {
+    if (isTeacherPicker || isAdminOverview) return;
     if (selectedEntry || classEntries.length === 0 || Object.keys(periodTimes).length === 0) return;
 
     const now = new Date();
@@ -962,14 +1604,33 @@ export default function AttendanceSheet({
   }, [
     buildRowsForSession,
     classEntries,
+    isAdminOverview,
+    isTeacherPicker,
     periodTimes,
     selectedEntry,
   ]);
 
   const handleSave = useCallback(async (silent = false) => {
     if (!selectedEntry || !selectedClass) return;
+    if (selectedDate < todayDate) {
+      if (!silent) toast.error('ไม่สามารถเช็กชื่อย้อนหลังได้');
+      return;
+    }
+    if (selectedDate > todayDate) {
+      if (!silent) toast.error('ยังไม่ถึงวันสอน ไม่สามารถเช็กชื่อได้');
+      return;
+    }
 
-    const validRows = rows.filter(row => row.status !== null);
+    const validRows = rows.filter((row) => {
+      if (row.status === null) return false;
+      if (row.status !== 'leave') return true;
+      return !!findApprovedLeaveForStudentOnDate(
+        leaveRequests,
+        { id: row.studentId, studentCode: row.studentCode },
+        selectedDate,
+        row.studentName,
+      );
+    });
 
     if (!silent) setSaving(true);
 
@@ -1005,9 +1666,9 @@ export default function AttendanceSheet({
     }
   }, [
     academicYearId,
+    leaveRequests,
     onSave,
     playSuccess,
-    rows,
     selectedClass,
     selectedDate,
     selectedEntry,
@@ -1015,6 +1676,8 @@ export default function AttendanceSheet({
     selectedSubject?.name,
     semester,
     teacherId,
+    todayDate,
+    rows,
   ]);
 
   // Auto-save logic removed per user request
@@ -1025,10 +1688,32 @@ export default function AttendanceSheet({
     setSaved(false);
   };
 
+  const handleToggleAllPresent = () => {
+    if (isAttendanceReadOnly) {
+      toast.error(isPastSession ? 'ไม่สามารถเช็กชื่อย้อนหลังได้' : 'ยังไม่ถึงวันสอน ไม่สามารถเช็กชื่อได้');
+      return;
+    }
+    playPop();
+    if (allPresentSnapshot) {
+      setRows(allPresentSnapshot);
+      setAllPresentSnapshot(null);
+      setSaved(false);
+      return;
+    }
+    setAllPresentSnapshot(rows);
+    setRows((prev) =>
+      prev.map((row) =>
+        row.status === 'leave' ? row : { ...row, status: 'present', autoFilledLeave: false },
+      ),
+    );
+    setSaved(false);
+  };
+
   const handleCancelAll = () => {
     playPop();
     setRows(prev => prev.map(row => ({ ...row, status: null, autoFilledLeave: false })));
     setSaved(false);
+    setAllPresentSnapshot(null);
   };
 
   const filteredRows = useMemo(() => {
@@ -1045,6 +1730,9 @@ export default function AttendanceSheet({
     setSelectedDept(val);
     setSelectedLevel(null);
     setSelectedRoom(null);
+    setSelectedClassId('');
+    setAttendanceDrawerOpen(false);
+    setAdminSummary(null);
     if (viewMode === 'attendance') {
       setViewMode('schedule');
       setSelectedEntry(null);
@@ -1054,10 +1742,13 @@ export default function AttendanceSheet({
   const handleLevelSelect = (val: string) => {
     setSelectedLevel(val);
     setSelectedRoom(null);
+    setSelectedClassId('');
+    setAdminSummary(null);
   };
 
   const handleRoomSelect = (val: string) => {
     setSelectedRoom(val);
+    setAdminSummary(null);
     const matched = classes.find(c =>
       c.departmentId === selectedDept &&
       c.gradeLevel === selectedLevel &&
@@ -1072,198 +1763,327 @@ export default function AttendanceSheet({
     }
   };
 
-  const handleClearFilters = () => {
-    setSelectedDept('all');
-    setSelectedLevel(null);
-    setSelectedRoom(null);
-    setSelectedClassId('');
-    setSelectedEntry(null);
-    setViewMode('schedule');
+  const handleAdminSelectClass = (classId: string) => {
+    const matched = classes.find((c) => c.id === classId);
+    setSelectedClassId(classId);
+    setSelectedRoom(matched?.roomNumber ?? null);
+    if (matched?.gradeLevel) setSelectedLevel(matched.gradeLevel);
+    if (matched?.departmentId) {
+      setSelectedDept(matched.departmentId as DepartmentFilter);
+    }
+    setAdminSummary(null);
   };
+
+  const handlePickerBack = () => {
+    if (isAdminOverview && adminSummary) {
+      setAdminSummary(null);
+      return;
+    }
+    if (attendanceDrawerOpen) {
+      setAttendanceDrawerOpen(false);
+      setSaved(false);
+      setAllPresentSnapshot(null);
+      setDaySubjectsDrawerOpen(true);
+      return;
+    }
+    if (daySubjectsDrawerOpen) {
+      setDaySubjectsDrawerOpen(false);
+      return;
+    }
+    if (viewMode === 'attendance') {
+      setViewMode('schedule');
+      setSelectedEntry(null);
+      return;
+    }
+    if (isTeacherPicker) return;
+    if (selectedRoom || (isAdminOverview && selectedClassId)) {
+      setSelectedRoom(null);
+      setSelectedClassId('');
+      setAdminSummary(null);
+      // Admin sidebar: stay on grade. Other roles: also clear level (legacy coverflow).
+      if (!isAdminOverview) {
+        setSelectedLevel(null);
+        setSelectedEntry(null);
+        setViewMode('schedule');
+      }
+      return;
+    }
+    if (selectedLevel) {
+      setSelectedLevel(null);
+      setSelectedRoom(null);
+      return;
+    }
+    if (selectedDept !== 'all') {
+      setSelectedDept('all');
+      setSelectedLevel(null);
+      setSelectedRoom(null);
+    }
+  };
+
+  // Header back (desktop กลับไปเมนู / mobile กลับเมนู) → step back in class picker
+  useEffect(() => {
+    const inPickerFlow = isTeacherPicker
+      ? attendanceDrawerOpen || daySubjectsDrawerOpen
+      : isAdminOverview
+        ? selectedDept !== 'all' || !!selectedLevel || !!selectedRoom || !!selectedClassId || !!adminSummary
+        : selectedDept !== 'all'
+          || !!selectedLevel
+          || !!selectedRoom
+          || viewMode === 'attendance';
+    if (!inPickerFlow) return;
+
+    const isPortalBackButton = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      const btn = target.closest('button');
+      if (!btn) return false;
+      if (btn.id === 'portal-default-mobile-back') return true;
+      const title = btn.getAttribute('title') ?? '';
+      const label = btn.getAttribute('aria-label') ?? '';
+      return title === 'กลับไปเมนู' || title === 'กลับเมนู' || label === 'กลับไปเมนู';
+    };
+
+    const onClick = (e: MouseEvent) => {
+      if (!isPortalBackButton(e.target)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      handlePickerBack();
+    };
+
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [adminSummary, attendanceDrawerOpen, daySubjectsDrawerOpen, selectedDept, selectedLevel, selectedRoom, selectedClassId, viewMode, isTeacherPicker, isAdminOverview]);
 
   return (
     <>
-      {filtersTarget && createPortal(
-        <div className="pointer-events-auto hidden lg:flex items-center gap-2.5">
-          {/* Select แผนก */}
-          <Select value={selectedDept} onValueChange={(val) => handleDeptSelect(val as DepartmentFilter)}>
-            <SelectTrigger className="h-9 min-w-[110px] rounded-full border border-black/[0.05] bg-white/40 px-3 text-[10px] font-black backdrop-blur-md shadow-sm transition-all hover:bg-white/60">
-              <div className="flex items-center gap-1.5">
-                <span className="text-black/30 uppercase tracking-tighter">แผนก</span>
-                <SelectValue placeholder="แผนก" />
-              </div>
-            </SelectTrigger>
-            <SelectContent>
-              {DEPARTMENT_OPTIONS.map(opt => (
-                <SelectItem key={opt.id} value={opt.id}>{opt.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {selectedDept !== 'all' && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-            >
-              <Select value={selectedLevel || ''} onValueChange={handleLevelSelect}>
-                <SelectTrigger className="h-9 min-w-[90px] rounded-full border border-black/[0.05] bg-white/40 px-3 text-[10px] font-black backdrop-blur-md shadow-sm transition-all hover:bg-white/60">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-black/30 uppercase tracking-tighter">ชั้น</span>
-                    <SelectValue placeholder="ชั้น" />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  {DEPARTMENT_GRADES[selectedDept].map(level => (
-                    <SelectItem key={level} value={level}>{level}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </motion.div>
-          )}
-
-          {selectedLevel && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-            >
-              <Select value={selectedRoom || ''} onValueChange={handleRoomSelect}>
-                <SelectTrigger className="h-9 min-w-[80px] rounded-full border border-black/[0.05] bg-white/40 px-3 text-[10px] font-black backdrop-blur-md shadow-sm transition-all hover:bg-white/60">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-black/30 uppercase tracking-tighter">ห้อง</span>
-                    <SelectValue placeholder="ห้อง" />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  {roomOptions.map(room => (
-                    <SelectItem key={room} value={room}>{room}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </motion.div>
-          )}
-
-          {(selectedDept !== 'all' || selectedLevel || selectedRoom) && (
-            <button
-              onClick={handleClearFilters}
-              className="h-9 w-9 flex items-center justify-center rounded-full border border-red-100 bg-red-50 text-red-600 transition-all hover:bg-red-100 active:scale-95 shrink-0"
-              title="ล้างฟิลเตอร์"
-            >
-              <RotateCcw size={14} />
-            </button>
-          )}
-        </div>,
-        filtersTarget
+      {isTeacherPicker && (
+        <>
+          <TeacherDaySubjectsDrawer
+            open={daySubjectsDrawerOpen}
+            onOpenChange={setDaySubjectsDrawerOpen}
+            date={selectedCalendarDate}
+            entries={selectedDayEntries}
+            classNameById={classNameById}
+            onSelectEntry={handleDaySubjectSelect}
+          />
+          <TeacherAttendanceDrawer
+            open={attendanceDrawerOpen}
+            onOpenChange={(open) => {
+              setAttendanceDrawerOpen(open);
+              if (!open) {
+                setSaved(false);
+                setAllPresentSnapshot(null);
+              }
+            }}
+            onBackToSubjects={() => {
+              setAttendanceDrawerOpen(false);
+              setSaved(false);
+              setAllPresentSnapshot(null);
+              setDaySubjectsDrawerOpen(true);
+            }}
+            period={selectedPeriod}
+            subjectName={selectedEntry?.subjectName || selectedSubject?.name || ''}
+            className={selectedClass?.className || selectedEntry?.classId || ''}
+            rows={rows}
+            loading={!isRosterDataLoaded && rows.length === 0}
+            saving={saving}
+            locked={saved || isAttendanceReadOnly}
+            readOnly={isAttendanceReadOnly}
+            readOnlyReason={
+              isPastSession ? 'ดูอย่างเดียว' : isFutureSession ? 'ยังไม่ถึงวันสอน' : undefined
+            }
+            muteStatusColors={isFutureSession}
+            canSetLeave={(studentId) => {
+              const row = rows.find((r) => r.studentId === studentId);
+              if (!row) return false;
+              return !!findApprovedLeaveForStudentOnDate(
+                leaveRequests,
+                { id: studentId, studentCode: row.studentCode },
+                selectedDate,
+                row.studentName,
+              );
+            }}
+            onUnlock={() => {
+              if (isAttendanceReadOnly) {
+                toast.error(isPastSession ? 'ไม่สามารถเช็กชื่อย้อนหลังได้' : 'ยังไม่ถึงวันสอน ไม่สามารถเช็กชื่อได้');
+                return;
+              }
+              setSaved(false);
+            }}
+            onSave={() => handleSave()}
+            onToggleAllPresent={handleToggleAllPresent}
+            allPresentActive={allPresentSnapshot !== null}
+            onSetStatus={setStatus}
+          />
+        </>
       )}
 
-      {typeof window !== 'undefined' && selectedRoom && createPortal(
-        <div className="pointer-events-auto flex h-9 items-center rounded-full border border-black/[0.05] bg-white/40 p-1 backdrop-blur-md shadow-sm">
-          {SUBVIEW_OPTIONS.map(option => {
-            const isActive = subView === option.id;
-            return (
-              <button
-                key={option.id}
-                onClick={() => setSubView(option.id)}
-                title={option.label}
-                className={`flex h-full aspect-square items-center justify-center rounded-full transition-all ${
-                  isActive
-                    ? 'bg-blue-600 text-white shadow-md'
-                    : 'text-black/35 hover:bg-black/[0.02] hover:text-black/60'
-                }`}
-              >
-                <option.icon size={13} />
-              </button>
-            );
-          })}
-        </div>,
-        document.getElementById('header-portal-right-actions') || document.body
-      )}
-
-      <div className="flex flex-col h-full min-h-0 overflow-hidden font-sukhumvit">
-
-
-
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="md:hidden sticky top-0 z-20 -mx-3 px-3 py-2 bg-white/75 backdrop-blur-md">
-          <div className="rounded-2xl border border-black/[0.06] bg-white/85 p-2.5 shadow-sm">
-            <div className="mb-2 flex w-full gap-1">
-              {DEPARTMENT_OPTIONS.map((opt) => {
-                const active = selectedDept === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    onClick={() => handleDeptSelect(opt.id)}
-                    className={`h-8 flex-1 rounded-lg px-3 text-[10px] font-black transition-all ${
-                      active
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : 'bg-black/[0.04] text-black/55'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex gap-2 w-full">
-              {selectedDept !== 'all' && (
-                <div className="flex-1 min-w-0">
-                  <Select value={selectedLevel || ''} onValueChange={handleLevelSelect}>
-                    <SelectTrigger className="h-10 w-full rounded-xl border-black/[0.07] bg-white text-xs font-bold text-black/70">
-                      <SelectValue placeholder="เลือกระดับชั้น" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DEPARTMENT_GRADES[selectedDept].map((level) => (
-                        <SelectItem key={level} value={level}>{level}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {selectedLevel && (
-                <div className="flex-1 min-w-0">
-                  <Select value={selectedRoom || ''} onValueChange={handleRoomSelect}>
-                    <SelectTrigger className="h-10 w-full rounded-xl border-black/[0.07] bg-white text-xs font-bold text-black/70">
-                      <SelectValue placeholder="เลือกห้องเรียน" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {roomOptions.map((room) => (
-                        <SelectItem key={room} value={room}>{room}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {(selectedDept !== 'all' || selectedLevel || selectedRoom) && (
-                <button
-                  onClick={handleClearFilters}
-                  className="h-10 w-10 flex items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-600 transition-all hover:bg-red-100 active:scale-95 shrink-0"
-                  title="ล้างฟิลเตอร์"
-                >
-                  <RotateCcw size={16} />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <AnimatePresence mode="wait">
+      <div className="flex min-h-0 flex-1 basis-0 flex-col overflow-hidden font-sukhumvit">
+      <div className="relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden">
+        <AnimatePresence mode="wait" initial={false}>
           {subView === 'today' ? (
             <motion.div
-              key={viewMode}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="flex flex-1 flex-col overflow-hidden"
+              key={
+                isAdminOverview
+                  ? (adminSummary
+                    ? 'admin-summary'
+                    : selectedClassId
+                      ? 'admin-subjects'
+                      : `admin-picker-${selectedDept}-${selectedLevel ?? 'none'}`)
+                  : viewMode
+              }
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 flex flex-col overflow-hidden"
             >
-              {viewMode === 'schedule' ? (
-                !selectedRoom ? (
-                  <div className="flex flex-1 flex-col items-center justify-center py-20 text-slate-400 opacity-60">
-                    <Search size={48} strokeWidth={1} className="mb-4" />
-                    <p className="text-[13px] font-black uppercase tracking-widest">กรุณาเลือกห้องเรียนเพื่อแสดงตารางสอน</p>
+              {isTeacherPicker ? (
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  {!scheduleReady ? (
+                    <MonthCalendarSkeleton />
+                  ) : teacherScheduleEntries.length === 0 ? (
+                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 text-center">
+                      <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm font-bold text-slate-400">
+                        ยังไม่มีตารางสอนในปี/ภาคเรียนนี้
+                      </p>
+                    </div>
+                  ) : (
+                    <TeacherAttendanceMonthCalendar
+                      className="min-h-0 flex-1"
+                      teachingWeekdays={teachingWeekdays}
+                      periodsByWeekday={periodsByWeekday}
+                      scheduleSlots={scheduleSlots}
+                      checkedSessionKeys={checkedSessionKeys}
+                      rangeStart={academicYearRange.start}
+                      rangeEnd={academicYearRange.end}
+                      todayDate={todayDate}
+                      onSelectDay={handleCalendarDaySelect}
+                    />
+                  )}
+                </div>
+              ) : isAdminOverview ? (
+                <div className="flex min-h-0 flex-1 basis-0 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+                  <div
+                    className={cn(
+                      'flex h-full min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden',
+                      sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+                      selectedClassId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+                    )}
+                  >
+                    {!classesReady ? (
+                      <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto overscroll-y-contain scrollbar-hide rounded-2xl border border-border bg-card p-4">
+                        {Array.from({ length: 5 }).map((_, i) => (
+                          <Skeleton key={i} className="h-14 w-full shrink-0 rounded-2xl" />
+                        ))}
+                      </div>
+                    ) : (
+                      <GradeBookClassSidebar
+                        selectedDept={selectedDept === 'all' ? '' : selectedDept}
+                        selectedGrade={selectedLevel ?? ''}
+                        selectedClassId={selectedClassId}
+                        gradeOptions={gradeOptions}
+                        classOptions={adminClassOptions}
+                        onSelectDept={(dept: Department) => handleDeptSelect(dept)}
+                        onSelectGrade={handleLevelSelect}
+                        onSelectClass={handleAdminSelectClass}
+                        collapsed={sidebarCollapsed}
+                        headerAction={(
+                          <SidebarCollapseButton
+                            collapsed={sidebarCollapsed}
+                            onToggle={() => setSidebarCollapsed((v) => !v)}
+                          />
+                        )}
+                      />
+                    )}
                   </div>
+
+                  <div
+                    className={cn(
+                      'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+                      !selectedClassId && 'hidden lg:flex',
+                    )}
+                  >
+                    {adminSummary ? (
+                      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-6 pt-2 md:px-6">
+                        <SummaryTab
+                          mySubjects={mySubjects}
+                          classes={classes}
+                          attendance={attendance}
+                          getStudentsForClass={getStudentsForClass}
+                          lockedSubjectId={adminSummary.subjectId}
+                          lockedClassId={adminSummary.classId}
+                        />
+                      </div>
+                    ) : !selectedClassId ? (
+                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+                        <Users className="h-8 w-8 text-muted-foreground/40" />
+                        <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
+                          {selectedDept === 'all'
+                            ? 'เลือกแผนกจากแถบด้านซ้าย'
+                            : !selectedLevel
+                              ? 'เลือกระดับชั้นเพื่อดูห้องเรียน'
+                              : 'เลือกห้องเรียนเพื่อดูรายวิชา'}
+                        </p>
+                      </div>
+                    ) : !scheduleReady ? (
+                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-2 md:px-6">
+                        <ClassPickerSkeleton />
+                      </div>
+                    ) : adminSubjectCards.length === 0 ? (
+                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 text-center md:px-6">
+                        <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-sm font-bold text-muted-foreground">
+                          ยังไม่มีรายวิชาในตารางสอนของห้องนี้
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 pb-6 pt-2 md:px-6">
+                        <PickerCoverflow
+                          ariaLabel="รายวิชา"
+                          onSelect={(subjectId) => {
+                            const card = adminSubjectCards.find((c) => c.subjectId === subjectId);
+                            if (!card) return;
+                            setAdminSummary({
+                              subjectId: card.subjectId,
+                              classId: card.classId,
+                            });
+                          }}
+                          items={adminSubjectCards.map((card) => ({
+                            id: card.subjectId,
+                            label: card.subjectName,
+                            subtitle: card.subjectCode || undefined,
+                            gradient: subjectGradient(
+                              subjectColorByName(card.subjectName, card.subjectGroup),
+                            ),
+                            imageUrl: card.teacherPhotoURL,
+                            imageAlt: card.teacherName || card.subjectName,
+                            imageCaption: card.teacherFirstName
+                              ? {
+                                  line1: card.teacherFirstName,
+                                  line2: card.teacherLastName || undefined,
+                                }
+                              : undefined,
+                          }))}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : viewMode === 'schedule' ? (
+                !selectedRoom ? (
+                  !classesReady ? (
+                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-2 md:px-6">
+                      <ClassPickerSkeleton />
+                    </div>
+                  ) : (
+                    <ClassSelectionFlow
+                      selectedDept={selectedDept}
+                      selectedLevel={selectedLevel}
+                      gradeOptions={gradeOptions}
+                      roomOptions={roomOptions}
+                      onSelectDept={(dept) => handleDeptSelect(dept)}
+                      onSelectLevel={handleLevelSelect}
+                      onSelectRoom={handleRoomSelect}
+                    />
+                  )
                 ) : (
                   <div className="min-w-0 flex-1 overflow-auto px-3 md:px-6 pb-6 pt-2 scrollbar-hide">
                     <ScheduleGrid
@@ -1451,7 +2271,11 @@ export default function AttendanceSheet({
 
                   <div className="flex-1 overflow-y-auto pb-8 pr-2 scrollbar-hide">
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                      {filteredRows.length === 0 ? (
+                      {!isRosterDataLoaded && filteredRows.length === 0 ? (
+                        <div className="col-span-full">
+                          <StudentRosterSkeleton count={8} />
+                        </div>
+                      ) : filteredRows.length === 0 ? (
                         <div className="col-span-full flex flex-col items-center justify-center py-20 text-slate-400">
                           <Users size={48} className="mb-4 opacity-20" />
                           <p className="text-sm font-black">ไม่พบรายชื่อนักเรียนในห้องนี้</p>
@@ -1512,21 +2336,46 @@ export default function AttendanceSheet({
                                     {/* Main Knob Button */}
                                     <button
                                       onClick={() => setStatus(student.studentId, status)}
+                                      disabled={
+                                        isAttendanceReadOnly
+                                        || (status === 'leave'
+                                          && !findApprovedLeaveForStudentOnDate(
+                                            leaveRequests,
+                                            { id: student.studentId, studentCode: student.studentCode },
+                                            selectedDate,
+                                            student.studentName,
+                                          ))
+                                      }
+                                      title={
+                                        isPastSession
+                                          ? 'ไม่สามารถเช็กชื่อย้อนหลังได้'
+                                          : isFutureSession
+                                            ? 'ยังไม่ถึงวันสอน'
+                                          : status === 'leave'
+                                            ? 'ลาได้เฉพาะเมื่อมีใบลาที่อนุมัติแล้ว'
+                                            : undefined
+                                      }
                                       className={`w-11 h-11 rounded-full transition-all duration-300 flex items-center justify-center border-2 ${
-                                        active 
+                                        isFutureSession
+                                          ? 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                                          : active 
                                           ? 'scale-105' 
                                           : 'bg-slate-50 border-slate-100 hover:border-slate-200 hover:bg-white'
                                       }`}
-                                      style={{
-                                        borderColor: active ? config.color : undefined,
-                                        background: active ? `linear-gradient(145deg, #ffffff, ${config.color}08)` : undefined
-                                      }}
+                                      style={
+                                        isFutureSession
+                                          ? undefined
+                                          : {
+                                              borderColor: active ? config.color : undefined,
+                                              background: active ? `linear-gradient(145deg, #ffffff, ${config.color}08)` : undefined,
+                                            }
+                                      }
                                     >
                                       <span 
                                         className={`text-[13px] font-black transition-colors duration-300 ${
-                                          active ? '' : 'text-slate-400'
+                                          isFutureSession || !active ? 'text-slate-400' : ''
                                         }`}
-                                        style={{ color: active ? config.color : undefined }}
+                                        style={isFutureSession || !active ? undefined : { color: config.color }}
                                       >
                                         {config.shortLabel}
                                       </span>
@@ -1557,10 +2406,10 @@ export default function AttendanceSheet({
           ) : subView === 'history' ? (
             <motion.div
               key="history-view"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-6"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 flex flex-col overflow-hidden px-6 pb-6"
             >
               <div className="mb-4 flex items-center gap-2">
                 <div className="h-1.5 w-1.5 rounded-full bg-slate-400" />
@@ -1618,10 +2467,10 @@ export default function AttendanceSheet({
           ) : (
             <motion.div
               key="summary-view"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="flex min-h-0 flex-1 flex-col px-6 pb-6"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 flex flex-col overflow-hidden px-6 pb-6"
             >
               <div className="mb-5 flex items-center gap-2">
                 <div className="h-1.5 w-1.5 rounded-full bg-slate-400" />
@@ -1695,10 +2544,7 @@ export default function AttendanceSheet({
           )}
         </AnimatePresence>
       </div>
-
-
-    </div>
-    </div>
+      </div>
     </>
   );
 }

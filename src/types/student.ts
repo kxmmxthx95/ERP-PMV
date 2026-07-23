@@ -127,6 +127,8 @@ export interface Student {
   // System
   authUid?: string;             // Firebase Auth UID (อาจต่างจาก id ถ้า id เป็น Firestore auto ID)
   userId?: string;              // alias สำหรับ authUid (legacy)
+  /** ปีการศึกษาที่ลงทะเบียน/ผูกกับนักเรียน (เช่น "2569") — ใช้กรองรายชื่อ */
+  academicYearId?: string;
   status: StudentStatus;
   createdAt: string;            // ISO date string
 }

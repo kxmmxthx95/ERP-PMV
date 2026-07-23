@@ -9,6 +9,7 @@ export interface TeacherSubjectKpi {
   completedSessions: number;
   expectedSessions: number;
   excluded: boolean;         // true = ครูตั้งค่าไม่นำวิชานี้มารวมคำนวณ
+  inSchedule: boolean;       // true = วิชานี้มีคาบอยู่ในตารางสอนจริงแล้ว (false = ได้รับมอบหมายแต่ยังไม่ถูกจัดตาราง)
 }
 
 export interface TeacherKpiRow {

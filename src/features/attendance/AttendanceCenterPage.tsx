@@ -1,8 +1,16 @@
 import { useAuth } from '@/hooks/useAuth';
 import { useTeachingManager } from '@/hooks/useTeachingManager';
 import AttendanceSheet from '@/features/teaching/components/AttendanceSheet';
+import { resolveTeacherFromAuth } from '@/lib/teachers/teacherIdentity';
+import { cn } from '@/lib/utils';
 
 const MOCK_TEACHER_ID = 't03';
+
+/** Same shell as StudentManager / QuestionBankManager */
+const PAGE_SHELL = cn(
+  'flex min-h-0 w-full flex-1 flex-col overflow-hidden font-sukhumvit',
+  'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+);
 
 export default function AttendanceCenterPage() {
   const { user, role } = useAuth();
@@ -10,28 +18,25 @@ export default function AttendanceCenterPage() {
   const canViewAllSubjects = role === 'admin' || role === 'sysadmin';
   const mgr = useTeachingManager(fallbackTeacherId, canViewAllSubjects);
 
-  const mappedTeacherId = mgr.teachers.find((t) => t.userId === user?.uid)?.id;
-  const teacherId = mappedTeacherId ?? fallbackTeacherId;
+  const teacherProfile = resolveTeacherFromAuth(user?.uid ?? '', mgr.teachers);
+  const teacherId = teacherProfile?.id ?? mgr.teachers.find((t) => t.userId === user?.uid)?.id ?? fallbackTeacherId;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden text-black">
-      <div className="flex-1 min-h-0">
-        <AttendanceSheet
-          teacherId={teacherId}
-          academicYearId={mgr.activeYearStr}
-          semester={mgr.semester}
-          mySubjects={mgr.mySubjects}
-          classes={mgr.classes}
-          teachers={mgr.teachers}
-          getStudentsForClass={mgr.getStudentsForClass}
-          getAttendanceForSession={mgr.getAttendanceForSession}
-          onSave={mgr.saveAttendanceSession}
-          attendance={mgr.attendance}
-          leaveRequests={mgr.leaveRequests}
-          // Note: In a real app, you'd pass the full attendance list if needed for history/summary
-          // but let's assume AttendanceSheet can fetch what it needs or we pass it here
-        />
-      </div>
+    <div className={cn(PAGE_SHELL, 'text-black')}>
+      <AttendanceSheet
+        teacherId={teacherId}
+        academicYearId={mgr.activeYearStr}
+        semester={mgr.semester}
+        mySubjects={mgr.mySubjects}
+        classes={mgr.yearClasses}
+        teachers={mgr.teachers}
+        getStudentsForClass={mgr.getStudentsForClass}
+        getAttendanceForSession={mgr.getAttendanceForSession}
+        onSave={mgr.saveAttendanceSession}
+        attendance={mgr.attendance}
+        leaveRequests={mgr.leaveRequests}
+        isRosterDataLoaded={mgr.isRosterDataLoaded}
+      />
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import {
-  BookOpen, Zap, BarChart3, Users, ChevronDown, Search,
+  BookOpen, Zap, ChevronDown, Search,
   MoreHorizontal, UserMinus,
 } from 'lucide-react';
 import {
@@ -16,6 +16,7 @@ import {
   HiOutlineChatBubbleLeftRight,
   HiOutlineSparkles,
   HiOutlineBookOpen,
+  HiPlus,
 } from 'react-icons/hi2';
 import { Button } from '@/components/ui/button';
 import { useCurriculum } from '@/hooks/useCurriculum';
@@ -24,15 +25,14 @@ import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import type { ClassRoom, EnrolledCourse } from '@/types/class';
-import type { Department, Subject } from '@/types/curriculum';
-import { CATEGORY_CONFIG } from '@/types/curriculum';
+import { SUBJECT_GROUP_CONFIG, type Department, type Subject, type SubjectGroupId } from '@/types/curriculum';
 import { toast } from 'sonner';
 import PasswordConfirmDialog from '@/features/auth/components/PasswordConfirmDialog';
 import { logActivity } from '@/lib/activityLogger';
+import { cn } from '@/lib/utils';
 
 interface Props {
   classRoom: ClassRoom;
-  cfg: { bg: string; color: string; label: string };
 }
 
 const THEME_COLORS: Record<string, string[]> = {
@@ -77,7 +77,14 @@ function SubjectIcon({ subjectGroup, className, size = 18 }: { subjectGroup?: st
 }
 
 function getGroupLabelThai(group?: string): string {
-  const g = (group || '').toLowerCase();
+  if (!group) return SUBJECT_GROUP_CONFIG.other.name;
+
+  const normalized = group.toLowerCase().trim();
+  if (normalized in SUBJECT_GROUP_CONFIG) {
+    return SUBJECT_GROUP_CONFIG[normalized as SubjectGroupId].name;
+  }
+
+  const g = normalized;
   if (g.includes('thai') || g.includes('ภาษาไทย')) return 'ภาษาไทย';
   if (g.includes('math') || g.includes('คณิต')) return 'คณิตศาสตร์';
   if (g.includes('science') || g.includes('วิทยา')) return 'วิทยาศาสตร์';
@@ -87,10 +94,16 @@ function getGroupLabelThai(group?: string): string {
   if (g.includes('career') || g.includes('งาน')) return 'การงานอาชีพ';
   if (g.includes('foreign') || g.includes('lang') || g.includes('ต่างประเทศ')) return 'ภาษาต่างประเทศ';
   if (g.includes('activity') || g.includes('กิจกรรม')) return 'กิจกรรมพัฒนาผู้เรียน';
-  return group || 'อื่นๆ';
+  return SUBJECT_GROUP_CONFIG.other.name;
 }
 
-export default function ClassCourseTab({ classRoom, cfg }: Props) {
+const TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden';
+const TABLE_HEADER_CELL = 'text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap';
+const COURSE_TABLE_GRID =
+  'minmax(4.5rem, 0.75fr) minmax(0, 2fr) minmax(0, 1.1fr) minmax(3.5rem, 0.55fr) minmax(3.5rem, 0.55fr) minmax(0, 1.6fr)';
+const MAX_COURSE_TEACHERS = 7;
+
+export default function ClassCourseTab({ classRoom }: Props) {
   const { maps, subjects } = useCurriculum();
   const { versions, coursesByVersion, loadCoursesForVersion } = useCurriculumVersioned();
   const { year: activeSystemYear } = useActiveAcademicYear();
@@ -242,29 +255,6 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
       .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'th', { numeric: true }));
   }, [maps, subjects, versions, coursesByVersion, activeSystemYear, classRoom, selectedSemester]);
 
-  const courseSummary = useMemo(() => {
-    let total = 0;
-    let basic = 0;
-    let additional = 0;
-    let activity = 0;
-
-    classSubjects.forEach(s => {
-      const cr = Number(s.credits || 0);
-      const cat = (s.category || '').toLowerCase();
-
-      total += cr;
-      if (cat === 'core' || cat === 'basic' || cat.includes('พื้นฐาน')) {
-        basic += cr;
-      } else if (cat === 'added' || cat === 'additional' || cat.includes('เพิ่มเติม')) {
-        additional += cr;
-      } else if (cat === 'activity' || cat.includes('กิจกรรม')) {
-        activity++;
-      }
-    });
-
-    return { total, basic, additional, activity };
-  }, [classSubjects]);
-
   const activeTeachers = useMemo(
     () => teachers.filter(t => t.status === 'active'),
     [teachers],
@@ -276,7 +266,7 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
   );
 
   const setTeacherIds = async (subjectId: string, teacherIds: string[]) => {
-    const nextTeachers = { ...courseTeachers, [subjectId]: teacherIds.slice(0, 2) };
+    const nextTeachers = { ...courseTeachers, [subjectId]: teacherIds.slice(0, MAX_COURSE_TEACHERS) };
     setCourseTeachers(nextTeachers);
 
     try {
@@ -284,7 +274,7 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
       const keepOtherSemesters = current.filter(ec => ec.semester && ec.semester !== selectedSemester);
       const semesterSubjectIds = Array.from(new Set(classSubjects.map(s => s.id)));
       const forCurrentSemester: EnrolledCourse[] = semesterSubjectIds.flatMap((sid) => {
-        const tids = (nextTeachers[sid] || []).filter(Boolean).slice(0, 2);
+        const tids = (nextTeachers[sid] || []).filter(Boolean).slice(0, MAX_COURSE_TEACHERS);
         if (tids.length === 0) {
           // Keep the subject enrolled, but explicitly mark as unassigned teacher.
           return [{ subjectId: sid, teacherId: '', semester: selectedSemester }];
@@ -346,38 +336,17 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-4 h-full font-sukhumvit">
+    <div className="flex h-full min-h-0 w-full flex-col gap-4 font-sukhumvit md:h-auto">
       {headerPortalTarget && createPortal(
-        <div className={`flex flex-wrap items-center justify-between gap-3.5 relative ${isTeacherPickerOpen ? 'z-50' : 'z-20'} w-full flex-1`}>
-          {/* Left: Stats (Full-width on mobile, auto on desktop) */}
-          <div className="w-full md:w-auto flex items-center justify-between md:justify-start gap-1.5">
-            <div className="flex items-center justify-center flex-1 md:flex-initial gap-1 px-2.5 py-1 rounded-full bg-indigo-50/90 border border-indigo-100/60 shadow-sm">
-              <BarChart3 size={12} className="text-indigo-500 shrink-0" />
-              <span className="text-[11px] font-black text-indigo-700">{courseSummary.total.toFixed(1)}</span>
-            </div>
-            <div className="flex items-center justify-center flex-1 md:flex-initial gap-1 px-2.5 py-1 rounded-full bg-blue-50/90 border border-blue-100/60 shadow-sm">
-              <BookOpen size={12} className="text-blue-500 shrink-0" />
-              <span className="text-[11px] font-black text-blue-700">{courseSummary.basic.toFixed(1)}</span>
-            </div>
-            <div className="flex items-center justify-center flex-1 md:flex-initial gap-1 px-2.5 py-1 rounded-full bg-amber-50/90 border border-amber-100/60 shadow-sm">
-              <Zap size={12} className="text-amber-500 shrink-0" />
-              <span className="text-[11px] font-black text-amber-700">{courseSummary.additional.toFixed(1)}</span>
-            </div>
-            <div className="flex items-center justify-center flex-1 md:flex-initial gap-1 px-2.5 py-1 rounded-full bg-emerald-50/90 border border-emerald-100/60 shadow-sm">
-              <Users size={12} className="text-emerald-500 shrink-0" />
-              <span className="text-[11px] font-black text-emerald-700">{courseSummary.activity}</span>
-            </div>
-          </div>
-
-          {/* Right: Term Selector & Zap stamp button (Full-width on mobile, auto on desktop) */}
-          <div className="w-full md:w-auto flex items-center gap-2 justify-between md:justify-end">
+        <div className={`relative flex w-full flex-1 flex-wrap items-center justify-end gap-3.5 ${isTeacherPickerOpen ? 'z-50' : 'z-20'}`}>
+          <div className="flex w-full items-center justify-end gap-2 md:w-auto">
             {/* ── Stamp Mode Integration ── */}
-            <div className="flex-1 md:flex-initial flex items-center h-9 bg-white/70 border border-black/[0.06] p-0.5 rounded-full shadow-sm">
+            <div className="flex-1 md:flex-initial flex items-center h-9 bg-white/70 border border-black/[0.06] p-0.5 rounded-xl shadow-sm">
               {[1, 2].map((sem) => (
                 <button
                   key={sem}
                   onClick={() => setSelectedSemester(sem as 1 | 2)}
-                  className={`flex-1 md:flex-initial text-center h-8 px-4 rounded-full text-[10px] font-black transition-all ${selectedSemester === sem
+                  className={`flex-1 md:flex-initial text-center h-8 px-4 rounded-lg text-[10px] font-black transition-all ${selectedSemester === sem
                       ? 'bg-slate-900 text-white shadow-sm'
                       : 'text-slate-500 hover:text-slate-800 hover:bg-black/[0.04]'
                     }`}
@@ -479,44 +448,86 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.05 }}
-        className="flex-1 min-h-0 flex flex-col relative z-10"
+        className="relative z-10 flex min-h-0 flex-1 flex-col md:flex-none"
       >
-        {/* Cards Grid Container */}
-        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pb-40">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-1.5 md:p-3">
-            {classSubjects.map((subject, idx) => {
-              const catCfg = CATEGORY_CONFIG[subject.category];
-              const colors = getSubjectColors(subject.subjectGroup);
-              const selectedTeacherIds = courseTeachers[subject.id] ?? [];
-              const selectedTeachers = activeTeachers.filter(t => selectedTeacherIds.includes(t.id));
-              return (
-                <CourseCard
-                  key={subject.id}
-                  idx={idx + 1}
-                  subject={subject}
-                  catCfg={catCfg}
-                  colors={colors}
-                  cfg={cfg}
-                  classRoom={classRoom}
-                  teachers={activeTeachers}
-                  rowIndex={idx}
-                  selectedTeacherIds={selectedTeacherIds}
-                  selectedTeachers={selectedTeachers}
-                  isStampMode={isStampMode}
-                  selectedStampTeacherId={selectedStampTeacherId}
-                  onSelect={async (tid) => {
-                    const current = courseTeachers[subject.id] ?? [];
-                    if (!current.includes(tid) && current.length >= 2) {
-                      toast.error('รายวิชานี้กำหนดครูได้สูงสุด 2 คน');
-                      return;
-                    }
-                    const next = current.includes(tid) ? current.filter(id => id !== tid) : [...current, tid];
-                    await setTeacherIds(subject.id, next);
-                  }}
-                  onClear={async () => setTeacherIds(subject.id, [])}
-                />
-              );
-            })}
+        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hide pb-24 md:flex-none md:overflow-visible md:pb-0">
+          <div className="flex flex-col gap-3">
+            {/* Mobile */}
+            <div className="flex flex-col gap-2.5 px-0.5 md:hidden">
+              {classSubjects.map((subject, idx) => {
+                const colors = getSubjectColors(subject.subjectGroup);
+                const selectedTeacherIds = courseTeachers[subject.id] ?? [];
+                const selectedTeachers = activeTeachers.filter(t => selectedTeacherIds.includes(t.id));
+                return (
+                  <CourseMobileCard
+                    key={subject.id}
+                    idx={idx}
+                    subject={subject}
+                    colors={colors}
+                    teachers={activeTeachers}
+                    selectedTeacherIds={selectedTeacherIds}
+                    selectedTeachers={selectedTeachers}
+                    isStampMode={isStampMode}
+                    selectedStampTeacherId={selectedStampTeacherId}
+                    onSelect={async (tid) => {
+                      const current = courseTeachers[subject.id] ?? [];
+                      if (!current.includes(tid) && current.length >= MAX_COURSE_TEACHERS) {
+                        toast.error(`รายวิชานี้กำหนดครูได้สูงสุด ${MAX_COURSE_TEACHERS} คน`);
+                        return;
+                      }
+                      const next = current.includes(tid) ? current.filter(id => id !== tid) : [...current, tid];
+                      await setTeacherIds(subject.id, next);
+                    }}
+                    onClear={async () => setTeacherIds(subject.id, [])}
+                  />
+                );
+              })}
+            </div>
+
+            {/* Desktop */}
+            <div className={cn('hidden w-full md:block', TABLE_SHELL)}>
+              <div
+                className="grid w-full gap-3 border-b border-border bg-background px-4 py-3"
+                style={{ gridTemplateColumns: COURSE_TABLE_GRID }}
+              >
+                <span className={TABLE_HEADER_CELL}>รหัส</span>
+                <span className={TABLE_HEADER_CELL}>วิชา</span>
+                <span className={TABLE_HEADER_CELL}>กลุ่มสาระ</span>
+                <span className={cn(TABLE_HEADER_CELL, 'text-center')}>คาบ</span>
+                <span className={cn(TABLE_HEADER_CELL, 'text-center')}>นก.</span>
+                <span className={TABLE_HEADER_CELL}>ครูผู้สอน</span>
+              </div>
+              <div className="flex flex-col">
+                {classSubjects.map((subject, idx) => {
+                  const colors = getSubjectColors(subject.subjectGroup);
+                  const selectedTeacherIds = courseTeachers[subject.id] ?? [];
+                  const selectedTeachers = activeTeachers.filter(t => selectedTeacherIds.includes(t.id));
+                  return (
+                    <CourseTableRow
+                      key={subject.id}
+                      rowIndex={idx}
+                      subject={subject}
+                      colors={colors}
+                      teachers={activeTeachers}
+                      selectedTeacherIds={selectedTeacherIds}
+                      selectedTeachers={selectedTeachers}
+                      isStampMode={isStampMode}
+                      selectedStampTeacherId={selectedStampTeacherId}
+                      onSelect={async (tid) => {
+                        const current = courseTeachers[subject.id] ?? [];
+                        if (!current.includes(tid) && current.length >= MAX_COURSE_TEACHERS) {
+                          toast.error(`รายวิชานี้กำหนดครูได้สูงสุด ${MAX_COURSE_TEACHERS} คน`);
+                          return;
+                        }
+                        const next = current.includes(tid) ? current.filter(id => id !== tid) : [...current, tid];
+                        await setTeacherIds(subject.id, next);
+                      }}
+                      onClear={async () => setTeacherIds(subject.id, [])}
+                    />
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -534,16 +545,11 @@ export default function ClassCourseTab({ classRoom, cfg }: Props) {
   );
 }
 
-// ── Course Card ────────────────────────────────────────────────────────────────
+// ── Course table / mobile rows ────────────────────────────────────────────────
 
-interface CourseCardProps {
-  idx: number;
-  rowIndex: number;
+type CourseRowSharedProps = {
   subject: Subject;
-  catCfg: { label: string; color: string; bg: string };
   colors: string[];
-  cfg: { bg: string; color: string };
-  classRoom: ClassRoom;
   teachers: ReturnType<typeof useTeacherManager>['teachers'];
   selectedTeacherIds: string[];
   selectedTeachers: ReturnType<typeof useTeacherManager>['teachers'];
@@ -551,201 +557,332 @@ interface CourseCardProps {
   selectedStampTeacherId?: string | null;
   onSelect: (id: string) => void;
   onClear: () => void;
-}
+};
 
-function CourseCard({
-  subject, colors, teachers,
-  rowIndex, selectedTeacherIds, selectedTeachers, isStampMode, selectedStampTeacherId, onSelect, onClear
-}: CourseCardProps) {
+function CourseTeacherPicker({
+  teachers,
+  selectedTeacherIds,
+  selectedTeachers,
+  onSelect,
+  onClear,
+}: Pick<CourseRowSharedProps, 'teachers' | 'selectedTeacherIds' | 'selectedTeachers' | 'onSelect' | 'onClear'>) {
   const [open, setOpen] = useState(false);
+  const [addMode, setAddMode] = useState(false);
   const [search, setSearch] = useState('');
+  const canAddMore = selectedTeachers.length < MAX_COURSE_TEACHERS;
 
-  const filtered = teachers.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
-  const groupLabel = getGroupLabelThai(subject.subjectGroup);
+  const closePicker = () => {
+    setOpen(false);
+    setAddMode(false);
+    setSearch('');
+  };
 
-  const isCurrentStampMatch = isStampMode && selectedStampTeacherId && selectedTeacherIds.includes(selectedStampTeacherId);
+  const openPicker = (mode: 'primary' | 'add') => {
+    setAddMode(mode === 'add');
+    setSearch('');
+    setOpen(true);
+  };
+
+  const teacherPhoto = (teacherId: string, photoURL?: string) =>
+    photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${teacherId}&backgroundColor=f8fafc`;
+
+  const pickerTeachers = teachers.filter((t) => {
+    const matchesSearch = t.name.toLowerCase().includes(search.toLowerCase());
+    if (!matchesSearch) return false;
+    if (addMode) return !selectedTeacherIds.includes(t.id);
+    return true;
+  });
 
   return (
-      <div
-        onClick={() => {
-          if (isStampMode && selectedStampTeacherId) {
-            onSelect(selectedStampTeacherId);
-          }
-        }}
-        className={`group relative flex flex-col justify-between p-3.5 rounded-2xl border border-slate-200 transition-all duration-200 cursor-pointer ${open ? 'z-40 bg-white shadow-lg border-blue-200 ring-2 ring-blue-500/5' : 'z-10'
-          } ${isCurrentStampMatch
-            ? 'bg-blue-50/80 border-blue-200 shadow-sm shadow-blue-100/50'
-            : rowIndex % 2 === 0
-              ? 'bg-white/90 hover:border-slate-200 hover:shadow-sm'
-              : 'bg-white/60 hover:border-slate-200 hover:shadow-sm'
-          }`}
-      >
-      {/* Top Section: Icon, Badges */}
-      <div className="flex items-start justify-between gap-2.5">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm"
-            style={{
-              background: `linear-gradient(135deg, ${colors[1]} 0%, ${colors[0]} 100%)`,
-            }}
-          >
-            <SubjectIcon subjectGroup={subject.subjectGroup} size={16} />
-          </div>
-          <div className="min-w-0">
-            <span className="text-[9px] font-black font-mono tracking-tighter text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-black/[0.02] uppercase block w-max">
-              {subject.code}
-            </span>
-          </div>
-        </div>
-
-        {/* Hour / Credit Badges */}
-        <div className="flex items-center gap-1 shrink-0">
-          <span className="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-            {subject.hoursPerWeek || 0} คาบ
-          </span>
-          <span className="text-[8.5px] font-black px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600">
-            {Number(subject.credits || 0).toFixed(1)} นก.
-          </span>
-        </div>
-      </div>
-
-      {/* Middle Section: Subject Name & Group */}
-      <div className="my-2.5 min-w-0">
-        <h3 className="text-[12.5px] font-black text-slate-800 leading-snug truncate" title={subject.name}>
-          {subject.name}
-        </h3>
-        <p className="text-[10px] font-bold text-slate-400 truncate mt-0.5">
-          {groupLabel}
-        </p>
-      </div>
-
-      {/* Bottom Section: Teacher Picker Dropdown */}
-      <div className="flex items-center gap-2 pt-2.5 border-t border-black/[0.03]">
-        {/* Avatar */}
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      {selectedTeachers.map((teacher) => (
         <div
+          key={teacher.id}
           onDoubleClick={(e) => {
-            if (selectedTeachers[0]) {
-              e.stopPropagation();
-              onSelect(selectedTeachers[0].id);
-            }
+            e.stopPropagation();
+            onSelect(teacher.id);
           }}
-          title="ดับเบิลคลิกเพื่อลบครูผู้สอน"
-          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden bg-slate-100 shadow-sm border border-black/[0.03]"
+          title={`${teacher.name} — ดับเบิลคลิกเพื่อนำออก`}
+          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-muted shadow-sm"
         >
-          {selectedTeachers[0] ? (
-            <img
-              src={selectedTeachers[0].photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedTeachers[0].id}&backgroundColor=f8fafc`}
-              alt="teacher"
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <Search size={14} className="text-slate-300" />
+          <img
+            src={teacherPhoto(teacher.id, teacher.photoURL)}
+            alt={teacher.name}
+            className="h-full w-full object-cover"
+          />
+        </div>
+      ))}
+
+      {selectedTeachers.length === 0 && (
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-muted shadow-sm">
+          <Search size={14} className="text-muted-foreground/40" />
+        </div>
+      )}
+
+      <div className="relative min-w-0 flex-1">
+        <div
+          className={cn(
+            'group/teacher relative flex w-full items-center gap-1 rounded-xl border px-2 py-1 text-left transition-all',
+            open
+              ? 'border-primary bg-card shadow-sm ring-2 ring-ring/10'
+              : selectedTeachers.length > 0
+                ? 'border-border bg-card/80 hover:border-primary/40'
+                : 'border-border/60 bg-transparent hover:bg-muted/40',
           )}
+        >
+          <div className="min-w-0 flex-1">
+            {open ? (
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={addMode ? 'ค้นหาครูเพิ่ม...' : 'ค้นหา...'}
+                className="w-full truncate bg-transparent py-0.5 text-[11px] font-bold text-foreground outline-none placeholder:text-muted-foreground font-sarabun"
+                autoFocus
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => openPicker('primary')}
+                className="w-full truncate py-0.5 text-left text-[11px] font-bold text-foreground font-sukhumvit"
+              >
+                {selectedTeachers.length > 0 ? selectedTeachers.map(t => t.name).join(', ') : 'เลือกครูผู้สอน...'}
+              </button>
+            )}
+          </div>
+          <ChevronDown
+            size={12}
+            className={cn('shrink-0 text-muted-foreground transition-transform duration-300', open && 'rotate-180 text-primary')}
+          />
         </div>
 
-        {/* Dropdown Input Wrapper */}
-        <div className="relative flex-1 min-w-0">
-          <div
-            className={`group/teacher flex items-center gap-1 px-2 py-1 rounded-xl transition-all w-full text-left border relative ${open ? 'bg-white shadow-sm border-blue-500 ring-2 ring-blue-500/10' :
-                selectedTeachers.length > 0
-                  ? 'border-black/[0.06] hover:border-blue-400 bg-white/50'
-                  : 'border-black/[0.03] hover:bg-blue-50/50 bg-transparent'
-              }`}
-          >
-            <div className="flex-1 min-w-0">
-              {open ? (
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="ค้นหา..."
-                  className="w-full bg-transparent text-[10px] font-bold outline-none placeholder:text-slate-400 text-slate-800 font-sarabun truncate py-0.5"
-                  autoFocus
-                />
-              ) : (
-                <div
-                  onClick={() => { setOpen(true); setSearch(''); }}
-                  className="w-full bg-transparent text-[10px] font-bold text-slate-800 font-sarabun truncate cursor-pointer py-0.5"
-                >
-                  {selectedTeachers.length > 0 ? selectedTeachers.map(t => t.name).join(', ') : 'เลือกครูผู้สอน...'}
-                </div>
-              )}
-            </div>
-            <ChevronDown
-              size={10}
-              className={`text-slate-300 transition-transform duration-300 shrink-0 ${open ? 'rotate-180 text-blue-500' : ''}`}
-            />
-          </div>
-
-          {open && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setSearch(''); }} />
-              <div
-                className="absolute bottom-full left-0 right-0 mb-1.5 z-50 rounded-xl overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-1 duration-200"
-                style={{
-                  background: 'white',
-                  border: '1px solid rgba(59, 130, 246, 0.2)',
-                }}
-              >
-                <div className="max-h-48 overflow-y-auto custom-scrollbar p-1 flex flex-col gap-0.5">
+        {open && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={closePicker} />
+            <div className="absolute bottom-full left-0 right-0 z-50 mb-1.5 overflow-hidden rounded-xl border border-primary/20 bg-card shadow-2xl animate-in fade-in slide-in-from-bottom-1 duration-200">
+              <div className="custom-scrollbar flex max-h-48 flex-col gap-0.5 overflow-y-auto p-1">
+                {!addMode && (
                   <button
-                    onClick={() => { onClear(); setOpen(false); setSearch(''); }}
-                    className={`w-full text-left px-2 py-1.5 rounded-md text-[9px] hover:bg-slate-50 transition-colors font-sarabun border border-transparent ${selectedTeacherIds.length === 0 ? 'text-blue-600 font-bold bg-blue-50/50 border-blue-100 shadow-sm' : 'text-slate-400'
-                      }`}
+                    type="button"
+                    onClick={() => { onClear(); closePicker(); }}
+                    className={cn(
+                      'w-full rounded-md border border-transparent px-2 py-1.5 text-left text-[10px] font-sarabun transition-colors hover:bg-muted/50',
+                      selectedTeacherIds.length === 0 ? 'border-primary/20 bg-primary/5 font-bold text-primary' : 'text-muted-foreground',
+                    )}
                   >
                     — ไม่ระบุครูผู้สอน
                   </button>
+                )}
 
-                  {search.length > 0 ? (
-                    <>
-                      {filtered.map(t => (
-                        <button
-                          key={t.id}
-                          onClick={() => { onSelect(t.id); setOpen(false); setSearch(''); }}
-                          className={`w-full flex items-center justify-between px-2 py-1 rounded-md text-[9.5px] bg-white border shadow-sm transition-all hover:border-blue-200 hover:shadow-md font-sarabun group/item ${selectedTeacherIds.includes(t.id) ? 'border-blue-500 ring-1 ring-blue-500/20' : 'border-black/[0.03]'
-                            }`}
-                        >
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <div className="w-5.5 h-5.5 rounded-full overflow-hidden bg-slate-100 shadow-inner flex-shrink-0">
-                              <img
-                                src={t.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${t.id}&backgroundColor=f8fafc`}
-                                alt="teacher"
-                                className="w-full h-full object-cover"
-                              />
-                            </div>
-                            <span className={`truncate ${selectedTeacherIds.includes(t.id) ? 'text-blue-600 font-bold' : 'text-slate-700'}`}>
-                              {t.name}
-                            </span>
+                {addMode && (
+                  <p className="px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-muted-foreground font-sukhumvit">
+                    เพิ่มครูผู้สอน ({selectedTeachers.length + 1}/{MAX_COURSE_TEACHERS})
+                  </p>
+                )}
+
+                {search.length > 0 ? (
+                  <>
+                    {pickerTeachers.map(t => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => { onSelect(t.id); closePicker(); }}
+                        className={cn(
+                          'group/item flex w-full items-center justify-between rounded-md border bg-card px-2 py-1 text-[10px] font-sarabun shadow-sm transition-all hover:border-primary/30 hover:shadow-md',
+                          selectedTeacherIds.includes(t.id) ? 'border-primary ring-1 ring-primary/20' : 'border-border/60',
+                        )}
+                      >
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <div className="h-5 w-5 shrink-0 overflow-hidden rounded-full bg-muted shadow-inner">
+                            <img
+                              src={teacherPhoto(t.id, t.photoURL)}
+                              alt={t.name}
+                              className="h-full w-full object-cover"
+                            />
                           </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            {selectedTeacherIds.includes(t.id) && (
-                              <span className="px-1 py-0.5 rounded bg-blue-500 text-white text-[7px] font-black">
-                                เลือก
-                              </span>
-                            )}
-                            <span className="px-1 py-0.5 rounded bg-blue-50 text-blue-500 text-[6.5px] font-black tracking-wider">
-                              {(t as any).personalId || t.id.slice(-4).toUpperCase()}
-                            </span>
-                          </div>
-                        </button>
-                      ))}
-                      {filtered.length === 0 && (
-                        <div className="px-3 py-6 text-center">
-                          <p className="text-[9.5px] text-slate-400 font-sarabun">ไม่พบรายชื่อครู</p>
+                          <span className={cn('truncate', selectedTeacherIds.includes(t.id) ? 'font-bold text-primary' : 'text-foreground')}>
+                            {t.name}
+                          </span>
                         </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="py-6 px-4 text-center">
-                      <Search size={14} className="mx-auto mb-1.5 text-slate-200" />
-                      <p className="text-[10px] text-slate-400 font-sarabun">พิมพ์เพื่อค้นหาชื่อครู...</p>
-                    </div>
-                  )}
-                </div>
+                        {selectedTeacherIds.includes(t.id) && (
+                          <span className="shrink-0 rounded bg-primary px-1 py-0.5 text-[8px] font-black text-primary-foreground">
+                            เลือก
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                    {pickerTeachers.length === 0 && (
+                      <div className="px-3 py-6 text-center">
+                        <p className="text-[10px] text-muted-foreground font-sarabun">ไม่พบรายชื่อครู</p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="px-4 py-6 text-center">
+                    <Search size={14} className="mx-auto mb-1.5 text-muted-foreground/30" />
+                    <p className="text-[10px] text-muted-foreground font-sarabun">พิมพ์เพื่อค้นหาชื่อครู...</p>
+                  </div>
+                )}
               </div>
-            </>
-          )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {canAddMore && selectedTeachers.length > 0 && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            openPicker('add');
+          }}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-sm transition-colors hover:border-primary/40 hover:bg-primary/5"
+          title="เพิ่มครูผู้สอน"
+          aria-label="เพิ่มครูผู้สอน"
+        >
+          <HiPlus className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function CourseTableRow({
+  rowIndex,
+  subject,
+  colors,
+  teachers,
+  selectedTeacherIds,
+  selectedTeachers,
+  isStampMode,
+  selectedStampTeacherId,
+  onSelect,
+  onClear,
+}: CourseRowSharedProps & { rowIndex: number }) {
+  const groupLabel = getGroupLabelThai(subject.subjectGroup);
+  const isCurrentStampMatch = isStampMode && selectedStampTeacherId && selectedTeacherIds.includes(selectedStampTeacherId);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: rowIndex * 0.015 }}
+      onClick={() => {
+        if (isStampMode && selectedStampTeacherId) onSelect(selectedStampTeacherId);
+      }}
+      className={cn(
+        'grid w-full items-center gap-3 border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-muted/40',
+        isStampMode && 'cursor-pointer',
+        isCurrentStampMatch && 'bg-primary/5',
+      )}
+      style={{ gridTemplateColumns: COURSE_TABLE_GRID }}
+    >
+      <span className="truncate text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+        {subject.code || '—'}
+      </span>
+      <div className="flex min-w-0 items-center gap-3">
+        <div
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-sm"
+          style={{ background: `linear-gradient(135deg, ${colors[1]} 0%, ${colors[0]} 100%)` }}
+        >
+          <SubjectIcon subjectGroup={subject.subjectGroup} size={16} />
+        </div>
+        <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit" title={subject.name}>
+          {subject.name}
+        </p>
+      </div>
+      <span className="truncate text-[13px] font-semibold text-muted-foreground font-sukhumvit">
+        {groupLabel}
+      </span>
+      <span className="text-center text-[13px] font-semibold text-foreground font-sukhumvit tabular-nums">
+        {subject.hoursPerWeek || 0}
+      </span>
+      <span className="text-center text-[13px] font-semibold text-foreground font-sukhumvit tabular-nums">
+        {Number(subject.credits || 0).toFixed(1)}
+      </span>
+      <div className="min-w-0" onClick={(e) => e.stopPropagation()}>
+        <CourseTeacherPicker
+          teachers={teachers}
+          selectedTeacherIds={selectedTeacherIds}
+          selectedTeachers={selectedTeachers}
+          onSelect={onSelect}
+          onClear={onClear}
+        />
+      </div>
+    </motion.div>
+  );
+}
+
+function CourseMobileCard({
+  idx,
+  subject,
+  colors,
+  teachers,
+  selectedTeacherIds,
+  selectedTeachers,
+  isStampMode,
+  selectedStampTeacherId,
+  onSelect,
+  onClear,
+}: CourseRowSharedProps & { idx: number }) {
+  const groupLabel = getGroupLabelThai(subject.subjectGroup);
+  const isCurrentStampMatch = isStampMode && selectedStampTeacherId && selectedTeacherIds.includes(selectedStampTeacherId);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: idx * 0.02 }}
+      className="px-0.5 py-0.5"
+    >
+      <div
+        onClick={() => {
+          if (isStampMode && selectedStampTeacherId) onSelect(selectedStampTeacherId);
+        }}
+        className={cn(
+          'rounded-2xl border border-border bg-card p-3',
+          isStampMode && 'cursor-pointer',
+          isCurrentStampMatch && 'bg-primary/5',
+        )}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <div
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-sm"
+              style={{ background: `linear-gradient(135deg, ${colors[1]} 0%, ${colors[0]} 100%)` }}
+            >
+              <SubjectIcon subjectGroup={subject.subjectGroup} size={16} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-black text-muted-foreground font-sukhumvit tabular-nums">
+                {subject.code || '—'}
+              </p>
+              <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit" title={subject.name}>
+                {subject.name}
+              </p>
+              <p className="mt-0.5 truncate text-[11px] font-semibold text-muted-foreground font-sukhumvit">
+                {groupLabel}
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold text-foreground font-sukhumvit">
+              {subject.hoursPerWeek || 0} คาบ
+            </span>
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary font-sukhumvit">
+              {Number(subject.credits || 0).toFixed(1)} นก.
+            </span>
+          </div>
+        </div>
+        <div className="mt-2.5 border-t border-border pt-2" onClick={(e) => e.stopPropagation()}>
+          <CourseTeacherPicker
+            teachers={teachers}
+            selectedTeacherIds={selectedTeacherIds}
+            selectedTeachers={selectedTeachers}
+            onSelect={onSelect}
+            onClear={onClear}
+          />
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

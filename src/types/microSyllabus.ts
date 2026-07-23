@@ -12,6 +12,8 @@ export interface WeeklyTopic {
   isQuizDay?: boolean;
   /** ปิดการสอน — ไม่มีการสอนในวันที่ทับกับปฏิทินการศึกษา */
   isTeachingClosed?: boolean;
+  /** ไม่มีการสอนในวันนี้ — ไม่นับการเช็คชื่อและ KPI ของครู */
+  isNoTeaching?: boolean;
   /** ผลสะท้อนหลังการสอน */
   teachingReflection?: TeachingReflection | null;
   completedAt: string | null;
@@ -19,7 +21,17 @@ export interface WeeklyTopic {
 
 export type TeachingPlanStatus = 'on_plan' | 'off_plan';
 
-export type TeachingOverview = 'good' | 'medium' | 'review';
+/** คะแนนประเมินการสอนตัวเอง 1–5 ดาว (legacy: good/medium/review) */
+export type TeachingOverview = 1 | 2 | 3 | 4 | 5;
+export type TeachingOverviewLegacy = 'good' | 'medium' | 'review';
+
+export function normalizeTeachingOverview(value: unknown): TeachingOverview {
+  if (typeof value === 'number' && value >= 1 && value <= 5) return Math.round(value) as TeachingOverview;
+  if (value === 'good') return 5;
+  if (value === 'medium') return 3;
+  if (value === 'review') return 1;
+  return 3;
+}
 
 export interface TeachingReflectionStudent {
   id: string;

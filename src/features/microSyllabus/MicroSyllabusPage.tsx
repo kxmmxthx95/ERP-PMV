@@ -1,32 +1,77 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { lazy, Suspense, useState, useMemo, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { toast } from 'sonner';
 import {
+  HiChevronRight,
   HiOutlineCalendarDays,
   HiOutlineCog6Tooth,
-  HiCheck,
 } from 'react-icons/hi2';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
+import { useSchedule } from '@/hooks/useSchedule';
+import { useThaiHolidays } from '@/features/calendar/hooks/useThaiHolidays';
 import { useTeacherManager } from '@/features/teachers/hooks/useTeacherManager';
-import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import { resolveTeacherFromAuth, buildTeacherIdentityKeys, matchesTeacherIdentity } from '@/lib/teachers/teacherIdentity';
 import { resolveSubjectDetail } from '@/lib/teachers/resolveSubjectDetail';
 import { useMicroSyllabus, useMicroSyllabusAll } from '@/hooks/useMicroSyllabus';
 import { cn } from '@/lib/utils';
-import { getLocalDateString } from '@/lib/dateUtils';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
+import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
+import { getClassesByYearStore, getTeachingClassesStore } from '@/lib/firestoreShared/studentSummaryStore';
+import { getClassSettingsBundleStore } from '@/lib/firestoreShared/classSettingsStore';
 import { Skeleton } from '@/components/ui/skeleton';
-import WeeklyTopicGrid from './components/WeeklyTopicGrid';
-import LessonContentSettingsDrawer from './components/LessonContentSettingsDrawer';
-import { MicroSyllabusSubjectSelect } from './components/MicroSyllabusSubjectSelect';
-import { resolveSemesterDateRange, hasTopicContent } from './utils/teachingPlanCalendar';
-import AdminTeacherPlanBrowser from './components/AdminTeacherPlanBrowser';
+import {
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
+import {
+  SubjectFolderCard,
+  SubjectFolderCardsGridSkeleton,
+} from '@/components/SubjectFolderCard';
+import {
+  DEFAULT_COLOR_ID,
+  loadFolderCardColors,
+  saveFolderCardColors,
+  type FolderCardColorId,
+} from './utils/folderCardColor';
+import { MicroSyllabusSubjectSelect, MICRO_SYLLABUS_FEATURE_TITLE } from './components/MicroSyllabusSubjectSelect';
+import {
+  resolveSemesterDateRange,
+  hasTopicContent,
+  departmentToSemesterKey,
+  filterScheduleForClassSubject,
+  buildTeachingSlotsBySchoolDay,
+  countScheduledTeachingDays,
+  nonTeachingPeriodsFor,
+} from './utils/teachingPlanCalendar';
 import type { MicroSyllabus, WeeklyTopic } from '@/types/microSyllabus';
+import type { ClassRoom } from '@/types/class';
+import type { SubjectCategory } from '@/types/curriculum';
+
+// bundle-dynamic: heavy calendar / admin browser only when needed
+const WeeklyTopicGrid = lazy(() => import('./components/WeeklyTopicGrid'));
+const AdminTeacherPlanBrowser = lazy(() => import('./components/AdminTeacherPlanBrowser'));
+const LessonContentSettingsDrawer = lazy(() => import('./components/LessonContentSettingsDrawer'));
+
+function normalizeSubjectCategory(raw?: string): SubjectCategory {
+  if (raw === 'basic' || raw === 'core') return 'core';
+  if (raw === 'additional' || raw === 'added') return 'added';
+  if (raw === 'elective') return 'elective';
+  if (raw === 'activity') return 'activity';
+  return 'core';
+}
 
 const EMPTY_LESSON_OPTIONS: string[] = [];
+
+const noopSubscribeClasses = () => () => {};
+// ค่าอ้างอิงเดียวคงที่ ห้ามสร้าง [] ใหม่ทุกครั้ง ไม่งั้น useSyncExternalStore วน re-render ไม่จบ
+const EMPTY_CLASS_ROWS: { id: string; [key: string]: unknown }[] = [];
+const getEmptyClassRows = () => EMPTY_CLASS_ROWS;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -36,6 +81,10 @@ interface AssignedSubject {
   classId: string;       // '' when not linked to a class
   className: string;     // 'ยังไม่ผูกห้องเรียน' when from teachingSubjectIds only
   syllabus: MicroSyllabus | null;
+  /** จำนวนวันสอนจริงตาม schedule ตลอดเทอม (ตัดวันหยุด/สอบออก) — ตัวหารความคืบหน้า */
+  totalScheduledDays: number;
+  /** จำนวนวันที่ setup แผนแล้ว + อยู่ในช่วงเทอมของห้องนี้จริง — ตัวเศษความคืบหน้า */
+  completedDays: number;
 }
 
 function stripThaiHonorific(name: string): string {
@@ -50,124 +99,102 @@ function normalizeTeacherName(value: string): string {
 
 function TeachingPlanCalendarSkeleton() {
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2 px-1 py-3">
+    <div
+      className="flex h-full min-h-0 w-full flex-col max-lg:overflow-y-auto"
+      aria-busy="true"
+      aria-label="กำลังโหลดตาราง"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-1.5 pt-0">
         <Skeleton className="h-8 w-8 rounded-xl bg-slate-100" />
-        <Skeleton className="h-4 w-28 rounded-lg bg-slate-100" />
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-4 w-28 rounded-lg bg-slate-100" />
+          <Skeleton className="h-6 w-12 rounded-xl bg-slate-100" />
+        </div>
         <Skeleton className="h-8 w-8 rounded-xl bg-slate-100" />
       </div>
-      <div className="grid grid-cols-7 gap-1 px-1 pt-1 pb-1">
+      <div className="grid shrink-0 grid-cols-7 px-1 pb-1 pt-0">
         {Array.from({ length: 7 }, (_, index) => (
           <Skeleton key={index} className="mx-auto h-3 w-4 rounded bg-slate-50" />
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1 px-1 pb-2">
+      <div className="grid shrink-0 grid-cols-7 gap-1 px-1 pb-2 max-lg:auto-rows-[minmax(52px,auto)] lg:min-h-0 lg:flex-1 lg:auto-rows-fr">
         {Array.from({ length: 35 }, (_, index) => (
-          <Skeleton key={index} className="min-h-[52px] rounded-xl bg-slate-100 lg:min-h-[80px]" />
+          <Skeleton
+            key={index}
+            className="min-h-[52px] rounded-xl bg-slate-100 lg:h-full lg:min-h-[80px]"
+          />
         ))}
       </div>
       <div className="space-y-2 px-1 pb-2 lg:hidden">
         <Skeleton className="h-3 w-28 rounded bg-slate-50" />
         {Array.from({ length: 4 }, (_, index) => (
-          <Skeleton key={index} className="h-20 rounded-2xl bg-slate-100" />
+          <Skeleton key={index} className="h-16 rounded-xl bg-slate-100" />
         ))}
       </div>
     </div>
   );
 }
 
-function AssignedSubjectCardSkeleton() {
-  return (
-    <div className="w-full rounded-2xl border border-slate-200 bg-white p-3.5">
-      <div className="mb-2 flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1 space-y-2">
-          <Skeleton className="h-4 w-[72%] rounded-lg bg-slate-100" />
-          <Skeleton className="h-3 w-[34%] rounded-lg bg-slate-50" />
-        </div>
-        <Skeleton className="h-5 w-10 shrink-0 rounded-lg bg-slate-100" />
-      </div>
-      <Skeleton className="h-1 w-full rounded-full bg-slate-100" />
-    </div>
-  );
-}
-
 function AssignedSubjectsGridSkeleton({ count = 6 }: { count?: number }) {
-  return (
-    <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-      {Array.from({ length: count }, (_, index) => (
-        <AssignedSubjectCardSkeleton key={index} />
-      ))}
-    </div>
-  );
+  return <SubjectFolderCardsGridSkeleton count={count} />;
 }
 
 function AssignedSubjectCard({
   assignment,
   active,
   creating,
+  colorId,
+  onColorChange,
   onClick,
 }: {
   assignment: AssignedSubject;
   active: boolean;
   creating: boolean;
+  colorId: FolderCardColorId;
+  onColorChange: (id: FolderCardColorId) => void;
   onClick: () => void;
 }) {
-  const { syllabus } = assignment;
-  const completed = syllabus?.topics.filter(t => t.completedAt).length ?? 0;
-  const planned = syllabus?.topics.filter((t) => hasTopicContent(t)).length ?? 0;
-  const total = planned > 0 ? planned : (syllabus?.totalWeeks ?? 0);
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const { syllabus, totalScheduledDays, completedDays } = assignment;
+  const pct = totalScheduledDays > 0 ? Math.round((completedDays / totalScheduledDays) * 100) : 0;
   const hasStarted = syllabus !== null;
-  const barColor = pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#6366f1';
   const noClass = assignment.classId === '';
 
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={creating || noClass}
-      className={cn(
-        'w-full text-left rounded-2xl p-3.5 border transition-all disabled:opacity-50',
-        noClass
-          ? 'bg-slate-50 border-slate-200 cursor-not-allowed'
-          : active
-            ? 'bg-indigo-600 border-indigo-600 shadow-md'
-            : 'bg-white border-slate-200 hover:border-indigo-200 hover:bg-indigo-50/30',
-      )}
-    >
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="min-w-0 flex-1">
-          <p className={cn('text-sm font-black leading-tight truncate font-sukhumvit', active ? 'text-white' : noClass ? 'text-slate-400' : 'text-slate-800')}>
-            {assignment.subjectName}
-          </p>
-          <p className={cn('text-[11px] mt-0.5 font-sarabun', active ? 'text-indigo-200' : noClass ? 'text-slate-300' : 'text-slate-400')}>
-            {assignment.className}
-          </p>
-        </div>
-        {noClass ? null : creating ? (
-          <div className="w-4 h-4 rounded-full border-2 border-indigo-300 border-t-indigo-600 animate-spin shrink-0 mt-1" />
-        ) : hasStarted ? (
-          <span className={cn('text-[11px] font-black shrink-0 px-2 py-0.5 rounded-lg', active ? 'bg-white/20 text-white' : 'text-indigo-600 bg-indigo-50')}>
-            {pct}%
-          </span>
-        ) : (
-          <span className={cn('text-[10px] font-bold shrink-0 px-2 py-0.5 rounded-lg', active ? 'bg-white/20 text-white' : 'text-slate-400 bg-slate-50')}>
-            ยังไม่เริ่ม
-          </span>
-        )}
-      </div>
-
-      {!noClass && (
-        <div className={cn('h-1 rounded-full overflow-hidden', active ? 'bg-indigo-500' : 'bg-slate-100')}>
-          {hasStarted && (
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{ width: `${pct}%`, background: active ? '#fff' : barColor }}
-            />
+  const meta = !noClass && !creating
+    ? hasStarted
+      ? (
+        <p
+          className={cn(
+            'pt-0.5 text-[11px] font-black',
+            pct >= 80
+              ? 'text-emerald-600'
+              : pct >= 50
+                ? 'text-amber-500'
+                : pct > 0
+                  ? 'text-sky-600'
+                  : 'text-rose-500',
           )}
-        </div>
-      )}
-    </button>
+        >
+          {pct}%
+        </p>
+      )
+      : (
+        <p className="pt-0.5 text-[10px] font-bold text-muted-foreground">ยังไม่เริ่ม</p>
+      )
+    : undefined;
+
+  return (
+    <SubjectFolderCard
+      title={assignment.subjectName}
+      subtitle={assignment.className}
+      meta={meta}
+      colorId={colorId}
+      onColorChange={onColorChange}
+      onClick={onClick}
+      active={active}
+      disabled={creating || noClass}
+      busy={creating}
+      showPaper={completedDays > 0}
+    />
   );
 }
 
@@ -176,6 +203,37 @@ function AssignedSubjectCard({
 export default function MicroSyllabusPage() {
   const { user, userData, role } = useAuth();
   const { activeYear, activeSemester } = useActiveAcademicYear();
+  const { events: calendarEvents } = useAcademicCalendar(role ?? undefined);
+  // activeYear.year เป็น พ.ศ. (เช่น 2569) — Google Calendar API ต้องใช้ปี ค.ศ.
+  const { holidays: thaiHolidays } = useThaiHolidays(
+    activeYear?.year ? parseInt(activeYear.year, 10) - 543 : new Date().getFullYear(),
+  );
+  const deptSemesterSettings = useSyncExternalStore(
+    deptSemestersStore.subscribe,
+    deptSemestersStore.getSnapshot,
+    deptSemestersStore.getSnapshot,
+  );
+
+  // Merge Thai holidays into calendar events for teaching plan calculations
+  const allCalendarEvents = useMemo(
+    () => {
+      const merged = [
+        ...calendarEvents,
+        ...thaiHolidays.filter((h) => !calendarEvents.some((e) => e.id === h.id)),
+      ];
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.debug('[allCalendarEvents] merged', {
+          calendarEventsCount: calendarEvents.length,
+          thaiHolidaysCount: thaiHolidays.length,
+          mergedCount: merged.length,
+          thaiHolidaysSample: thaiHolidays.slice(0, 3).map((h) => ({ id: h.id, title: h.title, startDate: h.startDate })),
+        });
+      }
+      return merged;
+    },
+    [calendarEvents, thaiHolidays],
+  );
 
   const isAdmin = role === 'admin' || role === 'sysadmin';
   const isTeacher = role === 'teacher';
@@ -189,7 +247,7 @@ export default function MicroSyllabusPage() {
 
   // ── Data sources (aligned with TeacherDetailPanel / TeacherManager) ───────
   const { teachers, allSubjects } = useTeacherManager();
-  const { allClasses } = useClassroomManager();
+  const yearId = activeYear?.year ?? '';
   const { versions, coursesByVersion, loadCoursesForVersion } = useCurriculumVersioned();
 
   // Resolve teacher profile (id OR userId OR display name — same sources as Teacher Manager)
@@ -208,6 +266,32 @@ export default function MicroSyllabusPage() {
   );
 
   const canManageOwnPlans = isTeacher || myTeacher !== null;
+  const showAdminBrowser = isAdmin && !canManageOwnPlans;
+
+  // ครูเห็นแค่ห้องที่ตัวเองสอน (teacherIds ที่ sync จาก enrolledCourses) — admin browser ต้อง
+  // เห็นทุกห้อง (concurrency ต่ำกว่ามาก ยอมรับได้) ไม่ต้องโหลดทั้งโรงเรียนทุกครั้งที่ครูเปิดหน้า
+  const myIdentityKeysList = useMemo(() => [...myIdentityKeys], [myIdentityKeys]);
+  const scopedClassesStore = !showAdminBrowser && yearId && myIdentityKeysList.length > 0
+    ? getTeachingClassesStore(yearId, myIdentityKeysList)
+    : null;
+  const fullClassesStore = showAdminBrowser
+    ? getClassesByYearStore(yearId || '_')
+    : null;
+  const scopedRawClasses = useSyncExternalStore(
+    scopedClassesStore?.subscribe ?? noopSubscribeClasses,
+    scopedClassesStore ? scopedClassesStore.getSnapshot : getEmptyClassRows,
+    scopedClassesStore ? scopedClassesStore.getSnapshot : getEmptyClassRows,
+  );
+  const fullRawClasses = useSyncExternalStore(
+    fullClassesStore?.subscribe ?? noopSubscribeClasses,
+    fullClassesStore ? fullClassesStore.getSnapshot : getEmptyClassRows,
+    fullClassesStore ? fullClassesStore.getSnapshot : getEmptyClassRows,
+  );
+  const rawClasses = showAdminBrowser ? fullRawClasses : scopedRawClasses;
+  const allClasses = useMemo(
+    () => rawClasses.map((d) => ({ id: d.id, ...(d as Record<string, unknown>) } as ClassRoom)),
+    [rawClasses],
+  );
 
   const yearClasses = useMemo(
     () => allClasses.filter((cls) => {
@@ -221,22 +305,56 @@ export default function MicroSyllabusPage() {
     [allClasses, activeYear],
   );
 
-  // Preload versioned curriculum courses (required to resolve enrolledCourses.subjectId)
+  // ── Schedule data — for "จำนวนวันสอนจริงตาม schedule" progress denominator ──
+  // includeClasses: false — allClasses ด้านบนมี getClassesByYearStore ของตัวเองแล้ว ไม่ต้องเปิดซ้ำ
+  const { entries: scheduleEntries } = useSchedule({ includeClasses: false });
+  const yearClassIds = useMemo(() => yearClasses.map((c) => c.id), [yearClasses]);
+  const classesById = useMemo(
+    () => new Map(yearClasses.map((cls) => [cls.id, cls])),
+    [yearClasses],
+  );
+  // ครูแต่ละคนสอนแค่บางห้อง — เปิด class-settings listener เฉพาะห้องที่สอนจริง ไม่ใช่ทั้งโรงเรียน
+  // (เดิมส่ง yearClassIds ทั้งหมดเข้าไปทุกครั้งที่ครูเปิดหน้า กินโควต้าคูณจำนวนห้อง×จำนวนครูที่ออนไลน์)
+  // หน้า admin browser ยังต้องเห็นทุกห้อง เลยคงสโคปเดิมไว้เฉพาะกรณีนั้น (แอดมินออนไลน์พร้อมกันน้อยกว่ามาก)
+  const myClassIds = useMemo(() => {
+    if (!canManageOwnPlans) return [] as string[];
+    const ids = new Set<string>();
+    for (const cls of yearClasses) {
+      for (const ec of cls.enrolledCourses ?? []) {
+        if (matchesTeacherIdentity(ec.teacherId, myIdentityKeys)) {
+          ids.add(cls.id);
+          break;
+        }
+      }
+    }
+    return [...ids];
+  }, [yearClasses, myIdentityKeys, canManageOwnPlans]);
+  const classSettingsScopeIds = showAdminBrowser ? yearClassIds : myClassIds;
+  const classSettingsStore = getClassSettingsBundleStore(classSettingsScopeIds);
+  const classSettingsMap = useSyncExternalStore(
+    classSettingsStore.subscribe,
+    classSettingsStore.getSnapshot,
+    classSettingsStore.getSnapshot,
+  );
+
+  // Preload versioned curriculum courses in parallel (async-parallel)
   useEffect(() => {
     if (!yearClasses.length || !versions.length) return;
 
-    const versionIds = new Set<string>();
-    yearClasses.forEach((cls) => {
+    const toLoad: string[] = [];
+    const seen = new Set<string>();
+    for (const cls of yearClasses) {
       const pkgId = cls.curriculumPackageId || (cls as { curriculumId?: string }).curriculumId;
-      if (pkgId) versionIds.add(String(pkgId));
-    });
+      if (!pkgId) continue;
+      const versionId = String(pkgId);
+      if (seen.has(versionId)) continue;
+      seen.add(versionId);
+      if (!versions.some((v) => v.id === versionId)) continue;
+      if (!coursesByVersion[versionId]) toLoad.push(versionId);
+    }
 
-    versionIds.forEach((versionId) => {
-      if (!versions.some((v) => v.id === versionId)) return;
-      if (!coursesByVersion[versionId]) {
-        void loadCoursesForVersion(versionId);
-      }
-    });
+    if (toLoad.length === 0) return;
+    void Promise.all(toLoad.map((id) => loadCoursesForVersion(id)));
   }, [yearClasses, versions, coursesByVersion, loadCoursesForVersion]);
 
   const pendingCurriculumLoads = useMemo(() => {
@@ -261,17 +379,58 @@ export default function MicroSyllabusPage() {
     [allSubjects, allVersionedCourses],
   );
 
+  const subjectCategoryByKey = useMemo(() => {
+    const map = new Map<string, SubjectCategory>();
+    const add = (key: string | undefined, category: string | undefined) => {
+      if (!key?.trim()) return;
+      const cat = normalizeSubjectCategory(category);
+      map.set(key, cat);
+      map.set(key.trim().toLowerCase(), cat);
+    };
+    for (const s of allSubjects) {
+      add(s.id, s.category);
+      add(s.code, s.category);
+      add(s.name, s.category);
+    }
+    for (const c of allVersionedCourses) {
+      add(c.id, c.category);
+      add(c.courseCode, c.category);
+      add(c.courseName, c.category);
+    }
+    return map;
+  }, [allSubjects, allVersionedCourses]);
+
   // ── Micro-syllabus hooks ──────────────────────────────────────────────────
   const teacherHook = useMicroSyllabus(canManageOwnPlans ? authUid : null);
-  const adminHook = useMicroSyllabusAll(isAdmin);
+  // Only fetch all syllabi for admin browser — skip when teaching own plans
+  const adminHook = useMicroSyllabusAll(showAdminBrowser);
 
   const { syllabi, loading: teacherLoading, createSyllabus, updateTopics, updateLessonOptions } = teacherHook;
   const { syllabi: allSyllabi, loading: adminLoading } = adminHook;
 
   const semesterRange = useMemo(
-    () => resolveSemesterDateRange(activeYear?.year ?? '', activeSemester as 1 | 2),
-    [activeYear?.year, activeSemester],
+    () =>
+      resolveSemesterDateRange(
+        activeYear?.year ?? '',
+        (activeSemester as 1 | 2) || 1,
+        activeYear,
+        allCalendarEvents,
+        deptSemesterSettings,
+        isTeacher ? departmentToSemesterKey(departmentId) : undefined,
+      ),
+    [activeYear, activeSemester, allCalendarEvents, deptSemesterSettings, isTeacher, departmentId],
   );
+
+  // js-index-maps: O(1) syllabus lookup instead of .find in nested loops
+  const syllabusLookup = useMemo(() => {
+    const byClassSubject = new Map<string, MicroSyllabus>();
+    const byClassNameSubjectName = new Map<string, MicroSyllabus>();
+    for (const s of syllabi) {
+      byClassSubject.set(`${s.classId}|${s.subjectId}`, s);
+      byClassNameSubjectName.set(`${s.className}|${s.subjectName}`, s);
+    }
+    return { byClassSubject, byClassNameSubjectName };
+  }, [syllabi]);
 
   // ── Derive assignments — mirrors TeacherDetailPanel.realAssignments ───────
   const assignedSubjects = useMemo((): AssignedSubject[] => {
@@ -296,12 +455,78 @@ export default function MicroSyllabusPage() {
         const subject = resolveSubject(ec.subjectId);
         if (!subject) continue;
 
-        const syllabus = syllabi.find(
-          s =>
-            (s.subjectId === subject.id && s.classId === cls.id) ||
-            (s.subjectId === ec.subjectId && s.classId === cls.id) ||
-            (s.subjectName === subject.name && s.className === className),
-        ) ?? null;
+        const syllabus =
+          syllabusLookup.byClassSubject.get(`${cls.id}|${subject.id}`)
+          ?? syllabusLookup.byClassSubject.get(`${cls.id}|${ec.subjectId}`)
+          ?? syllabusLookup.byClassNameSubjectName.get(`${className}|${subject.name}`)
+          ?? null;
+
+        // ช่วงเทอมของ "ห้องนี้" จริง (แผนกห้องอาจต่างจากแผนกของครูผู้สอน)
+        const classSemesterRange = resolveSemesterDateRange(
+          activeYear.year,
+          semester ?? 1,
+          activeYear,
+          allCalendarEvents,
+          deptSemesterSettings,
+          departmentToSemesterKey(cls.departmentId),
+        );
+
+        const nonTeachingPeriods = nonTeachingPeriodsFor(cls.id, classSettingsMap);
+        const classSubjectSchedule = filterScheduleForClassSubject(
+          scheduleEntries,
+          cls.id,
+          subject.id,
+          activeYear.year,
+          semester ?? 1,
+          subject.name,
+          nonTeachingPeriods,
+        );
+        const teachingSlots = buildTeachingSlotsBySchoolDay(classSubjectSchedule);
+        const totalScheduledDays = countScheduledTeachingDays(
+          classSemesterRange.start,
+          classSemesterRange.end,
+          teachingSlots,
+          allCalendarEvents,
+        );
+        const completedDays = syllabus?.topics.filter((t) =>
+          (hasTopicContent(t) || t.isNoTeaching || t.isTeachingClosed)
+          && (!t.date || (t.date >= classSemesterRange.start && t.date <= classSemesterRange.end)),
+        ).length ?? 0;
+
+        if (import.meta.env.DEV && syllabus) {
+          const outOfRange = syllabus.topics.filter((t) =>
+            (hasTopicContent(t) || t.isNoTeaching || t.isTeachingClosed)
+            && t.date && (t.date < classSemesterRange.start || t.date > classSemesterRange.end),
+          );
+          const notCounted = syllabus.topics.filter((t) =>
+            !(hasTopicContent(t) || t.isNoTeaching || t.isTeachingClosed)
+            || Boolean(t.date && (t.date < classSemesterRange.start || t.date > classSemesterRange.end)),
+          );
+          const scheduledDaysOfWeek = [...teachingSlots.keys()];
+          // eslint-disable-next-line no-console
+          console.debug(`[teachingPlanProgress] ${subject.name} · ${className}`, {
+            classDeptId: cls.departmentId,
+            classSemesterRange,
+            scheduledDaysOfWeek,
+            totalScheduledDays,
+            completedDays,
+            pct: totalScheduledDays > 0 ? Math.round((completedDays / totalScheduledDays) * 100) : 0,
+            topicsCount: syllabus.topics.length,
+            outOfRangeStampedDates: outOfRange.map((t) => t.date),
+            notCounted: notCounted.map((t) => ({
+              date: t.date,
+              weekNumber: t.weekNumber,
+              hasContent: hasTopicContent(t),
+              lesson: t.lesson,
+              title: t.title,
+              details: t.details,
+              isQuizDay: t.isQuizDay,
+              isTeachingClosed: t.isTeachingClosed,
+              isNoTeaching: t.isNoTeaching,
+              completedAt: t.completedAt,
+            })),
+          });
+        }
 
         result.push({
           subjectId: subject.id,
@@ -309,6 +534,8 @@ export default function MicroSyllabusPage() {
           classId: cls.id,
           className,
           syllabus,
+          totalScheduledDays,
+          completedDays,
         });
       }
     }
@@ -326,6 +553,8 @@ export default function MicroSyllabusPage() {
         classId: '',
         className: 'ยังไม่ผูกห้องเรียน',
         syllabus: null,
+        totalScheduledDays: 0,
+        completedDays: 0,
       });
     }
 
@@ -334,7 +563,20 @@ export default function MicroSyllabusPage() {
       if (a.classId && !b.classId) return -1;
       return a.className.localeCompare(b.className, 'th');
     });
-  }, [yearClasses, myIdentityKeys, myTeacher, resolveSubject, syllabi, canManageOwnPlans, activeYear, activeSemester]);
+  }, [
+    yearClasses,
+    myIdentityKeys,
+    myTeacher,
+    resolveSubject,
+    syllabusLookup,
+    canManageOwnPlans,
+    activeYear,
+    activeSemester,
+    scheduleEntries,
+    classSettingsMap,
+    deptSemesterSettings,
+    allCalendarEvents,
+  ]);
 
   // ── Selection state ───────────────────────────────────────────────────────
   const [searchParams, setSearchParams] = useSearchParams();
@@ -342,23 +584,28 @@ export default function MicroSyllabusPage() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pendingSelectId, setPendingSelectId] = useState<string | null>(null);
   const [creatingKey, setCreatingKey] = useState<string | null>(null);
+  const [folderColors, setFolderColors] = useState<Record<string, FolderCardColorId>>(() => loadFolderCardColors());
   const [lessonSettingsOpen, setLessonSettingsOpen] = useState(false);
   const [headerRightEl, setHeaderRightEl] = useState<HTMLElement | null>(null);
   const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
-  const [reflectionPlanStatus, setReflectionPlanStatus] = useState<'on_plan' | 'off_plan'>('on_plan');
-  const [reflectionOverview, setReflectionOverview] = useState<'good' | 'medium' | 'review'>('good');
-  const [reflectionNotes, setReflectionNotes] = useState('');
-  const [savingReflection, setSavingReflection] = useState(false);
+  const [breadcrumbExtraEl, setBreadcrumbExtraEl] = useState<HTMLElement | null>(null);
+  const [breadcrumbPageEl, setBreadcrumbPageEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     setHeaderRightEl(document.getElementById('header-portal-right-actions'));
     setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
+    setBreadcrumbExtraEl(document.getElementById('header-portal-breadcrumb-extra'));
+    setBreadcrumbPageEl(document.getElementById('header-portal-breadcrumb-page'));
   }, []);
 
   const selectedAssignment = useMemo(
     () => assignedSubjects.find(a => `${a.subjectId}|${a.classId}` === selectedKey) ?? null,
     [assignedSubjects, selectedKey],
   );
+
+  const breadcrumbSubjectLabel = selectedAssignment
+    ? `${selectedAssignment.subjectName} · ${selectedAssignment.className}`
+    : null;
 
   const selectedSyllabus = useMemo(() => {
     if (!selectedAssignment) return null;
@@ -374,6 +621,31 @@ export default function MicroSyllabusPage() {
       setPendingSelectId(null);
     }
   }, [syllabi, pendingSelectId]);
+
+  // ช่วงเทอมของ "ห้องที่กำลังเปิดดูอยู่" จริง — แผนกห้องอาจต่างจากแผนกของครูผู้สอน
+  const selectedSemesterRange = useMemo(() => {
+    if (!activeYear) return semesterRange;
+    const classId = selectedSyllabus?.classId || selectedAssignment?.classId;
+    const cls = classId ? yearClasses.find((c) => c.id === classId) : undefined;
+    const deptKey = departmentToSemesterKey(cls?.departmentId ?? selectedSyllabus?.departmentId);
+    return resolveSemesterDateRange(
+      activeYear.year,
+      (activeSemester as 1 | 2) || 1,
+      activeYear,
+      calendarEvents,
+      deptSemesterSettings,
+      deptKey,
+    );
+  }, [
+    activeYear,
+    activeSemester,
+    calendarEvents,
+    deptSemesterSettings,
+    selectedSyllabus,
+    selectedAssignment,
+    yearClasses,
+    semesterRange,
+  ]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleSelectAssignment = async (assignment: AssignedSubject) => {
@@ -432,57 +704,6 @@ export default function MicroSyllabusPage() {
     await updateLessonOptions(selectedSyllabus.id, lessonOptions);
   };
 
-  const handleSaveReflection = async () => {
-    if (!selectedSyllabus) return;
-    setSavingReflection(true);
-    try {
-      const today = getLocalDateString();
-      const topicIndex = selectedSyllabus.topics.findIndex(t => t.date === today);
-      const updatedTopics = [...selectedSyllabus.topics];
-
-      if (topicIndex >= 0) {
-        updatedTopics[topicIndex] = {
-          ...updatedTopics[topicIndex],
-          teachingReflection: {
-            planStatus: reflectionPlanStatus,
-            overview: reflectionOverview,
-            additionalRequest: reflectionNotes || undefined,
-            recordedAt: new Date().toISOString(),
-          },
-          completedAt: new Date().toISOString(),
-        };
-      } else {
-        updatedTopics.push({
-          weekNumber: Math.ceil(updatedTopics.length / 1),
-          date: today,
-          title: 'บันทึกหลังการสอน',
-          teachingReflection: {
-            planStatus: reflectionPlanStatus,
-            overview: reflectionOverview,
-            additionalRequest: reflectionNotes || undefined,
-            recordedAt: new Date().toISOString(),
-          },
-          completedAt: new Date().toISOString(),
-        } as WeeklyTopic);
-      }
-
-      await handleSaveTopics(updatedTopics);
-      setReflectionPlanStatus('on_plan');
-      setReflectionOverview('good');
-      setReflectionNotes('');
-      toast.success('บันทึกหลังการสอนเรียบร้อย');
-    } catch {
-      toast.error('บันทึกหลังการสอนไม่สำเร็จ');
-    } finally {
-      setSavingReflection(false);
-    }
-  };
-
-  const handleBackToSubjects = () => {
-    setSelectedKey(null);
-    setPendingSelectId(null);
-  };
-
   const selectableAssignments = useMemo(
     () => assignedSubjects.filter((assignment) => assignment.classId !== ''),
     [assignedSubjects],
@@ -505,6 +726,37 @@ export default function MicroSyllabusPage() {
     void handleSelectAssignment(assignment);
   };
 
+  const handleBackToSubjectList = useCallback(() => {
+    setSelectedKey(null);
+    setPendingSelectId(null);
+    setCreatingKey(null);
+  }, []);
+
+  // Header back (desktop กลับไปเมนู / mobile กลับเมนู) → subject list when a plan is open
+  useEffect(() => {
+    if (showAdminBrowser || !selectedKey) return;
+
+    const isPortalBackButton = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      const btn = target.closest('button');
+      if (!btn) return false;
+      if (btn.id === 'portal-default-mobile-back') return true;
+      const title = btn.getAttribute('title') ?? '';
+      const label = btn.getAttribute('aria-label') ?? '';
+      return title === 'กลับไปเมนู' || title === 'กลับเมนู' || label === 'กลับไปเมนู';
+    };
+
+    const onClick = (e: MouseEvent) => {
+      if (!isPortalBackButton(e.target)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      handleBackToSubjectList();
+    };
+
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [showAdminBrowser, selectedKey, handleBackToSubjectList]);
+
   // ── No active year ─────────────────────────────────────────────────────────
   if (!activeYear) {
     return (
@@ -518,25 +770,34 @@ export default function MicroSyllabusPage() {
   }
 
   // ── Admin View (sysadmin / admin without linked teacher profile) ───────────
-  if (isAdmin && !canManageOwnPlans) {
+  if (showAdminBrowser) {
     return (
-      <div className="w-full flex flex-col gap-5 pb-10">
-        <MicroSyllabusSubjectSelect
-          active={false}
-          options={[]}
-          selectedKey={null}
-          onSelect={() => undefined}
-          onBack={() => undefined}
-        />
+      <div
+        className={cn(
+          'flex min-h-0 w-full flex-1 flex-col overflow-hidden font-sukhumvit',
+          'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+        )}
+      >
         {adminLoading ? (
           <AssignedSubjectsGridSkeleton count={9} />
         ) : (
-          <AdminTeacherPlanBrowser
-            teachers={teachers}
-            syllabi={allSyllabi}
-            semesterStart={semesterRange.start}
-            semesterEnd={semesterRange.end}
-          />
+          <Suspense fallback={<AssignedSubjectsGridSkeleton count={9} />}>
+            <AdminTeacherPlanBrowser
+              teachers={teachers}
+              syllabi={allSyllabi}
+              semesterStart={semesterRange.start}
+              semesterEnd={semesterRange.end}
+              subjectCategoryByKey={subjectCategoryByKey}
+              classesById={classesById}
+              scheduleEntries={scheduleEntries}
+              calendarEvents={allCalendarEvents}
+              classSettingsMap={classSettingsMap}
+              deptSemesterSettings={deptSemesterSettings}
+              yearBE={activeYear?.year ?? ''}
+              semester={(activeSemester as 1 | 2) ?? 1}
+              academicYear={activeYear}
+            />
+          </Suspense>
         )}
       </div>
     );
@@ -547,50 +808,89 @@ export default function MicroSyllabusPage() {
     <button
       type="button"
       onClick={() => setLessonSettingsOpen(true)}
+      className={HEADER_ICON_BTN}
       title="ตั้งค่าเนื้อหาบทเรียน"
-      className="flex items-center justify-center w-9 h-9 rounded-full shrink-0 text-slate-600 hover:bg-black/[0.04] transition-all active:scale-95 pointer-events-auto"
+      aria-label="ตั้งค่าเนื้อหาบทเรียน"
     >
-      <HiOutlineCog6Tooth size={18} />
+      <HiOutlineCog6Tooth size={16} />
     </button>
   );
 
   const headerLessonSettingsPortal = selectedSyllabus ? (
     <>
       {headerRightEl && createPortal(
-        <div className="hidden lg:flex items-center gap-2">
+        <div className={cn('hidden lg:flex pointer-events-auto', HEADER_ICON_BTN_GROUP)}>
           {lessonSettingsButton}
         </div>,
         headerRightEl,
       )}
       {headerMobileActionsEl && createPortal(
-        <div className="flex items-center gap-1">
+        <div className={cn('flex pointer-events-auto', HEADER_ICON_BTN_GROUP)}>
           {lessonSettingsButton}
         </div>,
         headerMobileActionsEl,
       )}
-      <LessonContentSettingsDrawer
-        open={lessonSettingsOpen}
-        onClose={() => setLessonSettingsOpen(false)}
-        lessonOptions={selectedLessonOptions}
-        onSave={handleSaveLessonOptions}
-        subjectName={selectedSyllabus.subjectName}
-        className={selectedSyllabus.className}
-      />
+      <Suspense fallback={null}>
+        <LessonContentSettingsDrawer
+          open={lessonSettingsOpen}
+          onClose={() => setLessonSettingsOpen(false)}
+          lessonOptions={selectedLessonOptions}
+          onSave={handleSaveLessonOptions}
+          subjectName={selectedSyllabus.subjectName}
+          className={selectedSyllabus.className}
+        />
+      </Suspense>
     </>
   ) : null;
 
   return (
-    <div className="w-full flex flex-col gap-4 pb-10">
+    <div
+      className={cn(
+        'flex min-h-0 w-full flex-1 flex-col overflow-hidden font-sukhumvit',
+        'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+      )}
+    >
       {headerLessonSettingsPortal}
-      <MicroSyllabusSubjectSelect
-        active={Boolean(selectedSyllabus)}
-        options={subjectSelectOptions}
-        selectedKey={selectedKey}
-        onSelect={handleSubjectSelectChange}
-        onBack={handleBackToSubjects}
-      />
+      {breadcrumbPageEl && breadcrumbSubjectLabel && createPortal(
+        <BreadcrumbLink asChild>
+          <button
+            type="button"
+            onClick={handleBackToSubjectList}
+            className="font-black text-slate-500 transition-colors hover:text-slate-800"
+            title="กลับไปเลือกรายวิชา"
+          >
+            {MICRO_SYLLABUS_FEATURE_TITLE}
+          </button>
+        </BreadcrumbLink>,
+        breadcrumbPageEl,
+      )}
+      {breadcrumbExtraEl && breadcrumbSubjectLabel && createPortal(
+        <>
+          <BreadcrumbSeparator className="[&>svg]:size-3.5 text-slate-300">
+            <HiChevronRight />
+          </BreadcrumbSeparator>
+          <BreadcrumbItem className="min-w-0">
+            <BreadcrumbPage
+              className="max-w-[220px] truncate font-black text-slate-800"
+              title={breadcrumbSubjectLabel}
+            >
+              {breadcrumbSubjectLabel}
+            </BreadcrumbPage>
+          </BreadcrumbItem>
+        </>,
+        breadcrumbExtraEl,
+      )}
+      <div className="shrink-0">
+        <MicroSyllabusSubjectSelect
+          active={Boolean(selectedSyllabus)}
+          options={subjectSelectOptions}
+          selectedKey={selectedKey}
+          onSelect={handleSubjectSelectChange}
+        />
+      </div>
 
       {/* Body */}
+      <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
       {teacherLoading || pendingCurriculumLoads.length > 0 ? (
         selectedSyllabus ? (
           <TeachingPlanCalendarSkeleton />
@@ -621,72 +921,24 @@ export default function MicroSyllabusPage() {
               initial={{ opacity: 0, x: 12 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 12 }}
-              className="w-full min-w-0 flex flex-col gap-3"
+              className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-3"
             >
-              {/* Teaching Reflection Form */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <h3 className="text-sm font-black text-slate-800 font-sukhumvit mb-3">บันทึกหลังการสอนวันนี้</h3>
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[11px] font-black text-slate-600 mb-1">แผนการสอน</label>
-                      <select
-                        value={reflectionPlanStatus}
-                        onChange={(e) => setReflectionPlanStatus(e.target.value as 'on_plan' | 'off_plan')}
-                        className="w-full h-8 rounded-lg border border-slate-200 bg-white text-[12px] font-sukhumvit text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/30"
-                      >
-                        <option value="on_plan">ตามแผน</option>
-                        <option value="off_plan">เบี่ยงเบน</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-black text-slate-600 mb-1">ผลการสอน</label>
-                      <select
-                        value={reflectionOverview}
-                        onChange={(e) => setReflectionOverview(e.target.value as 'good' | 'medium' | 'review')}
-                        className="w-full h-8 rounded-lg border border-slate-200 bg-white text-[12px] font-sukhumvit text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/30"
-                      >
-                        <option value="good">ดี</option>
-                        <option value="medium">ปานกลาง</option>
-                        <option value="review">ต้องปรับปรุง</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-black text-slate-600 mb-1">หมายเหตุเพิ่มเติม</label>
-                    <textarea
-                      value={reflectionNotes}
-                      onChange={(e) => setReflectionNotes(e.target.value)}
-                      placeholder="ป้อนหมายเหตุ หากนักเรียนมีปัญหา ข้อเสนอแนะ ฯลฯ"
-                      className="w-full h-20 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] font-sarabun text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    disabled={savingReflection}
-                    onClick={() => void handleSaveReflection()}
-                    className="w-full h-9 rounded-lg bg-blue-600 text-white text-[12px] font-black font-sukhumvit hover:bg-blue-700 disabled:opacity-60 flex items-center justify-center gap-2"
-                  >
-                    <HiCheck size={14} />
-                    บันทึกหลังการสอน
-                  </button>
-                </div>
-              </div>
-
-              <WeeklyTopicGrid
-                topics={selectedSyllabus.topics}
-                lessonOptions={selectedLessonOptions}
-                semesterStart={semesterRange.start}
-                semesterEnd={semesterRange.end}
-                onSave={handleSaveTopics}
-                planContext={{
-                  subjectId: selectedSyllabus.subjectId,
-                  subjectName: selectedSyllabus.subjectName,
-                  classId: selectedSyllabus.classId,
-                  className: selectedSyllabus.className,
-                  gradeLevel: selectedSyllabus.gradeLevel,
-                }}
-              />
+              <Suspense fallback={<TeachingPlanCalendarSkeleton />}>
+                <WeeklyTopicGrid
+                  topics={selectedSyllabus.topics}
+                  lessonOptions={selectedLessonOptions}
+                  semesterStart={selectedSemesterRange.start}
+                  semesterEnd={selectedSemesterRange.end}
+                  onSave={handleSaveTopics}
+                  planContext={{
+                    subjectId: selectedSyllabus.subjectId,
+                    subjectName: selectedSyllabus.subjectName,
+                    classId: selectedSyllabus.classId,
+                    className: selectedSyllabus.className,
+                    gradeLevel: selectedSyllabus.gradeLevel,
+                  }}
+                />
+              </Suspense>
             </motion.div>
           ) : (
             <motion.div
@@ -694,7 +946,7 @@ export default function MicroSyllabusPage() {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
-              className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3"
+              className="grid w-full grid-cols-2 gap-x-3 gap-y-5 overflow-y-auto overscroll-y-contain scrollbar-hide sm:grid-cols-3 xl:grid-cols-4"
             >
               {assignedSubjects.map(a => {
                 const key = `${a.subjectId}|${a.classId}`;
@@ -704,6 +956,14 @@ export default function MicroSyllabusPage() {
                     assignment={a}
                     active={false}
                     creating={creatingKey === key}
+                    colorId={folderColors[key] ?? DEFAULT_COLOR_ID}
+                    onColorChange={(id) => {
+                      setFolderColors((prev) => {
+                        const next = { ...prev, [key]: id };
+                        saveFolderCardColors(next);
+                        return next;
+                      });
+                    }}
                     onClick={() => handleSelectAssignment(a)}
                   />
                 );
@@ -712,6 +972,7 @@ export default function MicroSyllabusPage() {
           )}
         </AnimatePresence>
       )}
+      </div>
     </div>
   );
 }

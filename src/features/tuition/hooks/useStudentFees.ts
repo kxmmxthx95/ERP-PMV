@@ -117,8 +117,20 @@ export function recomputeStudentFeeTotals(
   return { totalFee, totalDiscount, netPayable, totalPaid, status };
 }
 
-/** รายชื่อค่าเทอมนักเรียนทั้งหมดของ "รอบเก็บค่าเทอม" (campaign) หนึ่งรอบ — ใช้ในหน้ารายชื่อนักเรียน */
-export function useStudentFeesByCampaign(campaignId: string | null, campaign: TuitionCampaign | null = null) {
+/**
+ * รายชื่อค่าเทอมนักเรียนทั้งหมดของ "รอบเก็บค่าเทอม" (campaign) หนึ่งรอบ — ใช้ในหน้ารายชื่อนักเรียน
+ *
+ * includePending: true เปิด pendingFees (นักเรียนที่ยังไม่มีระเบียนค่าเทอม) — คำนวณจาก
+ * resolveCampaignStudentRoster() ซึ่งสแกน students/enrollments/classes ทั้งโรงเรียนแบบไม่กรอง
+ * ปีการศึกษา แพงมาก ใช้เฉพาะหน้าจัดการ campaign เต็ม (AdminTuitionView) ที่ต้องใช้ข้อมูลนี้จริง
+ * — อย่าเปิดจาก widget สรุป/หน้ารายชื่อที่ใช้แค่ studentFees
+ */
+export function useStudentFeesByCampaign(
+  campaignId: string | null,
+  campaign: TuitionCampaign | null = null,
+  options: { includePending?: boolean } = {},
+) {
+  const includePending = options.includePending ?? false;
   const queryClient = useQueryClient();
   const queryKey = ['studentFees', campaignId];
 
@@ -206,7 +218,7 @@ export function useStudentFeesByCampaign(campaignId: string | null, campaign: Tu
           };
         });
     },
-    enabled: !!campaign,
+    enabled: includePending && !!campaign,
   });
 
   /** สร้าง/อัปเดตระเบียนค่าเทอมจากโครงสร้างที่ตั้งไว้ใน campaign */
@@ -391,7 +403,7 @@ export function useStudentFeesByCampaign(campaignId: string | null, campaign: Tu
   return {
     studentFees: feesQuery.data ?? [],
     pendingFees: pendingQuery.data ?? [],
-    isLoading: feesQuery.isLoading || pendingQuery.isLoading,
+    isLoading: feesQuery.isLoading || (includePending && pendingQuery.isLoading),
     generateFeesForCampaign: generateFeesForCampaign.mutateAsync,
     applyCampaignFeesToStudents: applyCampaignFeesToStudents.mutateAsync,
     isGenerating: generateFeesForCampaign.isPending || applyCampaignFeesToStudents.isPending,

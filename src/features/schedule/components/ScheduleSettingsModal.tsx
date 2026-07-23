@@ -3,7 +3,8 @@ import { Zap } from 'lucide-react';
 import { HiCog6Tooth } from 'react-icons/hi2';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
 import { toast } from 'sonner';
 import { useScheduleSettings } from '@/hooks/useScheduleSettings';
 
@@ -92,14 +93,14 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
       <DialogTrigger asChild>
         <button
           type="button"
-          className="flex items-center justify-center h-7 w-7 rounded-full transition-all text-black/35 hover:text-black/60 hover:bg-black/[0.02] border-none shadow-none flex-shrink-0"
+          className={HEADER_ICON_BTN}
           title="ตั้งค่าคาบเรียนและเวลา"
         >
-          <HiCog6Tooth className="w-4 h-4" />
+          <HiCog6Tooth size={16} />
         </button>
       </DialogTrigger>
       <DialogContent
-        className="w-[92vw] sm:max-w-lg rounded-[2rem] sm:rounded-[2.5rem] border-none p-0 shadow-2xl overflow-hidden"
+        className="w-[92vw] sm:max-w-lg rounded-2xl border-none p-0 shadow-2xl overflow-hidden"
         style={{
           background: 'rgba(255,255,255,0.7)',
           backdropFilter: 'blur(24px) saturate(180%)',
@@ -111,25 +112,15 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
             <DialogTitle className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">
               ตั้งค่าคาบเรียนและเวลา
             </DialogTitle>
-            <DialogDescription className="mt-1 text-[12px] font-medium text-slate-500">
-              จัดการจำนวนคาบและเวลาในแต่ละช่วง ({targetId || 'ค่าเริ่มต้น'})
-            </DialogDescription>
           </div>
 
           <div className="flex-1 space-y-6 overflow-y-auto px-6 sm:px-8 py-4 custom-scrollbar">
             {/* Automatic Generation Section */}
             <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <div className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                  สร้างโครงสร้างเวลาอัตโนมัติ
-                </h4>
-              </div>
-
-              <div className="space-y-4 rounded-2xl bg-white/40 border border-white/20 p-4 shadow-sm">
+              <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">เริ่มเรียน <span className="text-rose-500">*</span></label>
+                    <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider pl-1">เริ่มเรียน <span className="text-rose-500">*</span></label>
                     <Input
                       type="time"
                       value={genStartTime}
@@ -138,7 +129,7 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">นาทีต่อคาบ <span className="text-rose-500">*</span></label>
+                    <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider pl-1">นาทีต่อคาบ <span className="text-rose-500">*</span></label>
                     <Input
                       type="number"
                       value={genPeriodDur}
@@ -149,7 +140,7 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">พักเบรกระหว่างคาบ (นาที)</label>
+                  <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider pl-1">พักเบรกระหว่างคาบ (นาที)</label>
                   <Input
                     type="number"
                     value={genBreakDur}
@@ -160,7 +151,7 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">คาบที่พักเที่ยง</label>
+                    <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider pl-1">คาบที่พักเที่ยง</label>
                     <Input
                       type="number"
                       value={genLunchPeriod}
@@ -169,7 +160,7 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">พักเที่ยง (นาที)</label>
+                    <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider pl-1">พักเที่ยง (นาที)</label>
                     <Input
                       type="number"
                       value={genLunchDur}
@@ -190,15 +181,8 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
             </div>
 
             {/* Manual Setting Section */}
-            <div className="space-y-4 pb-4">
-              <div className="flex items-center gap-2">
-                <div className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                  จำนวนคาบต่อวัน
-                </h4>
-              </div>
-
-              <div className="flex items-center justify-between rounded-2xl bg-white/40 border border-white/20 p-5 shadow-sm">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
                 <div>
                   <p className="text-lg font-black text-slate-800">{localCount} คาบ</p>
                   <p className="text-[11px] font-bold text-slate-400 mt-0.5">จำนวนคาบเรียนในหนึ่งวัน</p>
@@ -224,19 +208,11 @@ export default function ScheduleSettingsModal({ targetId }: ScheduleSettingsModa
             </div>
           </div>
 
-          <DialogFooter className="px-6 sm:px-8 py-4 bg-transparent border-t border-white/20 flex items-center justify-end gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setOpen(false)}
-              className="rounded-xl font-bold text-slate-500 h-10 hover:bg-slate-100/50"
-            >
-              ยกเลิก
-            </Button>
+          <DialogFooter className="px-6 sm:px-8 pt-4 pb-6 sm:pb-8 bg-transparent border-t border-white/20 flex items-center justify-end gap-3">
             <Button
               type="button"
               onClick={handleSave}
-              className="rounded-xl bg-slate-900 text-white font-bold px-8 h-10 shadow-lg shadow-slate-900/20 transition-all hover:bg-slate-800 active:scale-[0.98]"
+              className="w-full rounded-xl font-bold h-10"
             >
               บันทึกการตั้งค่า
             </Button>

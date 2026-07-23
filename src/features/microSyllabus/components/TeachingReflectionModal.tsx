@@ -1,6 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { HiOutlineXMark } from 'react-icons/hi2';
+import { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -8,29 +6,20 @@ import {
   DialogFooter,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { db } from '@/lib/firebase';
-import { fetchStudentsByIds } from '@/lib/firestoreShared/fetchStudentsByIds';
 import { cn } from '@/lib/utils';
-import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
 import type {
-  TeachingOverview,
   TeachingPlanStatus,
+  TeachingOverview,
   TeachingReflection,
   TeachingReflectionStudent,
 } from '@/types/microSyllabus';
+import { ProblemStudentPicker } from './ProblemStudentPicker';
+import { TeachingStarRating } from './TeachingStarRating';
 
 const PLAN_STATUS_OPTIONS: { value: TeachingPlanStatus; label: string }[] = [
   { value: 'on_plan', label: 'ตามแผน' },
   { value: 'off_plan', label: 'หลุดแผน' },
 ];
-
-const OVERVIEW_OPTIONS: { value: TeachingOverview; label: string }[] = [
-  { value: 'good', label: 'ดี' },
-  { value: 'medium', label: 'ปานกลาง' },
-  { value: 'review', label: 'ทบทวนใหม่' },
-];
-
-type ClassStudentOption = TeachingReflectionStudent;
 
 interface Props {
   open: boolean;
@@ -82,121 +71,19 @@ export default function TeachingReflectionModal({
   classId,
   dateLabel,
 }: Props) {
-  const { allClasses } = useClassroomManager();
   const [planStatus, setPlanStatus] = useState<TeachingPlanStatus>('on_plan');
-  const [overview, setOverview] = useState<TeachingOverview>('good');
-  const [studentQuery, setStudentQuery] = useState('');
+  const [overview, setOverview] = useState<TeachingOverview>(3);
   const [problemStudents, setProblemStudents] = useState<TeachingReflectionStudent[]>([]);
   const [additionalRequest, setAdditionalRequest] = useState('');
-  const [classStudents, setClassStudents] = useState<ClassStudentOption[]>([]);
-  const [loadingStudents, setLoadingStudents] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setPlanStatus('on_plan');
-    setOverview('good');
-    setStudentQuery('');
+    setOverview(3);
     setProblemStudents([]);
     setAdditionalRequest('');
   }, [open]);
-
-  useEffect(() => {
-    if (!open || !classId) {
-      setClassStudents([]);
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadStudents() {
-      setLoadingStudents(true);
-      try {
-        const classDoc = allClasses.find((item) => item.id === classId) as
-          | (typeof allClasses)[number] & { studentIds?: string[] }
-          | undefined;
-        const classStudentIds = (classDoc?.studentIds || []).filter(
-          (id): id is string => typeof id === 'string' && id.trim() !== '',
-        );
-
-        let studentRows: ClassStudentOption[] = [];
-
-        if (classStudentIds.length > 0) {
-          const students = await fetchStudentsByIds<{
-            id: string;
-            studentCode?: string;
-            prefix?: string;
-            firstName?: string;
-            lastName?: string;
-          }>(classStudentIds);
-          studentRows = students.map((student) => ({
-            id: student.id,
-            code: student.studentCode,
-            name: `${student.prefix ?? ''}${student.firstName ?? ''} ${student.lastName ?? ''}`.trim(),
-          }));
-        } else {
-          const enrollSnap = await getDocs(
-            query(collection(db, 'enrollments'), where('classId', '==', classId)),
-          );
-          const enrollmentStudentIds = enrollSnap.docs
-            .map((snap) => snap.data().studentId as string | undefined)
-            .filter((id): id is string => typeof id === 'string' && id.trim() !== '');
-
-          if (enrollmentStudentIds.length > 0) {
-            const students = await fetchStudentsByIds<{
-              id: string;
-              studentCode?: string;
-              prefix?: string;
-              firstName?: string;
-              lastName?: string;
-            }>(enrollmentStudentIds);
-            studentRows = students.map((student) => ({
-              id: student.id,
-              code: student.studentCode,
-              name: `${student.prefix ?? ''}${student.firstName ?? ''} ${student.lastName ?? ''}`.trim(),
-            }));
-          }
-        }
-
-        if (!cancelled) {
-          setClassStudents(
-            studentRows.sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name, 'th')),
-          );
-        }
-      } finally {
-        if (!cancelled) setLoadingStudents(false);
-      }
-    }
-
-    void loadStudents();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, classId, allClasses]);
-
-  const filteredStudents = useMemo(() => {
-    if (studentQuery.trim().length < 5) return [];
-    const q = studentQuery.trim().toLowerCase();
-    const selectedIds = new Set(problemStudents.map((student) => student.id));
-
-    return classStudents
-      .filter((student) => !selectedIds.has(student.id))
-      .filter((student) => {
-        const haystack = `${student.name} ${student.code ?? ''}`.toLowerCase();
-        return haystack.includes(q);
-      })
-      .slice(0, 8);
-  }, [classStudents, problemStudents, studentQuery]);
-
-  const addProblemStudent = (student: ClassStudentOption) => {
-    setProblemStudents((current) => [...current, student]);
-    setStudentQuery('');
-  };
-
-  const removeProblemStudent = (studentId: string) => {
-    setProblemStudents((current) => current.filter((student) => student.id !== studentId));
-  };
 
   const handleSubmit = async () => {
     setSaving(true);
@@ -246,88 +133,14 @@ export default function TeachingReflectionModal({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <p className="text-[11px] font-black uppercase tracking-wide text-slate-500 font-sukhumvit">
-              ภาพรวม
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              {OVERVIEW_OPTIONS.map((option) => (
-                <RadioCard
-                  key={option.value}
-                  name="overview"
-                  value={option.value}
-                  checked={overview === option.value}
-                  label={option.label}
-                  onSelect={setOverview}
-                />
-              ))}
-            </div>
-          </div>
+          <TeachingStarRating value={overview} onChange={setOverview} />
 
-          <div className="space-y-2">
-            <label
-              htmlFor="problem-student-search"
-              className="text-[11px] font-black uppercase tracking-wide text-slate-500 font-sukhumvit"
-            >
-              นักเรียนที่มีปัญหา
-            </label>
-            <p className="text-[11px] text-slate-400 font-sarabun">ไม่จำเป็นต้องใส่ก็ได้</p>
-            <input
-              id="problem-student-search"
-              value={studentQuery}
-              onChange={(event) => setStudentQuery(event.target.value)}
-              placeholder="ค้นหาชื่อนักเรียน (อย่างน้อย 5 ตัวอักษร)"
-              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-sarabun text-slate-800 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-            />
-            {studentQuery.trim().length > 0 && studentQuery.trim().length < 5 && (
-              <p className="text-[11px] font-bold text-slate-400 font-sarabun">
-                พิมพ์อย่างน้อย 5 ตัวอักษรเพื่อค้นหา
-              </p>
-            )}
-            {loadingStudents && studentQuery.trim().length >= 5 && (
-              <p className="text-[11px] font-bold text-slate-400 font-sarabun">กำลังโหลดรายชื่อนักเรียน...</p>
-            )}
-            {!loadingStudents && studentQuery.trim().length >= 5 && filteredStudents.length === 0 && (
-              <p className="text-[11px] font-bold text-slate-400 font-sarabun">ไม่พบนักเรียนที่ตรงกับคำค้นหา</p>
-            )}
-            {filteredStudents.length > 0 && (
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                {filteredStudents.map((student) => (
-                  <button
-                    key={student.id}
-                    type="button"
-                    onClick={() => addProblemStudent(student)}
-                    className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-slate-50"
-                  >
-                    <span className="text-sm font-bold text-slate-800 font-sarabun">{student.name}</span>
-                    {student.code && (
-                      <span className="text-[11px] font-bold text-slate-400">{student.code}</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-            {problemStudents.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {problemStudents.map((student) => (
-                  <span
-                    key={student.id}
-                    className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-black text-rose-700"
-                  >
-                    {student.name}
-                    <button
-                      type="button"
-                      onClick={() => removeProblemStudent(student.id)}
-                      className="rounded-full p-0.5 hover:bg-rose-100"
-                      aria-label={`ลบ ${student.name}`}
-                    >
-                      <HiOutlineXMark size={12} />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          <ProblemStudentPicker
+            classId={classId}
+            enabled={open}
+            value={problemStudents}
+            onChange={setProblemStudents}
+          />
 
           <div className="space-y-2">
             <label

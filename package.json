@@ -8,6 +8,8 @@
     "build": "node scripts/copy-pdfjs-wasm.mjs && tsc -b && vite build",
     "lint": "eslint .",
     "backfill:class-sessions": "npm --prefix src/functions run backfill:class-sessions",
+    "backfill:class-teacher-ids": "npm --prefix src/functions run backfill:class-teacher-ids",
+    "backfill:class-teacher-ids:dry-run": "npm --prefix src/functions run backfill:class-teacher-ids:dry-run",
     "cleanup:staff-attendance-duplicates": "npm --prefix src/functions run cleanup:staff-attendance-duplicates",
     "cleanup:staff-attendance-duplicates:dry-run": "npm --prefix src/functions run cleanup:staff-attendance-duplicates:dry-run",
     "validate:firestore-config": "node scripts/validate-firestore-config.mjs",

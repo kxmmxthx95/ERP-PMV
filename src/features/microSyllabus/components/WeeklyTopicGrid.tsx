@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   addMonths,
+  endOfMonth,
   format,
+  isAfter,
+  isBefore,
   isSameMonth,
   isToday,
   parseISO,
+  startOfMonth,
   subMonths,
 } from 'date-fns';
 import { th } from 'date-fns/locale';
@@ -15,9 +19,10 @@ import {
   HiOutlineCheckCircle,
   HiOutlineComputerDesktop,
   HiOutlineDocumentText,
-  HiOutlinePlus,
+  HiOutlineExclamationTriangle,
   HiOutlineTrash,
   HiOutlineXMark,
+  HiStar,
 } from 'react-icons/hi2';
 import {
   Drawer,
@@ -34,20 +39,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { CreateRoomModal, type CreateRoomPrefill } from '@/features/exam/components/CreateRoomModal';
-import QuestionSetBuilder from '@/features/questionBank/components/QuestionSetBuilder';
+import { Button } from '@/components/ui/button';
+import type { CreateRoomPrefill } from '@/features/exam/components/CreateRoomModal';
 import TeachingReflectionModal from './TeachingReflectionModal';
 import { useAuth } from '@/hooks/useAuth';
 import { useExamRoom } from '@/hooks/useExamRoom';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import { useSchedule } from '@/hooks/useSchedule';
+import { useScheduleSettings } from '@/hooks/useScheduleSettings';
 import { useQuestionSetBank } from '@/hooks/useQuestionSetBank';
 import { useThaiHolidays } from '@/features/calendar/hooks/useThaiHolidays';
+import { formatEventDateRange } from '@/features/calendar/utils';
 import { EVENT_TYPE_CONFIG } from '@/types/calendar';
+import type { CalendarEvent } from '@/types/calendar';
 import { cn } from '@/lib/utils';
+import { getLocalDateString } from '@/lib/dateUtils';
 import { Switch } from '@/components/ui/switch';
 import type { TeachingReflection, WeeklyTopic } from '@/types/microSyllabus';
+import { normalizeTeachingOverview } from '@/types/microSyllabus';
 import type { NewQuestionSet } from '@/types/questionBank';
 import {
   buildMonthGrid,
@@ -64,9 +74,94 @@ import {
   weekNumberFromDate,
 } from '../utils/teachingPlanCalendar';
 
+// bundle-conditional: exam/QB hooks + modals only mount when user opens them
+const CreateRoomModal = lazy(() =>
+  import('@/features/exam/components/CreateRoomModal').then((m) => ({ default: m.CreateRoomModal })),
+);
+const QuestionSetBuilder = lazy(() => import('@/features/questionBank/components/QuestionSetBuilder'));
+
+function TeachingPlanExamModals({
+  showCreateExamModal,
+  showQuestionSetModal,
+  examPrefill,
+  questionSetPrefill,
+  questionSetKey,
+  onCloseExam,
+  onCloseQuestionSet,
+}: {
+  showCreateExamModal: boolean;
+  showQuestionSetModal: boolean;
+  examPrefill: CreateRoomPrefill | null;
+  questionSetPrefill: {
+    title: string;
+    description: string;
+    gradeLevel: string;
+    department: string;
+  } | null;
+  questionSetKey: string;
+  onCloseExam: () => void;
+  onCloseQuestionSet: () => void;
+}) {
+  const { createRoom, updateRoom } = useExamRoom();
+  const { questionSets, addQuestionSet } = useQuestionSetBank();
+
+  const handleQuestionSetSubmit = async (data: NewQuestionSet) => {
+    await addQuestionSet(data);
+    onCloseQuestionSet();
+  };
+
+  return (
+    <Suspense fallback={null}>
+      {showCreateExamModal && (
+        <CreateRoomModal
+          key={examPrefill?.title ?? 'new-exam-room'}
+          prefill={examPrefill}
+          onClose={onCloseExam}
+          onCreate={createRoom}
+          onUpdate={updateRoom}
+        />
+      )}
+      {showQuestionSetModal && (
+        <QuestionSetBuilder
+          key={questionSetKey}
+          open
+          onClose={onCloseQuestionSet}
+          prefill={questionSetPrefill}
+          existingSets={questionSets}
+          onSubmit={handleQuestionSetSubmit}
+        />
+      )}
+    </Suspense>
+  );
+}
+
 const DAY_NAMES = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'] as const;
 
 const CELL_BODY_TEXT = 'hidden lg:block';
+
+/** Align with MorningRollCallMonthCalendar status chrome */
+type DayPlanDot = 'upcoming' | 'pending' | 'done' | 'closed';
+
+const MOBILE_STATUS_CELL_CLASS: Record<DayPlanDot, string> = {
+  upcoming: 'border-slate-200 bg-slate-100 lg:border-slate-300 lg:bg-white',
+  pending: 'border-rose-200 bg-rose-100 lg:border-slate-300 lg:bg-white',
+  done: 'border-emerald-200 bg-emerald-100 lg:border-slate-300 lg:bg-white',
+  closed: 'border-slate-200 bg-slate-100 lg:border-slate-300 lg:bg-white',
+};
+
+const EVENT_LABEL_CLASS: Record<'holiday' | 'exam' | 'activity', string> = {
+  holiday: 'text-rose-500',
+  exam: 'text-amber-600',
+  activity: 'text-blue-600',
+};
+
+const EVENT_CARD_CLASS: Record<'holiday' | 'exam' | 'activity', string> = {
+  holiday: 'border-rose-200 bg-rose-50',
+  exam: 'border-amber-200 bg-amber-50',
+  activity: 'border-blue-200 bg-blue-50',
+};
+
+const CALENDAR_EVENT_TYPES = new Set(['holiday', 'exam', 'activity']);
 
 const DRAWER_CONTENT_CLASS = cn(
   'flex h-dvh flex-col bg-transparent p-0 before:hidden',
@@ -105,6 +200,126 @@ function inferDepartmentFromGrade(gradeLevel?: string): string {
   return '';
 }
 
+const STAR_HINTS: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: 'ต้องปรับปรุงมาก',
+  2: 'ต้องปรับปรุง',
+  3: 'ปานกลาง',
+  4: 'ดี',
+  5: 'ดีมาก',
+};
+
+function TeachingLogPanel({
+  reflection,
+  completedAt,
+}: {
+  reflection?: TeachingReflection | null;
+  completedAt?: string | null;
+}) {
+  if (!reflection && !completedAt) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-200 px-4 py-16 text-center">
+        <p className="text-sm font-black text-slate-500 font-sukhumvit">ยังไม่มีบันทึกการสอน</p>
+        <p className="text-[12px] text-slate-400 font-sarabun">
+          เมื่อครูทำเครื่องหมายว่าสอนแล้ว ผลการสอนจะแสดงที่นี่
+        </p>
+      </div>
+    );
+  }
+
+  const overview = reflection ? normalizeTeachingOverview(reflection.overview) : null;
+  const planLabel = reflection?.planStatus === 'off_plan' ? 'หลุดแผน' : reflection?.planStatus === 'on_plan' ? 'ตามแผน' : null;
+  const recordedLabel = reflection?.recordedAt
+    ? format(parseISO(reflection.recordedAt), 'd MMMM yyyy HH:mm', { locale: th })
+    : completedAt
+      ? format(parseISO(completedAt), 'd MMMM yyyy HH:mm', { locale: th })
+      : null;
+
+  return (
+    <div className="space-y-3">
+      {completedAt && (
+        <div className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
+          <HiCheckCircle size={18} />
+          สอนแล้ว
+        </div>
+      )}
+
+      {planLabel && (
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">สถานะแผน</p>
+          <div
+            className={cn(
+              'rounded-2xl border px-3 py-3 text-sm font-black font-sukhumvit',
+              reflection?.planStatus === 'on_plan'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-amber-200 bg-amber-50 text-amber-700',
+            )}
+          >
+            {planLabel}
+          </div>
+        </div>
+      )}
+
+      {overview != null && (
+        <div className="space-y-1.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">ผลการสอน</p>
+            <p className="text-[11px] font-bold text-amber-600 font-sarabun">{STAR_HINTS[overview]}</p>
+          </div>
+          <div className="flex items-center justify-between gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-2">
+            {([1, 2, 3, 4, 5] as const).map((star) => (
+              <span
+                key={star}
+                className={cn(
+                  'flex h-10 flex-1 items-center justify-center',
+                  star <= overview ? 'text-amber-400' : 'text-slate-200',
+                )}
+              >
+                <HiStar className="h-7 w-7" />
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {reflection?.problemStudents && reflection.problemStudents.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">นักเรียนที่มีปัญหา</p>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5 space-y-1.5">
+            {reflection.problemStudents.map((student) => (
+              <p key={student.id} className="text-sm font-bold text-slate-700 font-sarabun">
+                {student.name}
+                {student.code ? (
+                  <span className="ml-1.5 text-[11px] font-medium text-slate-400">{student.code}</span>
+                ) : null}
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {reflection?.additionalRequest?.trim() && (
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-black uppercase tracking-wide text-slate-500">คำร้องขอเพิ่มเติม</p>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-sarabun text-slate-800 whitespace-pre-wrap">
+            {reflection.additionalRequest.trim()}
+          </div>
+        </div>
+      )}
+
+      {recordedLabel && (
+        <p className="text-[11px] text-slate-400 font-sarabun text-center pt-1">
+          บันทึกเมื่อ {recordedLabel}
+        </p>
+      )}
+
+      {reflection == null && completedAt && (
+        <p className="text-center text-[12px] text-slate-400 font-sarabun">
+          มีสถานะสอนแล้ว แต่ยังไม่มีรายละเอียดบันทึกผล
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function WeeklyTopicGrid({
   topics: initialTopics,
@@ -118,7 +333,26 @@ export default function WeeklyTopicGrid({
   const [topics, setTopics] = useState<WeeklyTopic[]>(() =>
     normalizeTopicsForCalendar(initialTopics, semesterStart),
   );
-  const [currentMonth, setCurrentMonth] = useState(() => new Date());
+  const minMonth = useMemo(() => {
+    const d = parseISO(semesterStart);
+    return Number.isNaN(d.getTime()) ? startOfMonth(new Date()) : startOfMonth(d);
+  }, [semesterStart]);
+  const maxMonth = useMemo(() => {
+    const d = parseISO(semesterEnd);
+    return Number.isNaN(d.getTime()) ? startOfMonth(new Date()) : startOfMonth(d);
+  }, [semesterEnd]);
+
+  const clampToSemesterMonth = useCallback(
+    (month: Date) => {
+      const m = startOfMonth(month);
+      if (isBefore(m, minMonth)) return minMonth;
+      if (isAfter(m, maxMonth)) return maxMonth;
+      return m;
+    },
+    [minMonth, maxMonth],
+  );
+
+  const [currentMonth, setCurrentMonth] = useState(() => clampToSemesterMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [draftLesson, setDraftLesson] = useState('');
   const [draftTitle, setDraftTitle] = useState('');
@@ -127,18 +361,28 @@ export default function WeeklyTopicGrid({
   const [draftIsTeachingClosed, setDraftIsTeachingClosed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<'plan' | 'log'>('plan');
   const [showCreateExamModal, setShowCreateExamModal] = useState(false);
   const [showQuestionSetModal, setShowQuestionSetModal] = useState(false);
   const [showReflectionModal, setShowReflectionModal] = useState(false);
   const [examPrefill, setExamPrefill] = useState<CreateRoomPrefill | null>(null);
+  const [stampMode, setStampMode] = useState(false);
 
   const { role } = useAuth();
   const { year: academicYear, activeSemester } = useActiveAcademicYear();
-  const { entries: scheduleEntries } = useSchedule();
-  const { createRoom, updateRoom } = useExamRoom();
-  const { questionSets, addQuestionSet } = useQuestionSetBank();
+  // includeClasses: false — component นี้ใช้แค่ entries ไม่ต้องเปิด listener classes ทั้งโรงเรียน
+  const { entries: scheduleEntries } = useSchedule({ includeClasses: false });
   const { holidays } = useThaiHolidays(currentMonth.getFullYear());
-  const { getEventsForDate } = useAcademicCalendar(role ?? undefined, holidays);
+  const { getEventsForDate, events: calendarEvents } = useAcademicCalendar(role ?? undefined, holidays);
+  const todayDate = getLocalDateString();
+  const todayMonth = useMemo(() => startOfMonth(parseISO(todayDate)), [todayDate]);
+  const isViewingTodayMonth = isSameMonth(currentMonth, todayMonth);
+  // คาบพัก/คาบพักกลางวันตั้งค่าได้ต่อห้อง (class_settings) — ต้องอ่านจากห้องที่กำลังดูอยู่จริง
+  const { lunchPeriods, breakPeriods } = useScheduleSettings(planContext?.classId);
+  const nonTeachingPeriods = useMemo(
+    () => new Set([...lunchPeriods, ...breakPeriods]),
+    [lunchPeriods, breakPeriods],
+  );
 
   const classSubjectSchedule = useMemo(() => {
     if (!planContext?.classId || !planContext?.subjectId || !academicYear || activeSemester == null) {
@@ -150,8 +394,10 @@ export default function WeeklyTopicGrid({
       planContext.subjectId,
       academicYear,
       activeSemester as 1 | 2,
+      planContext.subjectName,
+      nonTeachingPeriods,
     );
-  }, [scheduleEntries, planContext?.classId, planContext?.subjectId, academicYear, activeSemester]);
+  }, [scheduleEntries, planContext?.classId, planContext?.subjectId, planContext?.subjectName, academicYear, activeSemester, nonTeachingPeriods]);
 
   const teachingSlotsBySchoolDay = useMemo(
     () => buildTeachingSlotsBySchoolDay(classSubjectSchedule),
@@ -163,6 +409,13 @@ export default function WeeklyTopicGrid({
   useEffect(() => {
     setTopics(normalizeTopicsForCalendar(initialTopics, semesterStart));
   }, [initialTopics, semesterStart]);
+
+  useEffect(() => {
+    setCurrentMonth((m) => clampToSemesterMonth(m));
+  }, [clampToSemesterMonth]);
+
+  const canGoPrevMonth = isAfter(currentMonth, minMonth);
+  const canGoNextMonth = isBefore(currentMonth, maxMonth);
 
   const topicMap = useMemo(() => topicsByDate(topics), [topics]);
   const days = useMemo(() => buildMonthGrid(currentMonth), [currentMonth]);
@@ -179,19 +432,20 @@ export default function WeeklyTopicGrid({
         const isHolidayDay = holidayEvents.length > 0;
         const topic = topicMap.get(dateIso);
         const hasPlan = hasTopicContent(topic);
-        const planLesson = topic?.lesson?.trim() ?? '';
-        const planContent = topic?.title?.trim() || topic?.details?.trim() || '';
         const isTeachingClosed = Boolean(topic?.isTeachingClosed);
         const isDone = Boolean(topic?.completedAt);
         const isQuizDay = Boolean(topic?.isQuizDay);
         const isTodayDay = isToday(day);
         const schoolDay = dateToSchoolDay(day);
         const scheduledPeriods = schoolDay ? teachingSlotsBySchoolDay.get(schoolDay)?.periods ?? [] : [];
+        // ไม่พบตารางสอนของวิชา+ห้องนี้ = ปิดทุกวัน (ไม่เปิดให้กรอกมั่ว) — ดู banner เตือนด้านบนปฏิทิน
         const hasScheduledClass = hasScheduleData
           ? scheduledPeriods.length > 0 && inSemester && !isHolidayDay
-          : inSemester && !isHolidayDay && schoolDay !== null;
+          : false;
         const missingPlan = hasScheduledClass && !hasPlan && !isTeachingClosed;
-        const canOpenDrawer = hasScheduledClass && (!readOnly || hasSavedTopicState(topic));
+        // แม้วันนี้ไม่ตรงตารางแล้ว (เช่นแผนเก่าที่กรอกไว้ผิดวันตอน fallback ยังเปิดทุกวัน)
+        // ยังเปิดดู/ลบของเดิมได้ — ปิดแค่การเพิ่มแผนใหม่บนวันที่ไม่มีคาบจริง
+        const canOpenDrawer = (hasScheduledClass && !readOnly) || hasSavedTopicState(topic);
         const periodLabel = formatTeachingPeriods(scheduledPeriods);
 
         return {
@@ -201,8 +455,6 @@ export default function WeeklyTopicGrid({
           hasScheduledClass,
           isHolidayDay,
           hasPlan,
-          planLesson,
-          planContent,
           isTeachingClosed,
           isDone,
           isQuizDay,
@@ -213,7 +465,7 @@ export default function WeeklyTopicGrid({
           schoolEvents,
         };
       })
-      .filter((entry) => entry.inSemester && entry.hasScheduledClass && !entry.isHolidayDay);
+      .filter((entry) => entry.inSemester && !entry.isHolidayDay && (entry.hasScheduledClass || entry.hasPlan));
   }, [
     days,
     currentMonth,
@@ -225,6 +477,23 @@ export default function WeeklyTopicGrid({
     teachingSlotsBySchoolDay,
     readOnly,
   ]);
+
+  const monthCalendarEvents = useMemo(() => {
+    const monthStart = toIsoDate(startOfMonth(currentMonth));
+    const monthEnd = toIsoDate(endOfMonth(currentMonth));
+    const from = monthStart < semesterStart ? semesterStart : monthStart;
+    const to = monthEnd > semesterEnd ? semesterEnd : monthEnd;
+    if (from > to) return [] as CalendarEvent[];
+
+    return calendarEvents
+      .filter(
+        (e) =>
+          CALENDAR_EVENT_TYPES.has(e.type) &&
+          e.startDate <= to &&
+          e.endDate >= from,
+      )
+      .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.title.localeCompare(b.title));
+  }, [calendarEvents, currentMonth, semesterStart, semesterEnd]);
 
   const selectedTopic = selectedDate ? topicMap.get(selectedDate) ?? null : null;
 
@@ -239,7 +508,30 @@ export default function WeeklyTopicGrid({
     }
   }, [onSave, semesterStart]);
 
+  const handleStampCell = useCallback(async (dateIso: string) => {
+    if (!stampMode) return;
+    const existing = topicMap.get(dateIso);
+    const nextTopic: WeeklyTopic = {
+      date: dateIso,
+      weekNumber: existing?.weekNumber ?? weekNumberFromDate(dateIso, semesterStart),
+      title: existing?.title ?? '',
+      lesson: existing?.lesson ?? '',
+      details: existing?.details ?? '',
+      isQuizDay: existing?.isQuizDay ?? false,
+      isTeachingClosed: existing?.isTeachingClosed ?? false,
+      isNoTeaching: !existing?.isNoTeaching,
+      completedAt: existing?.completedAt ?? null,
+      teachingReflection: existing?.teachingReflection ?? null,
+    };
+    const next = [...topics.filter((t) => t.date !== dateIso), nextTopic];
+    await persistTopics(next);
+  }, [stampMode, topicMap, topics, persistTopics, semesterStart]);
+
   const openDate = (dateIso: string, day: Date) => {
+    if (stampMode) {
+      handleStampCell(dateIso);
+      return;
+    }
     if (!isWithinSemester(dateIso, semesterStart, semesterEnd)) return;
     if (getEventsForDate(dateIso).some((event) => event.type === 'holiday')) return;
     const existing = topicMap.get(dateIso);
@@ -247,10 +539,8 @@ export default function WeeklyTopicGrid({
 
     const schoolDay = dateToSchoolDay(day);
     const scheduledPeriods = schoolDay ? teachingSlotsBySchoolDay.get(schoolDay)?.periods ?? [] : [];
-    const hasScheduledClass = hasScheduleData
-      ? scheduledPeriods.length > 0
-      : schoolDay !== null;
-    if (hasScheduleData && !hasScheduledClass && !hasTopicContent(existing)) return;
+    const hasScheduledClass = hasScheduleData && scheduledPeriods.length > 0;
+    if (!hasScheduledClass && !hasTopicContent(existing)) return;
 
     setSelectedDate(dateIso);
     setDraftLesson(existing?.lesson ?? '');
@@ -258,6 +548,7 @@ export default function WeeklyTopicGrid({
     setDraftDetails(existing?.details ?? '');
     setDraftIsQuizDay(Boolean(existing?.isQuizDay));
     setDraftIsTeachingClosed(Boolean(existing?.isTeachingClosed));
+    setDrawerTab('plan');
     setDrawerOpen(true);
   };
 
@@ -306,11 +597,6 @@ export default function WeeklyTopicGrid({
 
   const handleCreateQuestionSet = () => {
     setShowQuestionSetModal(true);
-  };
-
-  const handleQuestionSetSubmit = async (data: NewQuestionSet) => {
-    await addQuestionSet(data);
-    setShowQuestionSetModal(false);
   };
 
   const handleSavePlan = async () => {
@@ -384,42 +670,88 @@ export default function WeeklyTopicGrid({
     ? format(parseISO(selectedDate), 'EEEE d MMMM yyyy', { locale: th })
     : '';
 
+  const showNoScheduleWarning = Boolean(planContext?.classId) && Boolean(planContext?.subjectId) && !hasScheduleData;
+
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col">
-        <div className="flex items-center justify-between gap-2 px-1 py-3">
+    <div className="flex h-full min-h-0 w-full flex-col gap-3 max-lg:overflow-y-auto">
+      {showNoScheduleWarning && (
+        <div className="flex shrink-0 items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-bold text-amber-700 font-sarabun">
+          <HiOutlineExclamationTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            ยังไม่พบตารางสอนวิชานี้ในระบบ ({planContext?.subjectName} · {planContext?.className}) — กรุณาตั้งค่าตารางสอนที่หน้า "ตารางสอน" ก่อน จึงจะเปิดให้กรอกแผนการสอนตามวันจริงได้
+          </span>
+        </div>
+      )}
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-1.5 pt-0">
           <button
             type="button"
-            onClick={() => setCurrentMonth((m) => subMonths(m, 1))}
-            className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-500 hover:bg-white hover:text-slate-800 transition-colors"
+            disabled={!canGoPrevMonth}
+            onClick={() => setCurrentMonth((m) => clampToSemesterMonth(subMonths(m, 1)))}
+            className={cn(
+              'flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-white hover:text-slate-800',
+              !canGoPrevMonth && 'pointer-events-none opacity-30',
+            )}
             aria-label="เดือนก่อนหน้า"
           >
             <HiChevronLeft size={18} />
           </button>
 
-          <div className="text-center min-w-0">
+          <div className="flex min-w-0 items-center justify-center gap-2">
             <p className="text-sm font-black text-slate-800 font-sukhumvit">
-              {format(currentMonth, 'MMMM', { locale: th })}{' '}
-              {currentMonth.getFullYear() + 543}
+              {format(currentMonth, 'MMMM', { locale: th })} {currentMonth.getFullYear() + 543}
             </p>
+            <Button
+              type="button"
+              variant="default"
+              size="xs"
+              disabled={isViewingTodayMonth}
+              className="rounded-xl bg-blue-600 font-bold text-white hover:bg-blue-600/90"
+              onClick={() => setCurrentMonth(clampToSemesterMonth(todayMonth))}
+              aria-label="กลับวันปัจจุบัน"
+            >
+              วันนี้
+            </Button>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setCurrentMonth((m) => addMonths(m, 1))}
-            className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-500 hover:bg-white hover:text-slate-800 transition-colors"
-            aria-label="เดือนถัดไป"
-          >
-            <HiChevronRight size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={() => setStampMode(!stampMode)}
+                title={stampMode ? 'ออกจากโหมด stamp' : 'เลือกวันที่ไม่มีการสอน'}
+                className={cn(
+                  'flex h-8 w-8 items-center justify-center rounded-xl transition-colors font-black text-sm',
+                  stampMode
+                    ? 'bg-amber-200 text-amber-800 hover:bg-amber-300'
+                    : 'text-slate-500 hover:bg-white hover:text-slate-800',
+                )}
+              >
+                ⊗
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={!canGoNextMonth}
+              onClick={() => setCurrentMonth((m) => clampToSemesterMonth(addMonths(m, 1)))}
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-white hover:text-slate-800',
+                !canGoNextMonth && 'pointer-events-none opacity-30',
+              )}
+              aria-label="เดือนถัดไป"
+            >
+              <HiChevronRight size={18} />
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-7 px-1 pt-1 pb-1">
+        <div className="grid shrink-0 grid-cols-7 px-1 pb-1 pt-0">
           {DAY_NAMES.map((label, index) => (
             <div
               key={label}
               className={cn(
-                'text-center text-[10px] font-black pb-2 font-sukhumvit uppercase tracking-wide',
+                'pb-2 text-center text-[10px] font-black uppercase tracking-wide font-sukhumvit',
                 index === 0 ? 'text-rose-400' : index === 6 ? 'text-blue-400' : 'text-slate-400',
               )}
             >
@@ -428,303 +760,252 @@ export default function WeeklyTopicGrid({
           ))}
         </div>
 
-        <div className="grid grid-cols-7 gap-1 px-1 pb-2">
+        <div className="grid shrink-0 grid-cols-7 gap-1 px-1 pb-2 max-lg:auto-rows-[minmax(52px,auto)] lg:min-h-0 lg:flex-1 lg:auto-rows-fr">
           {days.map((day) => {
             const dateIso = toIsoDate(day);
             const inMonth = isSameMonth(day, currentMonth);
             const inSemester = isWithinSemester(dateIso, semesterStart, semesterEnd);
             const dayEvents = inMonth ? getEventsForDate(dateIso) : [];
             const holidayEvents = dayEvents.filter((event) => event.type === 'holiday');
-            const schoolEvents = dayEvents.filter((event) => event.type !== 'holiday');
+            const infoEvent =
+              holidayEvents[0]
+              ?? dayEvents.find((e) => e.type === 'exam')
+              ?? dayEvents.find((e) => e.type === 'activity')
+              ?? null;
             const isHolidayDay = holidayEvents.length > 0;
             const topic = topicMap.get(dateIso);
             const hasPlan = hasTopicContent(topic);
-            const planLesson = topic?.lesson?.trim() ?? '';
-            const planContent = topic?.title?.trim() || topic?.details?.trim() || '';
             const isTeachingClosed = Boolean(topic?.isTeachingClosed);
+            const isNoTeaching = Boolean(topic?.isNoTeaching);
             const isDone = Boolean(topic?.completedAt);
             const isTodayDay = isToday(day);
             const dow = day.getDay();
-            const isSelected = selectedDate === dateIso;
-            const holidayLabel = holidayEvents.map((event) => event.title).join(', ');
             const schoolDay = dateToSchoolDay(day);
             const scheduledPeriods = schoolDay ? teachingSlotsBySchoolDay.get(schoolDay)?.periods ?? [] : [];
             const hasScheduledClass = hasScheduleData
               ? scheduledPeriods.length > 0 && inSemester && !isHolidayDay
-              : inSemester && !isHolidayDay && schoolDay !== null;
-            const missingPlan = hasScheduledClass && !hasPlan && !isTeachingClosed;
-            const needsPlan = missingPlan && !readOnly;
-            const canOpenDrawer = hasScheduledClass && (!readOnly || hasSavedTopicState(topic));
+              : false;
+            const canOpenDrawer = (hasScheduledClass && !readOnly) || hasSavedTopicState(topic);
             const periodLabel = formatTeachingPeriods(scheduledPeriods);
+            const statusDot: DayPlanDot | null =
+              !inMonth || !inSemester || isHolidayDay
+                ? null
+                : isNoTeaching
+                  ? 'closed'
+                  : isTeachingClosed && hasScheduledClass
+                  ? 'closed'
+                  : hasPlan
+                    ? 'done'
+                    : hasScheduledClass
+                      ? dateIso > todayDate
+                        ? 'upcoming'
+                        : 'pending'
+                      : null;
 
             return (
               <button
                 key={dateIso}
                 type="button"
-                disabled={!canOpenDrawer && !isHolidayDay}
-                onClick={() => (canOpenDrawer ? openDate(dateIso, day) : undefined)}
+                disabled={!canOpenDrawer && !isHolidayDay && !(stampMode && hasScheduledClass)}
+                onClick={() => (canOpenDrawer || (stampMode && hasScheduledClass) ? openDate(dateIso, day) : undefined)}
                 title={
-                  isHolidayDay
-                    ? holidayLabel
+                  isNoTeaching
+                    ? 'ไม่มีการสอน'
+                    : isHolidayDay
+                    ? holidayEvents.map((e) => e.title).join(', ')
                     : hasScheduledClass
-                      ? periodLabel || schoolEvents.map((event) => event.title).join(', ')
+                      ? periodLabel || undefined
                       : hasScheduleData
                         ? 'ไม่มีคาบสอนตามตาราง'
-                        : schoolEvents.map((event) => event.title).join(', ')
+                        : undefined
                 }
                 className={cn(
-                  'relative flex min-h-[52px] flex-col rounded-xl border border-slate-300 p-1.5 text-left transition-all lg:min-h-[80px]',
+                  'relative flex h-full min-h-[52px] flex-col overflow-hidden rounded-xl border border-slate-300 p-1.5 text-left transition-all lg:min-h-[80px]',
+                  !statusDot && 'bg-white',
                   !inMonth && 'opacity-35',
-                  isHolidayDay && 'cursor-not-allowed bg-slate-50/60 border-slate-200',
-                  hasScheduleData && !isHolidayDay && inSemester && !hasScheduledClass && 'cursor-not-allowed bg-slate-50/40 border-slate-200 opacity-55',
-                  !isHolidayDay && missingPlan && cn(
-                    'border-dashed border-rose-300 bg-rose-50/80',
-                    canOpenDrawer && 'hover:border-rose-400 hover:bg-rose-50 cursor-pointer',
-                  ),
-                  !isHolidayDay && canOpenDrawer && hasPlan && !isTeachingClosed && 'border-emerald-300 bg-emerald-50/80 hover:border-emerald-400 hover:bg-emerald-50 cursor-pointer',
-                  !isHolidayDay && canOpenDrawer && !hasPlan && !missingPlan && 'hover:border-blue-300 hover:bg-blue-50/40 cursor-pointer',
-                  !isHolidayDay && !canOpenDrawer && !hasScheduleData && 'cursor-not-allowed bg-slate-50/60 border-slate-200',
-                  isSelected && 'border-blue-300 bg-blue-50 ring-1 ring-blue-200',
-                  !isHolidayDay && hasPlan && hasScheduledClass && !isSelected && !isTeachingClosed && 'border-emerald-300 bg-emerald-50/80',
-                  !isHolidayDay && isTeachingClosed && hasScheduledClass && 'border-slate-300 bg-slate-100/90',
-                  !isHolidayDay && schoolEvents.length > 0 && !hasPlan && !hasScheduledClass && 'border-slate-200 bg-slate-50/40',
+                  inMonth && !inSemester && 'cursor-not-allowed opacity-35',
+                  inMonth && inSemester && !hasScheduledClass && !hasPlan && !isHolidayDay && 'cursor-not-allowed opacity-55',
+                  isHolidayDay && 'cursor-not-allowed border-slate-200 bg-slate-100 opacity-50',
+                  isNoTeaching && 'border-slate-300 bg-slate-100 opacity-70',
+                  statusDot && !isNoTeaching && MOBILE_STATUS_CELL_CLASS[statusDot],
+                  (canOpenDrawer || (stampMode && hasScheduledClass)) && 'cursor-pointer lg:hover:bg-slate-50',
                 )}
               >
                 <div className="flex items-start justify-between gap-1">
                   <span
                     className={cn(
                       'inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[11px] font-black tabular-nums',
-                      isTodayDay && !isHolidayDay && 'bg-blue-600 text-white shadow-sm',
-                      isTodayDay && isHolidayDay && 'bg-rose-500 text-white shadow-sm',
-                      !isTodayDay && (isHolidayDay || dow === 0) && 'text-rose-500',
+                      isTodayDay && inSemester && !isHolidayDay && 'bg-blue-600 text-white shadow-sm',
+                      isHolidayDay && 'text-rose-500',
+                      infoEvent?.type === 'exam' && 'text-amber-600',
+                      infoEvent?.type === 'activity' && 'text-blue-600',
+                      !isTodayDay && !isHolidayDay && dow === 0 && 'text-rose-500',
                       !isTodayDay && !isHolidayDay && dow === 6 && 'text-blue-500',
                       !isTodayDay && !isHolidayDay && dow > 0 && dow < 6 && 'text-slate-700',
                     )}
                   >
                     {day.getDate()}
                   </span>
-                  {isHolidayDay ? null : isTeachingClosed ? (
-                    <span className="h-2 w-2 rounded-full bg-slate-400 shrink-0 mt-1" />
-                  ) : hasPlan ? (
+                  {statusDot === 'upcoming' && (
+                    <span className="mt-1 hidden h-2 w-2 shrink-0 rounded-full bg-slate-300 lg:inline-block" aria-label="ยังไม่ถึงวัน" />
+                  )}
+                  {statusDot === 'pending' && (
+                    <span className="mt-1 hidden h-2 w-2 shrink-0 rounded-full bg-rose-500 lg:inline-block" aria-label="ยังไม่มีแผน" />
+                  )}
+                  {statusDot === 'done' && (
                     isDone ? (
-                      <HiCheckCircle size={14} className="shrink-0 text-emerald-500" />
+                      <HiCheckCircle size={14} className="hidden shrink-0 text-emerald-500 lg:inline" aria-label="สอนแล้ว" />
                     ) : (
-                      <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0 mt-1" />
+                      <span className="mt-1 hidden h-2 w-2 shrink-0 rounded-full bg-emerald-500 lg:inline-block" aria-label="มีแผนแล้ว" />
                     )
-                  ) : canOpenDrawer && !readOnly ? (
-                    <HiOutlinePlus
-                      size={12}
-                      className={cn(
-                        'shrink-0 mt-0.5',
-                        needsPlan ? 'text-rose-500' : 'text-slate-300',
-                      )}
-                    />
-                  ) : null}
+                  )}
+                  {statusDot === 'closed' && (
+                    <span className="mt-1 hidden h-2 w-2 shrink-0 rounded-full bg-slate-400 lg:inline-block" aria-label="ปิดการสอน" />
+                  )}
                 </div>
 
-                {hasScheduledClass && periodLabel && !hasPlan && !isTeachingClosed && (
-                  <p className={cn(CELL_BODY_TEXT, 'mt-1 text-[9px] font-black leading-tight font-sukhumvit text-blue-600')}>
-                    {periodLabel}
+                {isNoTeaching && inSemester ? (
+                  <p className="mt-auto hidden text-[8px] font-bold leading-tight text-slate-400 font-sarabun lg:line-clamp-2 lg:block lg:text-[9px] line-through">
+                    ไม่มีการสอน
                   </p>
-                )}
-
-                {needsPlan && (
-                  <p className={cn(CELL_BODY_TEXT, 'mt-auto text-[9px] font-black leading-tight font-sarabun text-rose-600')}>
-                    ยังไม่มีแผน
+                ) : isHolidayDay && infoEvent ? (
+                  <p className={cn('mt-auto hidden text-[8px] font-bold leading-tight font-sukhumvit lg:line-clamp-2 lg:block lg:text-[9px]', EVENT_LABEL_CLASS.holiday)}>
+                    {infoEvent.title}
                   </p>
-                )}
-
-                {isTeachingClosed && (
-                  <p className={cn(CELL_BODY_TEXT, 'mt-auto text-[9px] font-black leading-tight font-sarabun text-slate-500')}>
+                ) : statusDot === 'closed' ? (
+                  <p className="mt-auto hidden text-[8px] font-bold leading-tight text-slate-500 font-sarabun lg:line-clamp-2 lg:block lg:text-[9px]">
                     ปิดการสอน
                   </p>
-                )}
-
-                {isHolidayDay && (
-                  <div className={cn(CELL_BODY_TEXT, 'mt-1 space-y-0.5')}>
-                    {holidayEvents.slice(0, 2).map((event) => (
-                      <p
-                        key={event.id}
-                        className="line-clamp-2 text-[9px] font-bold leading-tight font-sarabun"
-                        style={{ color: EVENT_TYPE_CONFIG.holiday.color }}
-                      >
-                        {event.title}
-                      </p>
-                    ))}
-                  </div>
-                )}
-
-                {!isHolidayDay && schoolEvents.length > 0 && (
-                  <div className={cn(CELL_BODY_TEXT, 'mt-1 space-y-0.5')}>
-                    {schoolEvents.slice(0, hasPlan ? 1 : 2).map((event) => (
-                      <p
-                        key={event.id}
-                        className="line-clamp-1 text-[9px] font-bold leading-tight font-sarabun"
-                        style={{ color: EVENT_TYPE_CONFIG[event.type].color }}
-                      >
-                        {event.title}
-                      </p>
-                    ))}
-                  </div>
-                )}
-
-                {hasPlan && !isTeachingClosed && (
-                  <div
+                ) : statusDot === 'pending' ? (
+                  <p className="mt-auto hidden text-[8px] font-bold leading-tight text-rose-600 font-sukhumvit lg:line-clamp-2 lg:block lg:text-[9px]">
+                    ยังไม่มีแผน
+                  </p>
+                ) : hasScheduledClass && periodLabel ? (
+                  <p className={cn(CELL_BODY_TEXT, 'mt-auto text-[8px] font-black leading-tight text-blue-600 font-sukhumvit lg:text-[9px]')}>
+                    {periodLabel}
+                  </p>
+                ) : infoEvent && infoEvent.type !== 'holiday' ? (
+                  <p
                     className={cn(
-                      CELL_BODY_TEXT,
-                      'flex min-h-0 flex-col gap-0.5',
-                      hasScheduledClass && !needsPlan ? 'mt-1' : 'mt-auto',
+                      'mt-auto hidden text-[8px] font-bold leading-tight font-sukhumvit lg:line-clamp-2 lg:block lg:text-[9px]',
+                      EVENT_LABEL_CLASS[infoEvent.type as 'exam' | 'activity'],
                     )}
                   >
-                    {planLesson && (
-                      <p
-                        className={cn(
-                          'line-clamp-1 text-[10px] font-black leading-tight font-sukhumvit',
-                          isDone ? 'text-emerald-700 line-through' : 'text-slate-800',
-                        )}
-                      >
-                        {planLesson}
-                      </p>
-                    )}
-                    {planContent && (
-                      <p
-                        className={cn(
-                          'line-clamp-2 text-[8px] font-bold leading-tight font-sarabun',
-                          isDone ? 'text-emerald-600 line-through' : 'text-slate-600',
-                        )}
-                      >
-                        {planContent}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {hasPlan && schoolEvents.length > 0 && (
-                  <div className="mt-1 flex gap-0.5">
-                    {schoolEvents.slice(0, 3).map((event) => (
-                      <span
-                        key={event.id}
-                        className="h-1.5 w-1.5 rounded-full shrink-0"
-                        style={{ background: EVENT_TYPE_CONFIG[event.type].color }}
-                        title={event.title}
-                      />
-                    ))}
-                  </div>
-                )}
+                    {infoEvent.title}
+                  </p>
+                ) : null}
               </button>
             );
           })}
         </div>
       </div>
 
-      <div className="lg:hidden px-1 pt-1 pb-2 space-y-2">
-        <p className="px-1 text-[11px] font-black uppercase tracking-wide text-slate-400 font-sukhumvit">
+      <div className="space-y-2 px-1 pb-2 lg:hidden">
+        <p className="px-0.5 text-[10px] font-black uppercase tracking-wider text-slate-500 font-sukhumvit">
           แผนการสอนเดือนนี้
         </p>
         {mobilePlanDays.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm font-bold text-slate-400 font-sarabun">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm font-bold text-slate-400 font-sarabun">
             ไม่มีคาบสอนในเดือนนี้
           </div>
         ) : (
-          <div className="space-y-2">
-            {mobilePlanDays.map((entry) => {
-              const isSelected = selectedDate === entry.dateIso;
-              const dateLabel = format(entry.day, 'EEE d MMM', { locale: th });
+          mobilePlanDays.map((entry) => {
+            const dateLabel = format(entry.day, 'EEE d MMM', { locale: th });
+            const topicEntry = topicMap.get(entry.dateIso);
+            const isNoTeaching = Boolean(topicEntry?.isNoTeaching);
+            const status: DayPlanDot = isNoTeaching
+              ? 'closed'
+              : entry.isTeachingClosed
+              ? 'closed'
+              : entry.hasPlan
+                ? 'done'
+                : entry.dateIso > todayDate
+                  ? 'upcoming'
+                  : 'pending';
 
-              return (
-                <button
-                  key={entry.dateIso}
-                  type="button"
-                  disabled={!entry.canOpenDrawer}
-                  onClick={() => (entry.canOpenDrawer ? openDate(entry.dateIso, entry.day) : undefined)}
-                  className={cn(
-                    'w-full rounded-2xl border p-3.5 text-left transition-all active:scale-[0.99]',
-                    entry.canOpenDrawer && 'hover:bg-slate-50',
-                    entry.missingPlan && 'border-dashed border-rose-300 bg-rose-50/80',
-                    entry.hasPlan && !entry.isTeachingClosed && 'border-emerald-300 bg-emerald-50/80',
-                    entry.isTeachingClosed && 'border-slate-300 bg-slate-100/90',
-                    !entry.missingPlan && !entry.hasPlan && !entry.isTeachingClosed && 'border-slate-200 bg-white',
-                    isSelected && 'ring-1 ring-blue-200 border-blue-300 bg-blue-50/70',
-                    !entry.canOpenDrawer && 'opacity-60 cursor-not-allowed',
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p
-                        className={cn(
-                          'text-[13px] font-black font-sukhumvit leading-tight',
-                          entry.isTodayDay ? 'text-blue-600' : 'text-slate-800',
-                        )}
-                      >
-                        {dateLabel}
-                      </p>
-                      {entry.periodLabel && (
-                        <p className="mt-0.5 text-[11px] font-black text-blue-600 font-sukhumvit">
-                          {entry.periodLabel}
-                        </p>
+            return (
+              <button
+                key={entry.dateIso}
+                type="button"
+                disabled={!entry.canOpenDrawer && !(stampMode && entry.hasScheduledClass)}
+                onClick={() => (entry.canOpenDrawer || (stampMode && entry.hasScheduledClass) ? openDate(entry.dateIso, entry.day) : undefined)}
+                className={cn(
+                  'w-full rounded-xl border px-3 py-2.5 text-left transition-all active:scale-[0.99]',
+                  status === 'upcoming' && 'border-slate-200 bg-slate-50',
+                  status === 'pending' && 'border-rose-200 bg-rose-50',
+                  status === 'done' && !isNoTeaching && 'border-emerald-200 bg-emerald-50',
+                  (status === 'closed' || isNoTeaching) && 'border-slate-300 bg-slate-100',
+                  (entry.canOpenDrawer || (stampMode && entry.hasScheduledClass)) && 'hover:brightness-[0.98]',
+                  !entry.canOpenDrawer && !(stampMode && entry.hasScheduledClass) && 'cursor-not-allowed opacity-60',
+                )}
+              >
+                <div className="flex items-start gap-2">
+                  <span
+                    className={cn(
+                      'mt-0.5 shrink-0 text-[10px] font-black uppercase tracking-wide',
+                      status === 'upcoming' && 'text-slate-500',
+                      status === 'pending' && 'text-rose-500',
+                      status === 'done' && !isNoTeaching && 'text-emerald-600',
+                      (status === 'closed' || isNoTeaching) && 'text-slate-500',
+                    )}
+                  >
+                    {isNoTeaching
+                      ? 'ไม่มีการสอน'
+                      : status === 'closed'
+                      ? 'ปิดสอน'
+                      : status === 'pending'
+                        ? 'ยังไม่มีแผน'
+                        : status === 'upcoming'
+                          ? 'ยังไม่ถึงวัน'
+                          : entry.isDone
+                            ? 'สอนแล้ว'
+                            : 'มีแผนแล้ว'}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p
+                      className={cn(
+                        'min-h-5 text-xs font-bold leading-5 text-slate-800 font-sarabun',
+                        entry.isTodayDay && 'text-blue-700',
+                        isNoTeaching && 'line-through text-slate-400',
                       )}
-                    </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1">
-                      {entry.isTeachingClosed ? (
-                        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-black text-slate-600">
-                          ปิดการสอน
-                        </span>
-                      ) : entry.missingPlan ? (
-                        <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-black text-rose-600">
-                          ยังไม่มีแผน
-                        </span>
-                      ) : entry.isDone ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">
-                          <HiCheckCircle size={12} />
-                          สอนแล้ว
-                        </span>
-                      ) : entry.hasPlan ? (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">
-                          มีแผนแล้ว
-                        </span>
-                      ) : null}
-                      {entry.isQuizDay && !entry.isTeachingClosed && (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-700">
-                          สอบย่อย
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {entry.schoolEvents.length > 0 && (
-                    <p className="mt-2 text-[11px] font-bold leading-tight text-slate-500 font-sarabun line-clamp-1">
-                      {entry.schoolEvents.map((event) => event.title).join(' · ')}
+                    >
+                      {dateLabel}
+                      {entry.periodLabel && !isNoTeaching ? ` · ${entry.periodLabel}` : ''}
                     </p>
-                  )}
+                  </div>
+                </div>
+              </button>
+            );
+          })
+        )}
 
-                  {entry.hasPlan && !entry.isTeachingClosed && (
-                    <div className="mt-2 space-y-0.5">
-                      {entry.planLesson && (
-                        <p
-                          className={cn(
-                            'line-clamp-1 text-[12px] font-black leading-tight font-sukhumvit',
-                            entry.isDone ? 'text-emerald-700 line-through' : 'text-slate-800',
-                          )}
-                        >
-                          {entry.planLesson}
-                        </p>
-                      )}
-                      {entry.planContent && (
-                        <p
-                          className={cn(
-                            'line-clamp-2 text-[11px] font-bold leading-tight font-sarabun',
-                            entry.isDone ? 'text-emerald-600 line-through' : 'text-slate-600',
-                          )}
-                        >
-                          {entry.planContent}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </button>
+        {monthCalendarEvents.length > 0 && (
+          <>
+            <p className="px-0.5 pt-2 text-[10px] font-black uppercase tracking-wider text-slate-500 font-sukhumvit">
+              วันหยุด / สอบ / กิจกรรม
+            </p>
+            {monthCalendarEvents.map((event) => {
+              const type = event.type as 'holiday' | 'exam' | 'activity';
+              return (
+                <div
+                  key={event.id}
+                  className={cn('rounded-xl border px-3 py-2.5', EVENT_CARD_CLASS[type])}
+                >
+                  <div className="flex items-start gap-2">
+                    <span className={cn('mt-0.5 shrink-0 text-[10px] font-black uppercase tracking-wide', EVENT_LABEL_CLASS[type])}>
+                      {EVENT_TYPE_CONFIG[type].label}
+                    </span>
+                    <p className="min-h-10 min-w-0 line-clamp-2 text-xs font-bold leading-5 text-slate-800 font-sarabun">
+                      {event.title?.trim() || EVENT_TYPE_CONFIG[type].label}
+                    </p>
+                  </div>
+                  <p className="mt-0.5 text-[10px] font-medium text-slate-500 font-sarabun">
+                    {formatEventDateRange(event.startDate, event.endDate)}
+                  </p>
+                </div>
               );
             })}
-          </div>
+          </>
         )}
       </div>
 
@@ -752,7 +1033,50 @@ export default function WeeklyTopicGrid({
             </div>
           </DrawerHeader>
 
+          <div className="shrink-0 px-4 pb-2">
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+              <button
+                type="button"
+                onClick={() => setDrawerTab('plan')}
+                className={cn(
+                  'h-9 rounded-lg text-[12px] font-black font-sukhumvit transition-colors',
+                  drawerTab === 'plan'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700',
+                )}
+              >
+                แผนการสอน
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawerTab('log')}
+                className={cn(
+                  'h-9 rounded-lg text-[12px] font-black font-sukhumvit transition-colors',
+                  drawerTab === 'log'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700',
+                )}
+              >
+                บันทึกการสอน
+              </button>
+            </div>
+          </div>
+
           <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2 space-y-3">
+            {drawerTab === 'plan' ? (
+              <>
+            {selectedTopic?.isNoTeaching && (
+              <div className="flex items-start gap-2 rounded-2xl border border-slate-300 bg-slate-100 px-3 py-3">
+                <span className="mt-1 h-2 w-2 rounded-full shrink-0 bg-slate-500" />
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-slate-800 font-sukhumvit">ไม่มีการสอนในวันนี้</p>
+                  <p className="text-[11px] text-slate-600 font-sarabun">
+                    ไม่นับการเช็คชื่อนักเรียน และ ไม่นับใน KPI ของครู
+                  </p>
+                </div>
+              </div>
+            )}
+
             {hasCalendarOverlap && (
               <div className="space-y-2">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5 space-y-1.5">
@@ -901,7 +1225,7 @@ export default function WeeklyTopicGrid({
               </div>
             )}
 
-            {!readOnly && selectedTopic && hasTopicContent(selectedTopic) && (
+            {!readOnly && selectedTopic && hasTopicContent(selectedTopic) && !selectedTopic.isNoTeaching && (
               <button
                 type="button"
                 onClick={() => void handleToggleComplete()}
@@ -932,30 +1256,24 @@ export default function WeeklyTopicGrid({
                 สอนแล้ว
               </div>
             )}
+              </>
+            ) : (
+              <TeachingLogPanel reflection={selectedTopic?.teachingReflection} completedAt={selectedTopic?.completedAt} />
+            )}
           </div>
 
-          <DrawerFooter className="mt-0 shrink-0 border-t border-slate-100 bg-white px-4 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] flex-row gap-2">
-            {!readOnly && hasSavedTopicState(selectedTopic) && (
-              <button
-                type="button"
-                onClick={() => void handleDeletePlan()}
-                className="inline-flex h-11 items-center justify-center gap-1.5 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-sm font-black text-rose-600 hover:bg-rose-100"
-              >
-                <HiOutlineTrash size={16} />
-                ลบ
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setDrawerOpen(false)}
-              className={cn(
-                'h-11 rounded-2xl border border-slate-200 bg-white text-sm font-black text-slate-600 hover:bg-slate-50',
-                readOnly ? 'flex-1' : 'flex-1',
+          {(drawerTab === 'plan' && !readOnly) && (
+            <DrawerFooter className="mt-0 shrink-0 border-t border-slate-100 bg-white px-4 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] flex-row gap-2">
+              {hasSavedTopicState(selectedTopic) && (
+                <button
+                  type="button"
+                  onClick={() => void handleDeletePlan()}
+                  className="inline-flex h-11 items-center justify-center gap-1.5 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-sm font-black text-rose-600 hover:bg-rose-100"
+                >
+                  <HiOutlineTrash size={16} />
+                  ลบ
+                </button>
               )}
-            >
-              {readOnly ? 'ปิด' : 'ยกเลิก'}
-            </button>
-            {!readOnly && (
               <button
                 type="button"
                 disabled={!hasDraftContent || saving}
@@ -964,33 +1282,26 @@ export default function WeeklyTopicGrid({
               >
                 บันทึก
               </button>
-            )}
-          </DrawerFooter>
+            </DrawerFooter>
+          )}
           </div>
         </DrawerContent>
       </Drawer>
 
-      {showCreateExamModal && (
-        <CreateRoomModal
-          key={examPrefill?.title ?? 'new-exam-room'}
-          prefill={examPrefill}
-          onClose={() => {
+      {(showCreateExamModal || showQuestionSetModal) && (
+        <TeachingPlanExamModals
+          showCreateExamModal={showCreateExamModal}
+          showQuestionSetModal={showQuestionSetModal}
+          examPrefill={examPrefill}
+          questionSetPrefill={showQuestionSetModal ? buildQuestionSetPrefill() : null}
+          questionSetKey={`qsb-plan-${showQuestionSetModal ? buildShortcutTitle() : 'closed'}`}
+          onCloseExam={() => {
             setShowCreateExamModal(false);
             setExamPrefill(null);
           }}
-          onCreate={createRoom}
-          onUpdate={updateRoom}
+          onCloseQuestionSet={() => setShowQuestionSetModal(false)}
         />
       )}
-
-      <QuestionSetBuilder
-        key={`qsb-plan-${showQuestionSetModal ? buildShortcutTitle() : 'closed'}`}
-        open={showQuestionSetModal}
-        onClose={() => setShowQuestionSetModal(false)}
-        prefill={showQuestionSetModal ? buildQuestionSetPrefill() : null}
-        existingSets={questionSets}
-        onSubmit={handleQuestionSetSubmit}
-      />
 
       <TeachingReflectionModal
         open={showReflectionModal}

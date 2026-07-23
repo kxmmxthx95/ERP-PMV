@@ -761,8 +761,10 @@ export default function ExamDashboardPage() {
   const navigate = useNavigate();
   const { role, user } = useAuth();
   const { activeYear, year, isLoaded } = useActiveAcademicYear();
-  const { rooms, attempts, isLoading } = useExamRoom();
   const isStudent = role === 'student';
+  // นักเรียนดูสถิติของตัวเองเท่านั้น (studentStats กรองด้วย user.uid อยู่แล้ว) — ไม่ต้องดึงคำตอบ
+  // ของเพื่อนร่วมห้องทุกคนทุกห้องมาก่อนแล้วค่อยกรองทีหลัง เหมือน StudentExamScoreWidget
+  const { rooms, attempts, isLoading } = useExamRoom({ loadAttempts: isStudent ? 'mine' : 'all' });
   const [filterDepartment, setFilterDepartment] = useState<Department | 'all'>('all');
 
   const filteredRooms = useMemo(() => {

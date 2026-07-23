@@ -49,7 +49,8 @@ function enrollmentMatchesYear(e: Enrollment, yearId: string): boolean {
 
 const noopSubscribe = () => () => {};
 const readySnapshot = () => true;
-const getEmptyRowsSnapshot = <T,>(): T => [] as T;
+// ค่าอ้างอิงเดียวคงที่ ห้ามสร้าง [] ใหม่ทุกครั้ง ไม่งั้น useSyncExternalStore วน re-render ไม่จบ
+const EMPTY_ARRAY: readonly never[] = [];
 
 function useSharedStoreRows<T>(
   store: {
@@ -57,9 +58,10 @@ function useSharedStoreRows<T>(
     getSnapshot: () => T;
     getReady: () => boolean;
   } | null,
+  emptyValue: T = EMPTY_ARRAY as unknown as T,
 ) {
   const subscribe = store?.subscribe ?? noopSubscribe;
-  const getSnapshot = store ? store.getSnapshot : getEmptyRowsSnapshot<T>;
+  const getSnapshot = store ? store.getSnapshot : () => emptyValue;
   const getReady = store ? store.getReady : readySnapshot;
   const rows = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const ready = useSyncExternalStore(subscribe, getReady, getReady);
@@ -447,6 +449,7 @@ export function useStudentManager(defaultYear?: string) {
     // Data
     students,
     enrollments,
+    classrooms,
     filteredStudentCards: visibleStudentCards,
     stats,
     isDataLoaded,

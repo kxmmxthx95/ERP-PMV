@@ -101,13 +101,22 @@ function mapClassDoc(raw: { id: string; [key: string]: unknown }): SchoolClass {
 
 export type NewScheduleEntry = Omit<ScheduleEntry, 'id'>;
 
-export function useSchedule() {
+const noopSubscribeClasses = () => () => {};
+// ค่าอ้างอิงเดียวคงที่ — ห้ามสร้าง [] ใหม่ทุกครั้งที่เรียก ไม่งั้น useSyncExternalStore
+// เข้าใจผิดว่าข้อมูลเปลี่ยนตลอด วน re-render ไม่จบ (บั๊กเดียวกับที่เจอใน morning roll-call)
+const EMPTY_RAW_CLASSES: { id: string; [key: string]: unknown }[] = [];
+const getEmptyRawClasses = () => EMPTY_RAW_CLASSES;
+
+export function useSchedule(options: { includeClasses?: boolean } = {}) {
+  // classes มาจาก getClassesByYearStore ทั้ง collection ทั้งโรงเรียน — caller ที่ใช้แค่
+  // entries (เช่น AttendanceSheet, MicroSyllabusPage) ไม่ต้องเปิด listener นี้เลย
+  const includeClasses = options.includeClasses ?? true;
   const { year: activeYearStr, activeSemester } = useActiveAcademicYear();
   const yearId = activeYearStr ?? '2568';
   const semester = (activeSemester ?? 1) as 1 | 2;
 
   const scheduleStore = getSchedulesByYearSemesterStore(yearId, semester);
-  const classesStore = getClassesByYearStore(yearId);
+  const classesStore = includeClasses ? getClassesByYearStore(yearId) : null;
 
   const entries = useSyncExternalStore(
     scheduleStore.subscribe,
@@ -115,9 +124,9 @@ export function useSchedule() {
     scheduleStore.getSnapshot,
   );
   const rawClasses = useSyncExternalStore(
-    classesStore.subscribe,
-    classesStore.getSnapshot,
-    classesStore.getSnapshot,
+    classesStore?.subscribe ?? noopSubscribeClasses,
+    classesStore ? classesStore.getSnapshot : getEmptyRawClasses,
+    classesStore ? classesStore.getSnapshot : getEmptyRawClasses,
   );
   const classes = useMemo(() => rawClasses.map(mapClassDoc), [rawClasses]);
 

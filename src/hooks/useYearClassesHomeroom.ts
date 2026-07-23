@@ -1,10 +1,17 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import { getClassesByYearStore, type ClassLike } from '@/lib/firestoreShared/studentSummaryStore';
+import {
+  getClassesByYearStore,
+  getHomeroomClassesStore,
+  type ClassLike,
+} from '@/lib/firestoreShared/studentSummaryStore';
 import { teachersCollectionStore } from '@/lib/firestoreShared/teachersStore';
+import { buildTeacherIdentityKeys } from '@/lib/teachers/teacherIdentity';
 import type { ClassRoom } from '@/types/class';
 
 const noopSubscribe = () => () => {};
-const emptyClasses = (): ClassLike[] => [];
+// ค่าอ้างอิงเดียวคงที่ ห้ามสร้าง [] ใหม่ทุกครั้ง ไม่งั้น useSyncExternalStore วน re-render ไม่จบ
+const EMPTY_CLASSES: readonly ClassLike[] = [];
+const emptyClasses = () => EMPTY_CLASSES;
 
 export function useYearClassesHomeroom(yearId: string | undefined) {
   const classesStore = yearId ? getClassesByYearStore(yearId) : null;
@@ -60,9 +67,15 @@ export function useYearClassesHomeroom(yearId: string | undefined) {
   return { classes, homeroomByClassId, getHomeroomForClassId, getHomeroomTeacherName, classesLoading };
 }
 
-/** Classes where the signed-in user is homeroom teacher — no schedule/enrollment listeners. */
+const noopSubscribeHomeroom = () => () => {};
+const emptyHomeroomClasses = () => EMPTY_CLASSES;
+
+/**
+ * Classes where the signed-in user is homeroom teacher — scoped query (own classes only),
+ * not the whole-school classes listener. ครูส่วนใหญ่มี homeroom แค่ 0-1 ห้อง แต่ถ้าใช้
+ * useYearClassesHomeroom (ทั้งโรงเรียน) จะเปิด listener เต็ม collection ต่อครูทุกคนที่เข้าหน้านี้
+ */
 export function useHomeroomClassesForUser(yearId: string | undefined, userId: string | undefined) {
-  const { classes, classesLoading } = useYearClassesHomeroom(yearId);
   const teachers = useSyncExternalStore(
     teachersCollectionStore.subscribe,
     teachersCollectionStore.getSnapshot,
@@ -70,26 +83,30 @@ export function useHomeroomClassesForUser(yearId: string | undefined, userId: st
   );
   const teachersLoading = !teachersCollectionStore.getReady();
 
-  const homeRoomClasses = useMemo(() => {
-    if (!yearId || !userId) return [];
-    const myProfile = teachers.find((t) => t.userId === userId || t.id === userId);
-    const myTeacherDocId = myProfile?.id;
+  const myProfile = useMemo(
+    () => teachers.find((t) => t.userId === userId || t.id === userId) ?? null,
+    [teachers, userId],
+  );
+  const identityKeys = useMemo(
+    () => [...buildTeacherIdentityKeys(userId ?? '', myProfile)],
+    [userId, myProfile],
+  );
 
-    return classes.filter((c) => {
-      const sameYear = String(c.academicYearId ?? '') === String(yearId);
-      const teacherIds = c.homeroomTeacherIds?.length
-        ? c.homeroomTeacherIds
-        : c.homeroomTeacherId
-          ? [c.homeroomTeacherId]
-          : [];
-      const isOwner =
-        (myTeacherDocId != null &&
-          (c.homeroomTeacherId === myTeacherDocId || teacherIds.includes(myTeacherDocId))) ||
-        c.homeroomTeacherId === userId ||
-        teacherIds.includes(userId);
-      return sameYear && isOwner;
-    });
-  }, [classes, teachers, userId, yearId]);
+  const homeroomStore = yearId && identityKeys.length > 0
+    ? getHomeroomClassesStore(yearId, identityKeys)
+    : null;
 
-  return { homeRoomClasses, loading: classesLoading || teachersLoading };
+  const rawClasses = useSyncExternalStore(
+    homeroomStore?.subscribe ?? noopSubscribeHomeroom,
+    homeroomStore ? homeroomStore.getSnapshot : emptyHomeroomClasses,
+    homeroomStore ? homeroomStore.getSnapshot : emptyHomeroomClasses,
+  );
+  const classesReady = homeroomStore ? homeroomStore.getReady() : true;
+
+  const homeRoomClasses = useMemo(
+    () => rawClasses.map((d) => ({ id: d.id, ...(d as Record<string, unknown>) } as ClassRoom)),
+    [rawClasses],
+  );
+
+  return { homeRoomClasses, loading: teachersLoading || !classesReady };
 }

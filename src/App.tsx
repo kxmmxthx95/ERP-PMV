@@ -46,6 +46,7 @@ const AnnouncementsPage = lazy(() => import('@/features/announcements/Announceme
 const FeedbackPage = lazy(() => import('@/features/feedback/FeedbackPage'));
 const BehaviorScorePage = lazy(() => import('@/features/behavior/BehaviorScorePage'));
 const GradeBookPage = lazy(() => import('@/features/grades/GradeBookPage'));
+const StudentAnalyticsPage = lazy(() => import('@/features/studentAnalytics/StudentAnalyticsPage'));
 const LineConnectPage = lazy(() => import('@/features/profile/LineConnectPage'));
 const LineCheckInPage = lazy(() => import('@/features/lineCheckIn/LineCheckInPage'));
 const MorningRollCallLayout = lazy(() => import('@/features/attendance/MorningRollCallLayout'));
@@ -214,6 +215,11 @@ export default function App() {
             <Route path="grades" element={
               <PermissionGate featureKey="grades">
                 <GradeBookPage />
+              </PermissionGate>
+            } />
+            <Route path="student-analytics" element={
+              <PermissionGate featureKey="studentAnalytics">
+                <StudentAnalyticsPage />
               </PermissionGate>
             } />
             <Route path="attendance" element={

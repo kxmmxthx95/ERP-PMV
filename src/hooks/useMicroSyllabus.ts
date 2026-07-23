@@ -53,14 +53,28 @@ export function useMicroSyllabus(teacherId: string | null) {
       createdAt: now,
       updatedAt: now,
     });
+    const created: MicroSyllabus = {
+      ...data,
+      id: ref.id,
+      topics: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    setSyllabi((prev) =>
+      [...prev, created].sort((a, b) => a.className.localeCompare(b.className, 'th')),
+    );
     return ref.id;
   };
 
   const updateTopics = async (id: string, topics: WeeklyTopic[]) => {
+    const now = new Date().toISOString();
     await updateDoc(doc(db, 'micro_syllabi', id), {
       topics,
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
     });
+    setSyllabi((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, topics, updatedAt: now } : s)),
+    );
   };
 
   const updateLessonOptions = async (id: string, lessonOptions: string[]) => {

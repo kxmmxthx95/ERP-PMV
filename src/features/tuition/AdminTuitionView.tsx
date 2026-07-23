@@ -421,7 +421,7 @@ export default function AdminTuitionView() {
   const { canEdit } = useMyPermissions();
   const { campaigns, updateCampaign, isSaving: isSavingCampaign, isLoading: isLoadingCampaigns } = useTuitionCampaigns();
   const campaign = campaigns.find((c) => c.id === campaignId) ?? null;
-  const { studentFees, pendingFees, isLoading, applyCampaignFeesToStudents, updateStudentFee, updateStudentFeeStatus, isSaving } = useStudentFeesByCampaign(campaignId ?? null, campaign);
+  const { studentFees, pendingFees, isLoading, applyCampaignFeesToStudents, updateStudentFee, updateStudentFeeStatus, isSaving } = useStudentFeesByCampaign(campaignId ?? null, campaign, { includePending: true });
   const { data: transactions = [], isLoading: isLoadingTransactions } = useTransactionsForCampaign(campaignId ?? null);
   const { recordPayment, isRecording } = useRecordPayment();
 

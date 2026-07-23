@@ -8,11 +8,17 @@ export async function fetchStudentsByIds<T extends { id: string }>(ids: string[]
   if (unique.length === 0) return [];
 
   const byId = new Map<string, T>();
+  const chunks: string[][] = [];
   for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
-    const group = unique.slice(i, i + CHUNK_SIZE);
-    const snap = await getDocs(
-      query(collection(db, 'students'), where(documentId(), 'in', group)),
-    );
+    chunks.push(unique.slice(i, i + CHUNK_SIZE));
+  }
+  // 1.5 Promise.all — parallel chunk reads instead of sequential waterfall
+  const snaps = await Promise.all(
+    chunks.map((group) =>
+      getDocs(query(collection(db, 'students'), where(documentId(), 'in', group))),
+    ),
+  );
+  for (const snap of snaps) {
     snap.docs.forEach((docSnap) => {
       byId.set(docSnap.id, { id: docSnap.id, ...docSnap.data() } as T);
     });

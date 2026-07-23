@@ -1,39 +1,57 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import {
-  HiOutlineArrowLeft,
-  HiOutlineUserGroup,
-} from 'react-icons/hi2';
+import { HiAcademicCap, HiArrowLeft, HiHomeModern, HiOutlineUserGroup } from 'react-icons/hi2';
+import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import { Button } from '@/components/ui/button';
 import { buildTeacherIdentityKeys } from '@/lib/teachers/teacherIdentity';
-import { glassStyles } from '@/lib/designTokens';
 import { cn } from '@/lib/utils';
+import { DEPARTMENT_CONFIG, type Department, type SubjectCategory } from '@/types/curriculum';
 import type { MicroSyllabus } from '@/types/microSyllabus';
 import type { TeacherProfile } from '@/types/teacher';
-import { countTeachingPlanStats } from '../utils/teachingPlanCalendar';
+import type { ClassRoom } from '@/types/class';
+import { GRADE_LEVEL_ORDER } from '@/types/class';
+import type { ScheduleEntry } from '@/types/schedule';
+import type { CalendarEvent } from '@/types/calendar';
+import type { ClassSettingsMap } from '@/lib/firestoreShared/classSettingsStore';
+import type { DeptSemesterSettings } from '@/lib/firestoreShared/deptSemestersStore';
+import { computeSyllabusPct, type SyllabusProgressContext } from '../utils/teachingPlanCalendar';
 import AdminProgressView from './AdminProgressView';
 import WeeklyTopicGrid from './WeeklyTopicGrid';
+
+type BrowseMode = 'class' | 'teacher';
 
 interface Props {
   teachers: TeacherProfile[];
   syllabi: MicroSyllabus[];
   semesterStart: string;
   semesterEnd: string;
+  subjectCategoryByKey?: ReadonlyMap<string, SubjectCategory>;
+  classesById: Map<string, ClassRoom>;
+  scheduleEntries: ScheduleEntry[];
+  calendarEvents: CalendarEvent[];
+  classSettingsMap: ClassSettingsMap;
+  deptSemesterSettings: DeptSemesterSettings | null;
+  yearBE: string;
+  semester: 1 | 2;
+  academicYear?: { startDate?: string; endDate?: string } | null;
 }
 
 interface TeacherPlanEntry {
   id: string;
   name: string;
+  photoURL?: string;
   syllabi: MicroSyllabus[];
   avgPct: number;
 }
 
-const AVATAR_COLORS = [
-  { bg: '#eef2ff', text: '#4f46e5' },
-  { bg: '#ecfdf5', text: '#059669' },
-  { bg: '#fff7ed', text: '#ea580c' },
-  { bg: '#fdf2f8', text: '#db2777' },
-  { bg: '#f0f9ff', text: '#0284c7' },
-  { bg: '#f5f3ff', text: '#7c3aed' },
+const AVATAR_COLORS: CSSProperties[] = [
+  { background: 'rgba(99,102,241,0.15)', color: '#4338ca' },
+  { background: 'rgba(236,72,153,0.15)', color: '#be185d' },
+  { background: 'rgba(16,185,129,0.15)', color: '#047857' },
+  { background: 'rgba(249,115,22,0.15)', color: '#c2410c' },
+  { background: 'rgba(20,184,166,0.15)', color: '#0f766e' },
+  { background: 'rgba(168,85,247,0.15)', color: '#7c3aed' },
 ];
 
 function stripThaiHonorific(name: string): string {
@@ -44,7 +62,7 @@ function normalizeTeacherName(value: string): string {
   return stripThaiHonorific(value).toLowerCase();
 }
 
-function avatarStyle(name: string) {
+function avatarColor(name: string): CSSProperties {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xff;
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
@@ -56,19 +74,21 @@ function matchesTeacherSyllabus(syllabus: MicroSyllabus, teacher: TeacherProfile
   return normalizeTeacherName(syllabus.teacherName) === normalizeTeacherName(teacher.name);
 }
 
-function computeAvgPct(items: MicroSyllabus[]): number {
+function syllabusInDepartment(syllabus: MicroSyllabus, dept: Department): boolean {
+  if (syllabus.departmentId === dept) return true;
+  return DEPARTMENT_CONFIG[dept].grades.includes(syllabus.gradeLevel);
+}
+
+function computeAvgPct(items: MicroSyllabus[], ctx: SyllabusProgressContext): number {
   if (items.length === 0) return 0;
-  const pcts = items.map((s) => {
-    const { planned, completed } = countTeachingPlanStats(s.topics);
-    const total = planned > 0 ? planned : s.totalWeeks;
-    return total > 0 ? Math.round((completed / total) * 100) : 0;
-  });
+  const pcts = items.map((s) => computeSyllabusPct(s, ctx).pct);
   return Math.round(pcts.reduce((sum, pct) => sum + pct, 0) / pcts.length);
 }
 
 function buildTeacherEntries(
   teachers: TeacherProfile[],
   syllabi: MicroSyllabus[],
+  ctx: SyllabusProgressContext,
 ): TeacherPlanEntry[] {
   const matchedSyllabusIds = new Set<string>();
   const entries: TeacherPlanEntry[] = [];
@@ -87,8 +107,9 @@ function buildTeacherEntries(
     entries.push({
       id: teacher.id,
       name: teacher.name,
+      photoURL: teacher.photoURL,
       syllabi: teacherSyllabi,
-      avgPct: computeAvgPct(teacherSyllabi),
+      avgPct: computeAvgPct(teacherSyllabi, ctx),
     });
   }
 
@@ -106,7 +127,7 @@ function buildTeacherEntries(
       id: `orphan:${key}`,
       name: group[0]?.teacherName || 'ครูไม่ระบุ',
       syllabi: group,
-      avgPct: computeAvgPct(group),
+      avgPct: computeAvgPct(group, ctx),
     });
   }
 
@@ -122,56 +143,44 @@ function TeacherPlanCard({
   active: boolean;
   onClick: () => void;
 }) {
-  const av = avatarStyle(entry.name);
-  const initial = entry.name.replace(/^(นาย|นางสาว|นาง)\s*/i, '').charAt(0) || '?';
   const hasPlans = entry.syllabi.length > 0;
-  const barColor = entry.avgPct >= 80 ? '#10b981' : entry.avgPct >= 50 ? '#f59e0b' : '#6366f1';
+  const initial = entry.name.charAt(0) || '?';
 
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        'w-full text-left rounded-2xl p-3.5 border transition-all',
+        'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all',
         active
-          ? 'bg-indigo-600 border-indigo-600 shadow-md'
-          : 'bg-white border-slate-200 hover:border-indigo-200 hover:bg-indigo-50/30',
+          ? 'border-foreground bg-foreground text-background shadow-sm'
+          : 'border-border bg-card text-foreground hover:bg-muted/50',
       )}
     >
-      <div className="flex items-center gap-3 mb-2.5">
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-black shrink-0"
-          style={{ background: active ? 'rgba(255,255,255,0.2)' : av.bg, color: active ? '#fff' : av.text }}
-        >
-          {initial}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className={cn('text-sm font-black leading-tight truncate font-sukhumvit', active ? 'text-white' : 'text-slate-800')}>
-            {entry.name}
-          </p>
-          <p className={cn('text-[11px] mt-0.5 font-sarabun', active ? 'text-indigo-200' : 'text-slate-400')}>
-            {hasPlans ? `${entry.syllabi.length} วิชา` : 'ยังไม่มีแผนการสอน'}
-          </p>
-        </div>
-        {hasPlans && (
-          <span className={cn(
-            'text-[11px] font-black shrink-0 px-2 py-0.5 rounded-lg',
-            active ? 'bg-white/20 text-white' : 'text-indigo-600 bg-indigo-50',
-          )}
-          >
-            {entry.avgPct}%
-          </span>
+      <div
+        className={cn(
+          'flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg text-[13px] font-black',
+          active ? 'bg-background/15 text-background' : '',
+        )}
+        style={active ? undefined : avatarColor(entry.name)}
+      >
+        {entry.photoURL ? (
+          <img src={entry.photoURL} alt={entry.name} className="h-full w-full object-cover" />
+        ) : (
+          initial
         )}
       </div>
-
-      {hasPlans && (
-        <div className={cn('h-1 rounded-full overflow-hidden', active ? 'bg-indigo-500' : 'bg-slate-100')}>
-          <div
-            className="h-full rounded-full transition-all duration-500"
-            style={{ width: `${entry.avgPct}%`, background: active ? '#fff' : barColor }}
-          />
-        </div>
-      )}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-black font-sukhumvit leading-tight">{entry.name}</p>
+        <p
+          className={cn(
+            'mt-0.5 text-[10px] font-bold',
+            active ? 'text-background/75' : 'text-muted-foreground',
+          )}
+        >
+          {hasPlans ? `${entry.syllabi.length} วิชา · ${entry.avgPct}%` : 'ยังไม่มีแผน'}
+        </p>
+      </div>
     </button>
   );
 }
@@ -181,154 +190,439 @@ export default function AdminTeacherPlanBrowser({
   syllabi,
   semesterStart,
   semesterEnd,
+  subjectCategoryByKey,
+  classesById,
+  scheduleEntries,
+  calendarEvents,
+  classSettingsMap,
+  deptSemesterSettings,
+  yearBE,
+  semester,
+  academicYear,
 }: Props) {
+  const [filterDepartment, setFilterDepartment] = useState('');
+  const [browseMode, setBrowseMode] = useState<BrowseMode>('class');
+  const [filterGradeLevel, setFilterGradeLevel] = useState('');
+  const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
   const [selectedSyllabusId, setSelectedSyllabusId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const teacherEntries = useMemo(
-    () => buildTeacherEntries(teachers, syllabi),
-    [teachers, syllabi],
+  const yearClasses = useMemo(() => Array.from(classesById.values()), [classesById]);
+
+  const availableGrades = useMemo(() => {
+    if (!filterDepartment) return [];
+    const grades = new Set<string>();
+    yearClasses
+      .filter((c) => c.departmentId === filterDepartment)
+      .forEach((c) => {
+        if (c.gradeLevel) grades.add(c.gradeLevel);
+      });
+    return Array.from(grades).sort(
+      (a, b) => (GRADE_LEVEL_ORDER[a] ?? 99) - (GRADE_LEVEL_ORDER[b] ?? 99),
+    );
+  }, [yearClasses, filterDepartment]);
+
+  const classOptions = useMemo(() => {
+    if (!filterDepartment || !filterGradeLevel) return [];
+    return yearClasses
+      .filter((c) => c.departmentId === filterDepartment && c.gradeLevel === filterGradeLevel)
+      .slice()
+      .sort((a, b) =>
+        (a.roomNumber || a.className).localeCompare(b.roomNumber || b.className, undefined, {
+          numeric: true,
+        }),
+      );
+  }, [yearClasses, filterDepartment, filterGradeLevel]);
+
+  const selectedClass = useMemo(
+    () => classesById.get(selectedClassId) ?? null,
+    [classesById, selectedClassId],
   );
 
+  const progressCtx = useMemo<SyllabusProgressContext>(
+    () => ({
+      classesById,
+      scheduleEntries,
+      calendarEvents,
+      classSettingsMap,
+      deptSemesterSettings,
+      yearBE,
+      semester,
+      academicYear,
+    }),
+    [
+      classesById,
+      scheduleEntries,
+      calendarEvents,
+      classSettingsMap,
+      deptSemesterSettings,
+      yearBE,
+      semester,
+      academicYear,
+    ],
+  );
+
+  const teacherEntries = useMemo(() => {
+    if (!filterDepartment || browseMode !== 'teacher') return [];
+    const dept = filterDepartment as Department;
+    const deptTeachers = teachers.filter((t) => t.department === dept);
+    const deptSyllabi = syllabi.filter((s) => syllabusInDepartment(s, dept));
+    return buildTeacherEntries(deptTeachers, deptSyllabi, progressCtx);
+  }, [teachers, syllabi, filterDepartment, browseMode, progressCtx]);
+
   const selectedTeacher = useMemo(
-    () => teacherEntries.find((entry) => entry.id === selectedTeacherId) ?? null,
+    () => teacherEntries.find((e) => e.id === selectedTeacherId) ?? null,
     [teacherEntries, selectedTeacherId],
   );
 
+  const classSyllabi = useMemo(() => {
+    if (!selectedClassId) return [];
+    return syllabi.filter((s) => s.classId === selectedClassId);
+  }, [syllabi, selectedClassId]);
+
+  const listSyllabi = browseMode === 'class' ? classSyllabi : (selectedTeacher?.syllabi ?? []);
+
   const selectedSyllabus = useMemo(
-    () => selectedTeacher?.syllabi.find((s) => s.id === selectedSyllabusId) ?? null,
-    [selectedTeacher, selectedSyllabusId],
+    () => listSyllabi.find((s) => s.id === selectedSyllabusId) ?? null,
+    [listSyllabi, selectedSyllabusId],
   );
 
-  const selectedTeacherAvatar = useMemo(
-    () => (selectedTeacher ? avatarStyle(selectedTeacher.name) : null),
-    [selectedTeacher],
-  );
+  const hasRightSelection =
+    browseMode === 'class' ? !!selectedClassId : !!selectedTeacherId;
 
-  const handleSelectTeacher = (id: string) => {
-    setSelectedTeacherId(id);
+  const handleSelectDept = (dept: Department) => {
+    setFilterDepartment(dept);
+    setFilterGradeLevel('');
+    setSelectedClassId('');
+    setSelectedTeacherId(null);
     setSelectedSyllabusId(null);
   };
 
-  if (teacherEntries.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-24 gap-3 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-3xl">
-          👩‍🏫
-        </div>
-        <p className="font-black text-slate-700 font-sukhumvit">ยังไม่มีรายชื่อครูในระบบ</p>
-        <p className="text-sm text-slate-400 font-sarabun">เพิ่มครูในระบบจัดการครูก่อน</p>
+  const handleBrowseMode = (mode: BrowseMode) => {
+    setBrowseMode(mode);
+    setFilterGradeLevel('');
+    setSelectedClassId('');
+    setSelectedTeacherId(null);
+    setSelectedSyllabusId(null);
+  };
+
+  const handleSelectGrade = (level: string) => {
+    setFilterGradeLevel(level);
+    setSelectedClassId('');
+    setSelectedSyllabusId(null);
+  };
+
+  const handleSelectClass = (classId: string) => {
+    setSelectedClassId(classId);
+    setSelectedSyllabusId(null);
+  };
+
+  const modeToggle = filterDepartment ? (
+    <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-border bg-muted/40 p-1">
+      {(
+        [
+          { id: 'class' as const, label: 'รายชั้น' },
+          { id: 'teacher' as const, label: 'รายครู' },
+        ] as const
+      ).map((opt) => {
+        const active = browseMode === opt.id;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => handleBrowseMode(opt.id)}
+            className={cn(
+              'rounded-xl px-2 py-2 text-[11px] font-black font-sukhumvit transition-all',
+              active
+                ? 'bg-foreground text-background shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  ) : null;
+
+  const collapsedModeRail = filterDepartment ? (
+    <>
+      <div className="flex w-full flex-col items-center gap-1.5 border-t border-border pt-2">
+        {(
+          [
+            { id: 'class' as const, label: 'รายชั้น', Icon: HiAcademicCap },
+            { id: 'teacher' as const, label: 'รายครู', Icon: HiOutlineUserGroup },
+          ] as const
+        ).map((opt) => {
+          const active = browseMode === opt.id;
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => handleBrowseMode(opt.id)}
+              title={opt.label}
+              aria-label={opt.label}
+              aria-pressed={active}
+              className={cn(
+                'flex size-11 items-center justify-center rounded-xl border transition-all',
+                active
+                  ? 'border-foreground bg-foreground text-background shadow-sm'
+                  : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted',
+              )}
+            >
+              <opt.Icon className="h-4 w-4" />
+            </button>
+          );
+        })}
       </div>
-    );
-  }
+
+      {browseMode === 'class' && availableGrades.length > 0 ? (
+        <div className="flex max-h-[min(40vh,20rem)] w-full flex-col items-center gap-2 overflow-y-auto overscroll-y-contain scrollbar-hide border-t border-border px-1.5 py-2">
+          {availableGrades.map((grade) => {
+            const active = filterGradeLevel === grade;
+            return (
+              <button
+                key={grade}
+                type="button"
+                onClick={() => handleSelectGrade(grade)}
+                title={grade}
+                aria-label={grade}
+                aria-pressed={active}
+                className={cn(
+                  'flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border transition-all',
+                  active
+                    ? 'border-2 border-foreground bg-foreground text-background'
+                    : 'border border-border bg-muted/40 text-foreground hover:bg-muted',
+                )}
+              >
+                <HiAcademicCap className="h-3.5 w-3.5" />
+                <span className="text-[9px] font-black font-sukhumvit leading-none">{grade}</span>
+              </button>
+            );
+          })}
+
+          {filterGradeLevel && classOptions.length > 0
+            ? classOptions.map((room) => {
+                const active = selectedClassId === room.id;
+                const label = room.roomNumber || room.className;
+                return (
+                  <button
+                    key={room.id}
+                    type="button"
+                    onClick={() => handleSelectClass(room.id)}
+                    title={room.className}
+                    aria-label={room.className}
+                    aria-pressed={active}
+                    className={cn(
+                      'flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border transition-all',
+                      active
+                        ? 'border-2 border-foreground bg-foreground text-background'
+                        : 'border border-border bg-card text-foreground hover:bg-muted/50',
+                    )}
+                  >
+                    <HiHomeModern className="h-3.5 w-3.5" />
+                    <span className="max-w-full truncate px-0.5 text-[9px] font-black font-sukhumvit leading-none">
+                      {label}
+                    </span>
+                  </button>
+                );
+              })
+            : null}
+        </div>
+      ) : null}
+
+      {browseMode === 'teacher' && teacherEntries.length > 0 ? (
+        <div className="flex max-h-[min(40vh,20rem)] w-full flex-col items-center gap-2 overflow-y-auto overscroll-y-contain scrollbar-hide border-t border-border px-1.5 py-2">
+          {teacherEntries.map((entry) => {
+            const active = selectedTeacherId === entry.id;
+            const initial = entry.name.charAt(0) || '?';
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => {
+                  setSelectedTeacherId(entry.id);
+                  setSelectedSyllabusId(null);
+                }}
+                title={entry.name}
+                aria-label={entry.name}
+                aria-pressed={active}
+                className={cn(
+                  'flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl text-[13px] font-black transition-all',
+                  active
+                    ? 'border-2 border-foreground'
+                    : 'border border-border hover:opacity-90',
+                  active && !entry.photoURL && 'bg-foreground text-background',
+                )}
+                style={entry.photoURL || active ? undefined : avatarColor(entry.name)}
+              >
+                {entry.photoURL ? (
+                  <img src={entry.photoURL} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  initial
+                )}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </>
+  ) : null;
+
+  const teacherList =
+    browseMode === 'teacher' && filterDepartment ? (
+      <div className="flex flex-col gap-2 pb-1">
+        {teacherEntries.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-border px-3 py-6 text-center text-[12px] font-bold text-muted-foreground">
+            ไม่พบครูในแผนกนี้
+          </div>
+        ) : (
+          teacherEntries.map((entry) => (
+            <TeacherPlanCard
+              key={entry.id}
+              entry={entry}
+              active={selectedTeacherId === entry.id}
+              onClick={() => {
+                setSelectedTeacherId(entry.id);
+                setSelectedSyllabusId(null);
+              }}
+            />
+          ))
+        )}
+      </div>
+    ) : null;
+
+  const emptyHint = !filterDepartment
+    ? 'เลือกแผนกจากแถบด้านซ้าย'
+    : browseMode === 'class'
+      ? !filterGradeLevel
+        ? 'เลือกระดับชั้นเพื่อดูห้องเรียน'
+        : 'เลือกห้องเรียนเพื่อดูแผนการสอน'
+      : 'เลือกครูเพื่อดูแผนการสอน';
 
   return (
-    <div className="flex gap-4 items-start">
-      <div
-        className={cn(
-          'flex-col gap-2 lg:w-72 xl:w-80 shrink-0',
-          selectedTeacherId ? 'hidden lg:flex' : 'flex w-full',
-        )}
-      >
-        <div className="flex items-center gap-2 px-1 mb-1">
-          <HiOutlineUserGroup size={14} className="text-slate-400" />
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-            รายชื่อครู
-          </p>
-          <span className="ml-auto text-[10px] font-bold bg-slate-100 px-2 py-0.5 rounded-full text-slate-500">
-            {teacherEntries.length}
-          </span>
+    <div className="flex h-full min-h-0 max-h-full w-full flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+        <div
+          className={cn(
+            'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
+            sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+            hasRightSelection ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+          )}
+        >
+          <GradeBookClassSidebar
+            selectedDept={filterDepartment}
+            selectedGrade={filterGradeLevel}
+            selectedClassId={selectedClassId}
+            gradeOptions={availableGrades}
+            classOptions={classOptions}
+            onSelectDept={handleSelectDept}
+            onSelectGrade={handleSelectGrade}
+            onSelectClass={handleSelectClass}
+            afterDept={modeToggle}
+            showGradeRoomNav={browseMode === 'class'}
+            collapsed={sidebarCollapsed}
+            collapsedExtra={collapsedModeRail}
+            headerAction={(
+              <SidebarCollapseButton
+                collapsed={sidebarCollapsed}
+                onToggle={() => setSidebarCollapsed((v) => !v)}
+              />
+            )}
+          >
+            {teacherList}
+          </GradeBookClassSidebar>
         </div>
 
-        {teacherEntries.map((entry) => (
-          <TeacherPlanCard
-            key={entry.id}
-            entry={entry}
-            active={selectedTeacherId === entry.id}
-            onClick={() => handleSelectTeacher(entry.id)}
-          />
-        ))}
-      </div>
-
-      <AnimatePresence mode="popLayout">
-        {selectedSyllabus ? (
-          <motion.div
-            key={selectedSyllabus.id}
-            initial={{ opacity: 0, x: 12 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 12 }}
-            className="flex-1 min-w-0 flex flex-col gap-3"
-          >
-            <WeeklyTopicGrid
-              topics={selectedSyllabus.topics}
-              semesterStart={semesterStart}
-              semesterEnd={semesterEnd}
-              onSave={async () => {}}
-              readOnly
-            />
-          </motion.div>
-        ) : selectedTeacher ? (
-          <motion.div
-            key={selectedTeacher.id}
-            initial={{ opacity: 0, x: 12 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 12 }}
-            className="flex-1 min-w-0 flex flex-col gap-4"
-          >
-            <div className="rounded-2xl px-4 py-3 flex items-center gap-3" style={glassStyles.card}>
-              <button
+        <div
+          className={cn(
+            'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            !hasRightSelection && 'hidden lg:flex',
+          )}
+        >
+          {selectedSyllabus && (
+            <div className="mb-3 flex shrink-0 items-center gap-2">
+              <Button
                 type="button"
-                onClick={() => setSelectedTeacherId(null)}
-                className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors lg:hidden shrink-0"
+                variant="secondary"
+                className="h-9 gap-1.5 rounded-xl px-3 text-[12px] font-bold"
+                onClick={() => setSelectedSyllabusId(null)}
               >
-                <HiOutlineArrowLeft size={18} />
-              </button>
-              <div
-                className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-black shrink-0"
-                style={{
-                  background: selectedTeacherAvatar?.bg,
-                  color: selectedTeacherAvatar?.text,
-                }}
-              >
-                {selectedTeacher.name.replace(/^(นาย|นางสาว|นาง)\s*/i, '').charAt(0)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-black text-slate-800 font-sukhumvit leading-tight truncate">
-                  {selectedTeacher.name}
-                </p>
-                <p className="text-[11px] text-slate-400 font-sarabun">
-                  {selectedTeacher.syllabi.length > 0
-                    ? `${selectedTeacher.syllabi.length} วิชา · เฉลี่ย ${selectedTeacher.avgPct}%`
-                    : 'ยังไม่มีแผนการสอน'}
-                </p>
-              </div>
+                <HiArrowLeft className="h-4 w-4" />
+                รายวิชา
+              </Button>
+              <p className="min-w-0 truncate font-sukhumvit text-[13px] font-black text-foreground">
+                {selectedSyllabus.subjectName}
+                {selectedSyllabus.className ? ` · ${selectedSyllabus.className}` : ''}
+              </p>
             </div>
+          )}
 
-            {selectedTeacher.syllabi.length > 0 ? (
-              <AdminProgressView
-                syllabi={selectedTeacher.syllabi}
-                onSelect={(syllabus) => setSelectedSyllabusId(syllabus.id)}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center py-20 rounded-2xl border border-dashed border-slate-200 text-center">
-                <p className="text-sm font-bold text-slate-400 font-sukhumvit">ครูท่านนี้ยังไม่ได้กรอกแผนการสอน</p>
-              </div>
-            )}
-          </motion.div>
-        ) : (
-          <motion.div
-            key="empty-admin"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="hidden lg:flex flex-1 items-center justify-center py-20 rounded-2xl border border-dashed border-slate-200"
-          >
-            <div className="text-center text-slate-300">
-              <HiOutlineUserGroup size={40} className="mx-auto mb-3" />
-              <p className="text-sm font-bold font-sukhumvit">เลือกครูเพื่อดูแผนการสอน</p>
+          {!hasRightSelection && !selectedSyllabus ? (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center">
+              {browseMode === 'teacher' ? (
+                <HiOutlineUserGroup className="h-8 w-8 text-muted-foreground/40" />
+              ) : (
+                <HiAcademicCap className="h-8 w-8 text-muted-foreground/40" />
+              )}
+              <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
+                {emptyHint}
+              </p>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          ) : (
+            <div
+              className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain scrollbar-hide"
+              onWheel={(e) => e.stopPropagation()}
+            >
+              <AnimatePresence mode="popLayout">
+                {selectedSyllabus ? (
+                  <motion.div
+                    key={selectedSyllabus.id}
+                    initial={{ opacity: 0, x: 12 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 12 }}
+                    className="flex w-full flex-col gap-3"
+                  >
+                    <WeeklyTopicGrid
+                      topics={selectedSyllabus.topics}
+                      semesterStart={semesterStart}
+                      semesterEnd={semesterEnd}
+                      onSave={async () => {}}
+                      readOnly
+                    />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key={browseMode === 'class' ? selectedClassId : selectedTeacherId}
+                    initial={{ opacity: 0, x: 12 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 12 }}
+                    className="flex w-full flex-col gap-4"
+                  >
+                    {listSyllabi.length > 0 ? (
+                      <AdminProgressView
+                        syllabi={listSyllabi}
+                        subjectCategoryByKey={subjectCategoryByKey}
+                        onSelect={(syllabus) => setSelectedSyllabusId(syllabus.id)}
+                        progressCtx={progressCtx}
+                      />
+                    ) : (
+                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-border py-20 text-center">
+                        <p className="font-sukhumvit text-sm font-bold text-muted-foreground">
+                          {browseMode === 'class'
+                            ? `ห้อง ${selectedClass?.className ?? ''} ยังไม่มีแผนการสอน`
+                            : `${selectedTeacher?.name ?? 'ครูท่านนี้'} ยังไม่ได้กรอกแผนการสอน`}
+                        </p>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

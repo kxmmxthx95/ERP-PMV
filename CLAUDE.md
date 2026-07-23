@@ -281,6 +281,28 @@ export function useGrades(classId: string) {
 - Animations: Framer Motion `motion.div` + `variants`.
 - Icons: Prefer `react-icons/hi2` for all new UI work. Do not introduce new `lucide-react` imports in newly created code.
 
+### UI Components: Never Hand-Roll — Always Import from `components/ui/`
+
+`src/components/ui/` is a full shadcn/ui primitive set (button, card, dialog, form, input, etc.) already wired to the theme. For buttons, forms, cards, and modals/dialogs:
+
+- **NEVER** write a new Tailwind-styled `<button>`, `<div className="rounded-lg border ...">` card, or custom modal from scratch.
+- **ALWAYS** import the existing primitive: `Button` from `@/components/ui/button`, `Card`/`CardHeader`/`CardContent` from `@/components/ui/card`, `Dialog`/`AlertDialog` from `@/components/ui/dialog` / `@/components/ui/alert-dialog`, `Form`/`Field` from `@/components/ui/form` / `@/components/ui/field`.
+- Need a variant that doesn't exist (e.g. a new button color/size)? Edit the source component in `src/components/ui/` itself — don't override with one-off classes at the call site. One edit propagates system-wide.
+- Check `src/components/ui/` before writing any new interactive element — most needs (accordion, combobox, drawer, popover, pagination, etc.) already exist there.
+
+### Color: CSS Variables Only, No Hardcoded Hex
+
+Theme colors are defined once in `src/index.css` as CSS variables (`:root` block, mapped through `@theme inline` to Tailwind color utilities):
+
+```css
+--primary: oklch(0.205 0 0);
+--destructive: oklch(0.577 0.245 27.325);
+```
+
+- **NEVER** hardcode a color value in a component (`text-[#ef4444]`, `bg-[#3b82f6]`, inline `style={{ color: '#...' }}`).
+- **ALWAYS** use the semantic Tailwind class instead: `text-primary`, `bg-destructive`, `border-border`, `text-muted-foreground`, etc.
+- To rebrand (e.g. change the school's institutional color), edit the variables in `src/index.css` once — every component using `primary`/`destructive`/etc. updates automatically.
+
 ### Home Page Widgets
 
 `src/features/home/HomePage.tsx` renders role-aware widgets from `src/features/home/widgets/`. Each widget is wrapped in `ProtectedWidget` (checks `featureKey` starting with `widget_`). To add a new widget:

@@ -1,18 +1,39 @@
 import { useMemo, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { AnimatePresence, motion } from 'framer-motion';
-import { Plus, FileSpreadsheet } from 'lucide-react';
-import { HiArrowLeft, HiBars3, HiChevronLeft, HiMagnifyingGlass, HiOutlineBookOpen, HiXMark } from 'react-icons/hi2';
+import { motion } from 'framer-motion';
+import { Plus, FileSpreadsheet, FileText } from 'lucide-react';
+import {
+  HiAcademicCap,
+  HiArrowLeft,
+  HiBars3,
+  HiChevronLeft,
+  HiChevronRight,
+  HiMagnifyingGlass,
+  HiOutlineBookOpen,
+  HiOutlineFunnel,
+  HiXMark,
+} from 'react-icons/hi2';
 import {
   ExamFilterShowResultsButton,
   ExamMobileFilterDrawer,
 } from '@/features/exam/components/ExamMobileFilterMenuButton';
 import { cn } from '@/lib/utils';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
 import { useAuth } from '@/hooks/useAuth';
 import { useQuestionSetBank, type QuestionSetFilters } from '@/hooks/useQuestionSetBank';
 import type { NewQuestionSet, QuestionSet } from '@/types/questionBank';
-import { DEPARTMENT_CONFIG, type Department, type SubjectGroupId } from '@/types/curriculum';
+import {
+  DEPARTMENT_CONFIG,
+  SUBJECT_GROUP_CONFIG,
+  type Department,
+  type SubjectGroupId,
+} from '@/types/curriculum';
+import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import { SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
+import { useTeachersCollection } from '@/hooks/useTeachersCollection';
+import { resolveQuestionSetCreatorName } from '@/features/questionBank/utils/questionSetCreatorName';
 import QuestionSetBuilder from './components/QuestionSetBuilder';
 import QuestionSetImportModal from './components/QuestionSetImportModal';
 import QuestionSetExamSimulator from './components/QuestionSetExamSimulator';
@@ -24,27 +45,23 @@ import QuestionBankBrowseNav, {
   browseStepLabel,
   nextBrowseStepAfterGroup,
   previousBrowseStep,
-  QuestionBankBrowseHeader,
 } from './components/QuestionBankBrowseNav';
 
-const DEPT_OPTIONS = [
-  { id: 'all', label: 'ทั้งหมด' },
-  { id: 'early', label: 'อนุบาล' },
-  { id: 'primary', label: 'ประถม' },
-  { id: 'secondary', label: 'มัธยม' },
-] as const;
+type BrowseNavFrame = {
+  browseStep: QuestionBankBrowseStep;
+  selectedSetId: string | null;
+};
 
-/** แสดงระดับชั้นแบบสั้นใน pill: ป.1 → 1, ม.2 → 2 */
-function gradeShortLabel(grade: string): string {
-  const dot = grade.indexOf('.');
-  return dot >= 0 ? grade.slice(dot + 1) : grade;
-}
+const SUBJECT_GROUP_ENTRIES = (
+  Object.entries(SUBJECT_GROUP_CONFIG) as [SubjectGroupId, (typeof SUBJECT_GROUP_CONFIG)[SubjectGroupId]][]
+).sort(([, a], [, b]) => a.order - b.order);
 
 export default function QuestionBankManager() {
   const navigate = useNavigate();
   const location = useLocation();
   const { role } = useAuth();
   const isStudentView = role === 'student';
+  const { teachers } = useTeachersCollection();
   const {
     isLoading: isSetLoading,
     questionSets,
@@ -70,26 +87,29 @@ export default function QuestionBankManager() {
   const [editingSet, setEditingSet] = useState<QuestionSet | null>(null);
   const [selectedSet, setSelectedSet] = useState<QuestionSet | null>(null);
   const [browseStep, setBrowseStep] = useState<QuestionBankBrowseStep>({ level: 'groups' });
+  /** Frames popped by back — forward restores these (cleared on new branch). */
+  const [browseFuture, setBrowseFuture] = useState<BrowseNavFrame[]>([]);
 
-  const [filters, setFilters] = useState<QuestionSetFilters>({
-    search: '',
-    department: 'all',
-    gradeLevel: 'all',
-  });
+  const [filterDepartment, setFilterDepartment] = useState('');
+  const [filterGradeLevel, setFilterGradeLevel] = useState('');
+  const [search, setSearch] = useState('');
 
-  const [headerFiltersPortalEl, setHeaderFiltersPortalEl] = useState<HTMLElement | null>(null);
   const [headerCenterMobilePortalEl, setHeaderCenterMobilePortalEl] = useState<HTMLElement | null>(null);
   const [headerMobileActionsPortalEl, setHeaderMobileActionsPortalEl] = useState<HTMLElement | null>(null);
   const [headerMobileBackPortalEl, setHeaderMobileBackPortalEl] = useState<HTMLElement | null>(null);
-  const [isSearchMode, setIsSearchMode] = useState(false);
   const [mobileFilterDrawerOpen, setMobileFilterDrawerOpen] = useState(false);
   const [mobileActionsMenuOpen, setMobileActionsMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [desktopActionsHost, setDesktopActionsHost] = useState<HTMLElement | null>(null);
+  const [browseAddMenuOpen, setBrowseAddMenuOpen] = useState(false);
+  /** After create-set from browse + menu — open PDF / Sheets / CSV on the new set. */
+  const [pendingCreateAction, setPendingCreateAction] = useState<'pdf' | 'sheets' | 'csv' | null>(null);
+  const [setLaunchAction, setSetLaunchAction] = useState<'pdf' | 'sheets' | 'csv' | null>(null);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false,
   );
 
   useEffect(() => {
-    setHeaderFiltersPortalEl(document.getElementById('header-portal-center'));
     setHeaderCenterMobilePortalEl(document.getElementById('header-portal-center-mobile'));
     setHeaderMobileActionsPortalEl(document.getElementById('header-portal-mobile-actions'));
     setHeaderMobileBackPortalEl(document.getElementById('header-portal-mobile-back'));
@@ -110,11 +130,69 @@ export default function QuestionBankManager() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  const snapshotBrowse = (): BrowseNavFrame => ({
+    browseStep,
+    selectedSetId: selectedSet?.id ?? null,
+  });
+
+  const resolveBrowseSet = (setId: string | null) => {
+    if (!setId) return null;
+    if (selectedSet?.id === setId) return selectedSet;
+    return questionSets.find((s) => s.id === setId) ?? null;
+  };
+
+  const applyBrowseFrame = (frame: BrowseNavFrame) => {
+    setBrowseStep(frame.browseStep);
+    setSelectedSet(resolveBrowseSet(frame.selectedSetId));
+  };
+
+  const resetBrowseNav = () => {
+    setBrowseStep({ level: 'groups' });
+    setSelectedSet(null);
+    setBrowseFuture([]);
+  };
+
+  /** New branch (sidebar / folder click) — drop forward history. */
+  const goBrowseTo = (frame: BrowseNavFrame) => {
+    setBrowseFuture([]);
+    applyBrowseFrame(frame);
+  };
+
+  const canBrowseBack = Boolean(selectedSet) || browseStep.level !== 'groups';
+  const canBrowseForward = browseFuture.length > 0;
+
+  const handleBrowseBack = () => {
+    if (!canBrowseBack) return;
+    setBrowseFuture((future) => [snapshotBrowse(), ...future]);
+    if (selectedSet) {
+      setSelectedSet(null);
+      return;
+    }
+    setBrowseStep((prev) => previousBrowseStep(prev));
+  };
+
+  const handleBrowseForward = () => {
+    if (browseFuture.length === 0) return;
+    const [next, ...rest] = browseFuture;
+    setBrowseFuture(rest);
+    applyBrowseFrame(next);
+  };
+
+  const openBrowseSet = (set: QuestionSet) => {
+    goBrowseTo({ browseStep, selectedSetId: set.id });
+  };
+
+  const hasRightSelection =
+    Boolean(selectedSet)
+    || browseStep.level === 'sets'
+    || browseStep.level === 'subgroups'
+    || Boolean(search.trim());
+
   useEffect(() => {
     const defaultBack = document.getElementById('portal-default-mobile-back');
     if (!defaultBack) return;
-    defaultBack.style.display = (selectedSet || browseStep.level !== 'groups') ? 'none' : '';
-  }, [selectedSet, browseStep.level]);
+    defaultBack.style.display = hasRightSelection ? 'none' : '';
+  }, [hasRightSelection]);
 
   useEffect(() => {
     const state = location.state as {
@@ -133,22 +211,31 @@ export default function QuestionBankManager() {
     navigate(location.pathname, { replace: true, state: null });
   }, [location.pathname, location.state, navigate]);
 
+  const filters: QuestionSetFilters = useMemo(() => ({
+    search,
+    department: (filterDepartment || 'all') as Department | 'all',
+    gradeLevel: filterGradeLevel || 'all',
+  }), [search, filterDepartment, filterGradeLevel]);
+
+  const gradeOptions = useMemo(() => {
+    if (!filterDepartment) return [];
+    return DEPARTMENT_CONFIG[filterDepartment as Department]?.grades ?? [];
+  }, [filterDepartment]);
+
   const clearFilters = () => {
-    setFilters({
-      search: '',
-      department: 'all',
-      gradeLevel: 'all',
-    });
-    setBrowseStep({ level: 'groups' });
-    setIsSearchMode(false);
+    setFilterDepartment('');
+    setFilterGradeLevel('');
+    setSearch('');
+    resetBrowseNav();
   };
 
   const hasActiveFilters =
-    filters.search !== '' ||
-    filters.department !== 'all' ||
-    filters.gradeLevel !== 'all';
+    search !== ''
+    || filterDepartment !== ''
+    || filterGradeLevel !== ''
+    || browseStep.level !== 'groups';
 
-  const isSearchActive = Boolean(filters.search?.trim());
+  const isSearchActive = Boolean(search.trim());
 
   const baseSets = useMemo(() => {
     const filtered = filterQuestionSets({
@@ -176,20 +263,47 @@ export default function QuestionBankManager() {
     });
   }, [baseSets, browseStep]);
 
-  const handleBrowseBack = () => {
-    setBrowseStep((prev) => previousBrowseStep(prev));
+  const handleSelectDept = (dept: Department) => {
+    setFilterDepartment(dept);
+    setFilterGradeLevel('');
+    resetBrowseNav();
   };
 
+  const handleSelectGrade = (grade: string) => {
+    setFilterGradeLevel(grade);
+    resetBrowseNav();
+  };
+
+  const showRightBrowseNav =
+    !isSearchActive
+    && (
+      Boolean(selectedSet)
+      || canBrowseForward
+      || browseStep.level === 'subgroups'
+      || browseStep.level === 'sets'
+      || canBrowseBack
+    );
+
+  const selectedSetCreatorName = selectedSet
+    ? resolveQuestionSetCreatorName(selectedSet, teachers)
+    : '';
+
   const handleSelectGroup = (subjectGroup: SubjectGroupId) => {
-    setBrowseStep(nextBrowseStepAfterGroup(subjectGroup));
+    goBrowseTo({
+      browseStep: nextBrowseStepAfterGroup(subjectGroup),
+      selectedSetId: null,
+    });
   };
 
   const handleSelectSubGroup = (subSubjectGroup: string) => {
     if (browseStep.level !== 'subgroups') return;
-    setBrowseStep({
-      level: 'sets',
-      subjectGroup: browseStep.subjectGroup,
-      subSubjectGroup,
+    goBrowseTo({
+      browseStep: {
+        level: 'sets',
+        subjectGroup: browseStep.subjectGroup,
+        subSubjectGroup,
+      },
+      selectedSetId: null,
     });
   };
 
@@ -200,20 +314,20 @@ export default function QuestionBankManager() {
         subSubjectGroup: browseStep.subSubjectGroup === UNSPECIFIED_SUB_SUBJECT
           ? ''
           : browseStep.subSubjectGroup,
-        department: filters.department !== 'all' ? filters.department : undefined,
-        gradeLevel: filters.gradeLevel !== 'all' ? filters.gradeLevel : undefined,
+        department: filterDepartment || undefined,
+        gradeLevel: filterGradeLevel || undefined,
       };
     }
     if (browseStep.level === 'subgroups') {
       return {
         subjectGroup: browseStep.subjectGroup,
-        department: filters.department !== 'all' ? filters.department : undefined,
-        gradeLevel: filters.gradeLevel !== 'all' ? filters.gradeLevel : undefined,
+        department: filterDepartment || undefined,
+        gradeLevel: filterGradeLevel || undefined,
       };
     }
     return {
-      department: filters.department !== 'all' ? filters.department : undefined,
-      gradeLevel: filters.gradeLevel !== 'all' ? filters.gradeLevel : undefined,
+      department: filterDepartment || undefined,
+      gradeLevel: filterGradeLevel || undefined,
     };
   };
 
@@ -225,12 +339,34 @@ export default function QuestionBankManager() {
   const openImportSets = () => setSetImportModalOpen(true);
   const openEditSet = (set: QuestionSet) => { setEditingSet(set); setSetModalOpen(true); };
 
+  const openCreateThenLaunch = (action: 'pdf' | 'sheets' | 'csv' | null) => {
+    setBrowseAddMenuOpen(false);
+    setPendingCreateAction(action);
+    openCreateSet();
+  };
+
   const handleSetSubmit = async (data: NewQuestionSet) => {
     if (editingSet) {
       await updateQuestionSet(editingSet.id, data);
-    } else {
-      await addQuestionSet(data);
+      setPendingCreateAction(null);
+      return;
     }
+    const id = await addQuestionSet(data);
+    const action = pendingCreateAction;
+    setPendingCreateAction(null);
+    if (!id) return;
+    const now = Date.now();
+    setBrowseFuture([]);
+    setSelectedSet({
+      id,
+      ...data,
+      questionCount: 0,
+      isPublished: data.isPublished ?? false,
+      createdBy: 'pending',
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (action) setSetLaunchAction(action);
   };
 
   const handleImportSets = async (items: NewQuestionSet[]) => {
@@ -239,7 +375,7 @@ export default function QuestionBankManager() {
 
   const handleDeleteSet = async (set: QuestionSet) => {
     if (!confirm(`ลบชุดข้อสอบนี้?\n\n${set.title}`)) return;
-    if (selectedSet?.id === set.id) setSelectedSet(null);
+    if (selectedSet?.id === set.id) handleBrowseBack();
     await deleteQuestionSet(set);
   };
 
@@ -247,260 +383,201 @@ export default function QuestionBankManager() {
     await setQuestionSetPublished(set.id, isPublished);
   };
 
+  const selectedSubjectGroup =
+    browseStep.level === 'groups' ? '' : browseStep.subjectGroup;
 
+  const emptyHint = !filterDepartment
+    ? 'เลือกแผนกจากแถบด้านซ้าย'
+    : !filterGradeLevel
+      ? 'เลือกระดับชั้นเพื่อดูกลุ่มสาระ'
+      : 'เลือกกลุ่มสาระเพื่อดูชุดข้อสอบ';
 
-  const filterCapsules = !selectedSet ? (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: -4 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={`flex items-center gap-1.5 h-10 p-1 rounded-full pointer-events-auto transition-all duration-300 ${
-        isSearchMode
-          ? 'bg-blue-50/90 shadow-md border border-blue-100'
-          : 'bg-white/60 backdrop-blur-xl border border-white shadow-[0_8px_32px_rgba(0,0,0,0.04)]'
-      }`}
-    >
-      {isSearchMode ? (
-        <motion.div
-          key="search-active"
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="flex items-center gap-2 px-2.5 w-[360px] h-full"
-        >
-          <HiMagnifyingGlass size={15} className="text-slate-400 shrink-0" />
-          <input
-            value={filters.search || ''}
-            onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
-            placeholder="ค้นหาชุดข้อสอบ..."
-            autoFocus
-            className="w-full bg-transparent border-none outline-none text-[11px] font-bold text-slate-800 placeholder:text-slate-400 font-sukhumvit"
-          />
-          <button
-            onClick={() => {
-              setFilters((prev) => ({ ...prev, search: '' }));
-              setIsSearchMode(false);
-            }}
-            className="flex items-center justify-center w-6 h-6 rounded-full text-slate-400 hover:text-slate-600 hover:bg-black/5 transition-all"
-          >
-            <HiXMark size={14} />
-          </button>
-        </motion.div>
-      ) : (
-        <div className="flex items-center gap-1.5">
-          <AnimatePresence mode="wait">
-            {filters.department === 'all' ? (
-              <motion.div
-                key="depts"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 10 }}
-                className="flex items-center gap-0.5"
+  const subjectGroupNav = filterGradeLevel ? (
+    <section className="pb-1">
+      <p className="mb-2 px-0.5 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+        กลุ่มสาระ
+      </p>
+      <div className="flex flex-col gap-2">
+        {SUBJECT_GROUP_ENTRIES.map(([id, cfg]) => {
+          const count = baseSets.filter((s) => s.subjectGroup === id).length;
+          const active = selectedSubjectGroup === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => handleSelectGroup(id)}
+              className={cn(
+                'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all',
+                active ? 'text-white shadow-sm' : 'hover:opacity-90',
+              )}
+              style={
+                active
+                  ? { background: cfg.color, borderColor: cfg.color }
+                  : { background: cfg.bg, borderColor: cfg.border, color: cfg.color }
+              }
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  active ? 'bg-white/20' : 'bg-white/70',
+                )}
               >
-                {DEPT_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.id}
-                    onClick={() => setFilters(prev => ({ ...prev, department: opt.id as Department | 'all', gradeLevel: 'all' }))}
-                    className={`h-8 px-4 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${
-                      filters.department === opt.id
-                        ? 'bg-slate-900 text-white shadow-md'
-                        : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </motion.div>
-            ) : (
-              <motion.div
-                key="grades"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                className="flex items-center gap-0.5"
-              >
-                <button
-                  onClick={() => setFilters(prev => ({ ...prev, department: 'all', gradeLevel: 'all' }))}
-                  className="w-8 h-8 flex items-center justify-center rounded-full text-slate-500 hover:text-slate-800 hover:bg-black/5 transition-all mr-1"
+                <SubjectIcon
+                  subjectGroup={id}
+                  size={18}
+                  className={active ? 'text-white drop-shadow-sm' : 'text-current'}
+                />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-black font-sukhumvit">
+                  {cfg.name}
+                </span>
+                <span
+                  className={cn(
+                    'block text-[10px] font-bold',
+                    active ? 'text-white/80' : 'opacity-70',
+                  )}
                 >
-                  <HiChevronLeft size={16} />
-                </button>
-                <button
-                  onClick={() => setFilters(prev => ({ ...prev, gradeLevel: 'all' }))}
-                  className={`h-8 px-4 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${
-                    filters.gradeLevel === 'all'
-                      ? 'bg-slate-900 text-white shadow-md'
-                      : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                  }`}
-                >
-                  ทุกระดับ
-                </button>
-                <div className="flex items-center gap-0.5 max-w-[300px] overflow-x-auto no-scrollbar ml-1">
-                  {(DEPARTMENT_CONFIG[filters.department as Department]?.grades || []).map((grade) => (
-                    <button
-                      key={grade}
-                      onClick={() => setFilters(prev => ({ ...prev, gradeLevel: grade }))}
-                      className={`h-8 px-4 rounded-full text-[11px] font-black transition-all whitespace-nowrap ${
-                        filters.gradeLevel === grade
-                          ? 'bg-slate-900 text-white shadow-md'
-                          : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
-                      }`}
-                    >
-                      {gradeShortLabel(grade)}
-                    </button>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className="w-px h-5 bg-black/10 mx-1 shrink-0" />
-
-          {!isStudentView && (
-            <>
-              {/* Import CSV */}
-              <button
-                type="button"
-                onClick={openImportSets}
-                className="flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-full text-slate-600 transition-all hover:bg-black/5 hover:text-slate-800 active:scale-90"
-                title="นำเข้าชุดข้อสอบจาก CSV/Excel"
-                aria-label="นำเข้าชุดข้อสอบจาก CSV/Excel"
-              >
-                <FileSpreadsheet size={16} />
-              </button>
-
-              {/* Add Button */}
-              <button
-                onClick={openCreateSet}
-                className="flex items-center justify-center w-8 h-8 rounded-full text-slate-600 hover:text-slate-800 hover:bg-black/5 transition-all active:scale-90 flex-shrink-0 cursor-pointer"
-                title="เพิ่มชุดข้อสอบ"
-              >
-                <Plus size={16} strokeWidth={3} />
-              </button>
-
-              <div className="w-px h-5 bg-black/10 mx-1 shrink-0" />
-            </>
-          )}
-
-          <button
-            onClick={() => setIsSearchMode(true)}
-            className="flex items-center justify-center w-8 h-8 rounded-full text-slate-600 hover:text-slate-800 hover:bg-black/5 transition-all active:scale-90"
-            title="ค้นหาชุดข้อสอบ"
-          >
-            <HiMagnifyingGlass size={16} />
-          </button>
-
-          {hasActiveFilters && (
-            <>
-              <div className="w-px h-5 bg-black/10 mx-1 shrink-0" />
-              <button
-                onClick={clearFilters}
-                className="h-8 w-8 rounded-full text-rose-500 hover:bg-rose-50 transition-all flex items-center justify-center"
-                title="ล้างตัวกรองทั้งหมด"
-              >
-                <HiXMark size={14} />
-              </button>
-            </>
-          )}
-        </div>
-      )}
-    </motion.div>
+                  {count.toLocaleString('th-TH')} ชุด
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   ) : null;
 
-  const mobilePageTitle = selectedSet ? (
-    <div className="pointer-events-auto flex min-w-0 items-center justify-center gap-1.5 max-w-[calc(100vw-112px)]">
-      <HiOutlineBookOpen className="h-4 w-4 shrink-0 text-slate-500" />
-      <span className="truncate text-[13px] font-black text-slate-800 tracking-tight font-sukhumvit">
-        {selectedSet.title}
-      </span>
+  const collapsedBrowseRail = filterDepartment ? (
+    <div className="flex max-h-[min(50vh,24rem)] w-full flex-col items-center gap-2 overflow-y-auto overscroll-y-contain scrollbar-hide border-t border-border px-1.5 py-2">
+      {gradeOptions.map((grade) => {
+        const active = filterGradeLevel === grade;
+        return (
+          <button
+            key={grade}
+            type="button"
+            onClick={() => handleSelectGrade(grade)}
+            title={grade}
+            aria-label={grade}
+            aria-pressed={active}
+            className={cn(
+              'flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border transition-all',
+              active
+                ? 'border-2 border-foreground bg-foreground text-background'
+                : 'border border-border bg-muted/40 text-foreground hover:bg-muted',
+            )}
+          >
+            <HiAcademicCap className="h-3.5 w-3.5" />
+            <span className="text-[9px] font-black font-sukhumvit leading-none">{grade}</span>
+          </button>
+        );
+      })}
+
+      {filterGradeLevel
+        ? SUBJECT_GROUP_ENTRIES.map(([id, cfg]) => {
+            const active = selectedSubjectGroup === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => handleSelectGroup(id)}
+                title={cfg.name}
+                aria-label={cfg.name}
+                aria-pressed={active}
+                className={cn(
+                  'flex size-11 shrink-0 items-center justify-center rounded-xl border transition-all',
+                  active ? 'border-2 text-white shadow-sm' : 'hover:opacity-90',
+                )}
+                style={
+                  active
+                    ? { background: cfg.color, borderColor: cfg.color }
+                    : { background: cfg.bg, borderColor: cfg.border, color: cfg.color }
+                }
+              >
+                <SubjectIcon
+                  subjectGroup={id}
+                  size={18}
+                  className={active ? 'text-white drop-shadow-sm' : 'text-current'}
+                />
+              </button>
+            );
+          })
+        : null}
     </div>
-  ) : isSearchActive ? (
-    <div className="pointer-events-auto flex items-center justify-center gap-1.5">
-      <HiMagnifyingGlass className="h-4 w-4 shrink-0 text-slate-500" />
-      <span className="text-[14px] font-black text-slate-800 tracking-tight font-sukhumvit">ค้นหาชุดข้อสอบ</span>
-    </div>
-  ) : browseStep.level !== 'groups' ? (
-    <div className="pointer-events-auto flex min-w-0 items-center justify-center gap-1.5 max-w-[calc(100vw-112px)]">
-      <HiOutlineBookOpen className="h-4 w-4 shrink-0 text-slate-500" />
-      <span className="truncate text-[13px] font-black text-slate-800 tracking-tight font-sukhumvit">
-        {browseStepLabel(browseStep)}
-      </span>
-    </div>
-  ) : (
-    <div className="pointer-events-auto flex items-center justify-center gap-1.5">
-      <HiOutlineBookOpen className="h-4 w-4 shrink-0 text-slate-500" />
-      <span className="text-[14px] font-black text-slate-800 tracking-tight font-sukhumvit">คลังข้อสอบ</span>
-    </div>
-  );
+  ) : null;
 
   return (
-    <div className="relative w-full min-w-0 overflow-x-hidden h-full">
-      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div className="absolute -top-24 -left-16 h-72 w-72 rounded-full bg-indigo-200/40 blur-3xl" />
-        <div className="absolute top-24 -right-20 h-80 w-80 rounded-full bg-violet-200/35 blur-3xl" />
-      </div>
-      {!isMdOrBelow && headerFiltersPortalEl && filterCapsules && createPortal(filterCapsules, headerFiltersPortalEl)}
+    <div
+      className={cn(
+        'flex min-h-0 w-full flex-col overflow-hidden font-sukhumvit',
+        'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+      )}
+    >
+      {headerCenterMobilePortalEl && createPortal(
+        <div className="pointer-events-none flex min-w-0 max-w-[calc(100vw-112px)] items-center justify-center gap-1.5">
+          <HiOutlineBookOpen className="h-4 w-4 shrink-0 text-slate-500" />
+          <span className="truncate text-[13px] font-black tracking-tight text-slate-800">
+            {selectedSet
+              ? selectedSet.title
+              : isSearchActive
+                ? 'ค้นหาชุดข้อสอบ'
+                : browseStep.level !== 'groups'
+                  ? browseStepLabel(browseStep)
+                  : 'คลังข้อสอบ'}
+          </span>
+        </div>,
+        headerCenterMobilePortalEl,
+      )}
 
-      {isMdOrBelow && headerCenterMobilePortalEl && createPortal(mobilePageTitle, headerCenterMobilePortalEl)}
-
-      {isMdOrBelow && headerMobileBackPortalEl && (selectedSet || browseStep.level !== 'groups' || isSearchActive) && createPortal(
-        <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
+      {isMdOrBelow && headerMobileBackPortalEl && hasRightSelection && createPortal(
+        <button
           type="button"
           onClick={() => {
-            if (selectedSet) {
-              setSelectedSet(null);
-              return;
-            }
             if (isSearchActive) {
-              setFilters((prev) => ({ ...prev, search: '' }));
-              setIsSearchMode(false);
+              setSearch('');
               return;
             }
-            handleBrowseBack();
+            if (canBrowseBack) {
+              handleBrowseBack();
+              return;
+            }
+            resetBrowseNav();
           }}
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
-          title={selectedSet ? 'กลับรายการชุดข้อสอบ' : 'กลับ'}
-          aria-label={selectedSet ? 'กลับรายการชุดข้อสอบ' : 'กลับ'}
+          className={HEADER_ICON_BTN}
+          title="กลับ"
+          aria-label="กลับ"
         >
-          <HiArrowLeft className="h-5 w-5" />
-        </motion.button>,
+          <HiArrowLeft size={16} />
+        </button>,
         headerMobileBackPortalEl,
       )}
 
-      {isMdOrBelow && headerMobileActionsPortalEl && !selectedSet && createPortal(
-        <div className="pointer-events-auto flex items-center gap-1.5">
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+      {headerMobileActionsPortalEl && createPortal(
+        <div className={cn('pointer-events-auto relative flex lg:hidden', HEADER_ICON_BTN_GROUP)}>
+          <button
             type="button"
             onClick={() => setMobileFilterDrawerOpen(true)}
-            className={cn(
-              'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50',
-              hasActiveFilters && 'border-violet-200 bg-violet-50 text-violet-700',
-            )}
-            title="ค้นหาและตัวกรอง"
-            aria-label="ค้นหาและตัวกรอง"
+            className={HEADER_ICON_BTN}
+            title="ตัวกรอง"
+            aria-label="ตัวกรอง"
           >
-            <HiMagnifyingGlass className="h-5 w-5" />
+            <HiOutlineFunnel size={16} />
             {hasActiveFilters && (
-              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-violet-500" aria-hidden />
+              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-destructive" aria-hidden />
             )}
-          </motion.button>
+          </button>
           {!isStudentView && (
             <div className="relative">
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
+              <button
                 type="button"
                 onClick={() => setMobileActionsMenuOpen((open) => !open)}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+                className={HEADER_ICON_BTN}
                 title="เมนูจัดการ"
                 aria-label="เมนูจัดการ"
                 aria-expanded={mobileActionsMenuOpen}
               >
-                <HiBars3 className="h-5 w-5" />
-              </motion.button>
+                <HiBars3 className="h-4 w-4" />
+              </button>
               {mobileActionsMenuOpen && (
                 <>
                   <button
@@ -509,19 +586,17 @@ export default function QuestionBankManager() {
                     aria-label="ปิดเมนู"
                     onClick={() => setMobileActionsMenuOpen(false)}
                   />
-                  <div className="fixed right-4 top-14 z-[100] w-[min(240px,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                  <div className="fixed right-4 top-14 z-[100] w-[min(240px,calc(100vw-2rem))] rounded-2xl border border-border bg-card p-1.5 shadow-xl">
                     <button
                       type="button"
                       onClick={() => {
                         setMobileActionsMenuOpen(false);
                         openImportSets();
                       }}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-700 transition-colors hover:bg-slate-50"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold text-foreground hover:bg-muted/50"
                     >
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600">
-                        <FileSpreadsheet size={14} />
-                      </span>
-                      <span>นำเข้าชุดข้อสอบ</span>
+                      <FileSpreadsheet size={14} />
+                      นำเข้าชุดข้อสอบ
                     </button>
                     <button
                       type="button"
@@ -529,12 +604,10 @@ export default function QuestionBankManager() {
                         setMobileActionsMenuOpen(false);
                         openCreateSet();
                       }}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-900 transition-colors hover:bg-slate-50"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold text-foreground hover:bg-muted/50"
                     >
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-900 bg-slate-900 text-white">
-                        <Plus size={14} strokeWidth={2.5} />
-                      </span>
-                      <span>เพิ่มชุดข้อสอบ</span>
+                      <Plus size={14} strokeWidth={2.5} />
+                      เพิ่มชุดข้อสอบ
                     </button>
                   </div>
                 </>
@@ -549,7 +622,7 @@ export default function QuestionBankManager() {
         open={mobileFilterDrawerOpen}
         onOpenChange={setMobileFilterDrawerOpen}
         title="ค้นหาและตัวกรอง"
-        description="ค้นหาชื่อชุดข้อสอบ หรือเลือกแผนก/ระดับชั้น"
+        description="ค้นหาชื่อชุดข้อสอบ"
         footer={(
           <ExamFilterShowResultsButton onClick={() => setMobileFilterDrawerOpen(false)} />
         )}
@@ -559,15 +632,15 @@ export default function QuestionBankManager() {
           <div className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3">
             <HiMagnifyingGlass className="h-4 w-4 shrink-0 text-slate-400" />
             <input
-              value={filters.search || ''}
-              onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="ค้นหาชุดข้อสอบ..."
               className="min-w-0 flex-1 border-none bg-transparent text-[12px] font-bold text-slate-800 outline-none placeholder:text-slate-400 font-sukhumvit"
             />
-            {filters.search && (
+            {search && (
               <button
                 type="button"
-                onClick={() => setFilters((prev) => ({ ...prev, search: '' }))}
+                onClick={() => setSearch('')}
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
                 aria-label="ล้างคำค้นหา"
               >
@@ -576,72 +649,6 @@ export default function QuestionBankManager() {
             )}
           </div>
         </div>
-
-        <div>
-          <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">แผนก</p>
-          <div className="grid grid-cols-2 gap-2">
-            {DEPT_OPTIONS.map((opt) => {
-              const isActive = filters.department === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setFilters((prev) => ({
-                    ...prev,
-                    department: opt.id as Department | 'all',
-                    gradeLevel: 'all',
-                  }))}
-                  className={cn(
-                    'rounded-xl border px-3 py-2.5 text-[12px] font-black transition-all font-sukhumvit',
-                    isActive
-                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
-                  )}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {filters.department !== 'all' && (
-          <div>
-            <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">ระดับชั้น</p>
-            <div className="grid grid-cols-4 gap-2">
-              <button
-                type="button"
-                onClick={() => setFilters((prev) => ({ ...prev, gradeLevel: 'all' }))}
-                className={cn(
-                  'rounded-xl border px-2 py-2.5 text-[12px] font-black transition-all font-sukhumvit',
-                  filters.gradeLevel === 'all'
-                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
-                )}
-              >
-                ทั้งหมด
-              </button>
-              {(DEPARTMENT_CONFIG[filters.department as Department]?.grades || []).map((grade) => {
-                const isActive = filters.gradeLevel === grade;
-                return (
-                  <button
-                    key={grade}
-                    type="button"
-                    onClick={() => setFilters((prev) => ({ ...prev, gradeLevel: grade }))}
-                    className={cn(
-                      'rounded-xl border px-2 py-2.5 text-[12px] font-black transition-all font-sukhumvit',
-                      isActive
-                        ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
-                    )}
-                  >
-                    {gradeShortLabel(grade)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {hasActiveFilters && (
           <button
@@ -654,76 +661,258 @@ export default function QuestionBankManager() {
         )}
       </ExamMobileFilterDrawer>
 
-      <div className="w-full min-w-0 flex flex-col h-full gap-4 pb-24">
-        <div className="flex-1 flex gap-4 min-h-0 min-w-0">
-          <motion.section
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15 }}
-            className={`flex-1 flex flex-col min-h-0 min-w-0 w-full ${selectedSet ? 'p-0' : 'p-2'}`}
-          >
-            {!isMdOrBelow && !headerFiltersPortalEl && filterCapsules && (
-              <div className="mb-6">
-                {filterCapsules}
+      <div className="flex min-h-0 flex-1 basis-0 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+        <div
+          className={cn(
+            'flex h-full min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden',
+            sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+            hasRightSelection ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+          )}
+        >
+          <GradeBookClassSidebar
+            selectedDept={filterDepartment}
+            selectedGrade={filterGradeLevel}
+            selectedClassId=""
+            gradeOptions={gradeOptions}
+            classOptions={[]}
+            onSelectDept={handleSelectDept}
+            onSelectGrade={handleSelectGrade}
+            onSelectClass={() => {}}
+            showRooms={false}
+            collapsed={sidebarCollapsed}
+            collapsedExtra={collapsedBrowseRail}
+            headerAction={(
+              <div className={cn('flex', HEADER_ICON_BTN_GROUP)}>
+                {!isStudentView && !sidebarCollapsed && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={openImportSets}
+                      className={HEADER_ICON_BTN}
+                      title="นำเข้าชุดข้อสอบจาก CSV/Excel"
+                      aria-label="นำเข้าชุดข้อสอบจาก CSV/Excel"
+                    >
+                      <FileSpreadsheet size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openCreateSet}
+                      className={HEADER_ICON_BTN}
+                      title="เพิ่มชุดข้อสอบ"
+                      aria-label="เพิ่มชุดข้อสอบ"
+                    >
+                      <Plus size={16} strokeWidth={3} />
+                    </button>
+                  </>
+                )}
+                <SidebarCollapseButton
+                  collapsed={sidebarCollapsed}
+                  onToggle={() => setSidebarCollapsed((v) => !v)}
+                />
               </div>
             )}
+          >
+            {subjectGroupNav}
+          </GradeBookClassSidebar>
+        </div>
 
+        <div
+          className={cn(
+            'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            !hasRightSelection && 'hidden lg:flex',
+          )}
+        >
+          {showRightBrowseNav && (
+            <div className="mb-2 hidden min-h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:flex">
+              <div className={cn('flex shrink-0', HEADER_ICON_BTN_GROUP)}>
+                <button
+                  type="button"
+                  onClick={handleBrowseBack}
+                  disabled={!canBrowseBack}
+                  className={cn(HEADER_ICON_BTN, !canBrowseBack && 'pointer-events-none opacity-30')}
+                  title="ย้อนกลับ"
+                  aria-label="ย้อนกลับ"
+                >
+                  <HiChevronLeft size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBrowseForward}
+                  disabled={!canBrowseForward}
+                  className={cn(HEADER_ICON_BTN, !canBrowseForward && 'pointer-events-none opacity-30')}
+                  title="ไปข้างหน้า"
+                  aria-label="ไปข้างหน้า"
+                >
+                  <HiChevronRight size={16} />
+                </button>
+              </div>
+              {selectedSet && !isStudentView && (
+                <div className="min-w-0 flex-1">
+                  <h3 className="truncate font-sukhumvit text-[15px] font-black leading-tight text-foreground">
+                    {selectedSet.title}
+                  </h3>
+                  {selectedSetCreatorName ? (
+                    <p className="mt-0.5 truncate font-sarabun text-[11px] font-semibold text-muted-foreground">
+                      สร้างโดย {selectedSetCreatorName}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+              {!isStudentView && (
+                selectedSet ? (
+                  <div
+                    ref={setDesktopActionsHost}
+                    className={cn('ml-auto flex shrink-0', HEADER_ICON_BTN_GROUP)}
+                  />
+                ) : browseStep.level === 'sets' ? (
+                  <div className={cn('relative ml-auto flex shrink-0', HEADER_ICON_BTN_GROUP)}>
+                    <button
+                      type="button"
+                      onClick={() => setBrowseAddMenuOpen((open) => !open)}
+                      className={HEADER_ICON_BTN}
+                      title="เพิ่ม / นำเข้าข้อสอบ"
+                      aria-label="เพิ่ม / นำเข้าข้อสอบ"
+                      aria-expanded={browseAddMenuOpen}
+                    >
+                      <Plus size={16} strokeWidth={3} />
+                    </button>
+                    {browseAddMenuOpen && (
+                      <>
+                        <button
+                          type="button"
+                          className="fixed inset-0 z-[90] bg-black/20"
+                          aria-label="ปิดเมนู"
+                          onClick={() => setBrowseAddMenuOpen(false)}
+                        />
+                        <div className="absolute right-0 top-full z-[100] mt-2 w-[min(240px,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                          <button
+                            type="button"
+                            onClick={() => openCreateThenLaunch(null)}
+                            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-900 transition-colors hover:bg-slate-50"
+                          >
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700">
+                              <Plus size={14} strokeWidth={3} />
+                            </span>
+                            <span>เพิ่มชุดข้อสอบ</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openCreateThenLaunch('pdf')}
+                            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-900 transition-colors hover:bg-slate-50"
+                          >
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-600">
+                              <FileText size={14} strokeWidth={2.5} />
+                            </span>
+                            <span>อัปโหลด PDF / ตั้งค่าเฉลย</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openCreateThenLaunch('sheets')}
+                            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            <span
+                              className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200"
+                              style={{ background: 'linear-gradient(135deg, #e8f0fe 0%, #e6f4ea 100%)' }}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 48 48" aria-hidden>
+                                <path d="M10 8h28v32H10z" fill="#34a853" rx="3" />
+                                <rect x="14" y="16" width="20" height="2.5" rx="1.25" fill="white" />
+                                <rect x="14" y="22" width="20" height="2.5" rx="1.25" fill="white" fillOpacity=".8" />
+                              </svg>
+                            </span>
+                            <span>นำเข้า Google Sheets</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBrowseAddMenuOpen(false);
+                              openImportSets();
+                            }}
+                            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-bold font-sukhumvit text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
+                              <FileSpreadsheet size={14} strokeWidth={2.5} />
+                            </span>
+                            <span>นำเข้า CSV/Excel</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : null
+              )}
+            </div>
+          )}
 
-            {isSetLoading ? (
-              <SkeletonList />
-            ) : selectedSet && !isStudentView ? (
+          {isSetLoading ? (
+            <SkeletonList />
+          ) : selectedSet && !isStudentView ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <QuestionSetQuestionManager
                 set={selectedSet}
-                onBack={() => setSelectedSet(null)}
+                onBack={handleBrowseBack}
                 onSetUpdated={setSelectedSet}
                 updateQuestionSet={updateQuestionSet}
+                hideDesktopBack
+                desktopActionsHost={desktopActionsHost}
+                launchAction={setLaunchAction}
+                onLaunchActionConsumed={() => setSetLaunchAction(null)}
               />
-            ) : isSearchActive ? (
+            </div>
+          ) : isSearchActive ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain scrollbar-hide">
               <QuestionSetList
                 sets={visibleSets}
                 isStudentView={isStudentView}
-                onSelect={setSelectedSet}
+                onSelect={openBrowseSet}
                 onEdit={openEditSet}
                 onDelete={handleDeleteSet}
                 onSimulate={setSimulatingSet}
                 onTogglePublished={handleTogglePublished}
               />
-            ) : browseStep.level === 'groups' || browseStep.level === 'subgroups' ? (
-              <>
-                {browseStep.level === 'subgroups' && (
-                  <QuestionBankBrowseHeader step={browseStep} onBack={handleBrowseBack} />
-                )}
-                <QuestionBankBrowseNav
-                  step={browseStep}
-                  sets={baseSets}
-                  onSelectGroup={handleSelectGroup}
-                  onSelectSubGroup={handleSelectSubGroup}
-                />
-              </>
-            ) : (
-              <>
-                <QuestionBankBrowseHeader step={browseStep} onBack={handleBrowseBack} />
-                <QuestionSetList
-                  sets={browseSets}
-                  isStudentView={isStudentView}
-                  emptyTitle="ยังไม่มีชุดข้อสอบในรายการนี้"
-                  emptyHint="ลองเปลี่ยนตัวกรองแผนก/ระดับชั้น หรือเพิ่มชุดข้อสอบใหม่"
-                  onSelect={setSelectedSet}
-                  onEdit={openEditSet}
-                  onDelete={handleDeleteSet}
-                  onSimulate={setSimulatingSet}
-                  onTogglePublished={handleTogglePublished}
-                />
-              </>
-            )}
-          </motion.section>
+            </div>
+          ) : browseStep.level === 'subgroups' ? (
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain scrollbar-hide">
+              <QuestionBankBrowseNav
+                step={browseStep}
+                sets={baseSets}
+                onSelectGroup={handleSelectGroup}
+                onSelectSubGroup={handleSelectSubGroup}
+              />
+            </div>
+          ) : browseStep.level === 'sets' ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain scrollbar-hide">
+              <QuestionSetList
+                sets={browseSets}
+                isStudentView={isStudentView}
+                emptyTitle="ยังไม่มีชุดข้อสอบในรายการนี้"
+                emptyHint="ลองเปลี่ยนตัวกรองแผนก/ระดับชั้น หรือเพิ่มชุดข้อสอบใหม่"
+                onSelect={openBrowseSet}
+                onEdit={openEditSet}
+                onDelete={handleDeleteSet}
+                onSimulate={setSimulatingSet}
+                onTogglePublished={handleTogglePublished}
+              />
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+              <HiOutlineBookOpen className="h-8 w-8 text-muted-foreground/40" />
+              <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
+                {emptyHint}
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
       <QuestionSetBuilder
         key={`qsb-${setModalOpen ? (editingSet?.id ?? `new-${createPrefill?.title ?? ''}`) : 'closed'}`}
         open={setModalOpen}
-        onClose={() => { setSetModalOpen(false); setCreatePrefill(null); }}
+        onClose={() => {
+          setSetModalOpen(false);
+          setCreatePrefill(null);
+          setPendingCreateAction(null);
+        }}
         initial={editingSet}
         prefill={createPrefill}
         existingSets={questionSets}
@@ -749,13 +938,13 @@ export default function QuestionBankManager() {
 
 function SkeletonList() {
   return (
-    <div className="flex-1 space-y-2">
+    <div className="flex-1 space-y-2 p-1">
       {Array.from({ length: 5 }).map((_, i) => (
         <motion.div
           key={i}
           animate={{ opacity: [0.4, 0.8, 0.4] }}
           transition={{ duration: 1.5, repeat: Infinity, delay: i * 0.1 }}
-          className="h-16 rounded-[1.5rem] bg-white/40"
+          className="h-16 rounded-2xl bg-muted/60"
         />
       ))}
     </div>

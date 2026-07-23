@@ -15,6 +15,8 @@ type AttendanceConfig = {
   radiusMeters: number;
   shiftStartHour: number;
   shiftStartMinute: number;
+  shiftEndHour: number;
+  shiftEndMinute: number;
 };
 
 const DEFAULT_CONFIG: AttendanceConfig = {
@@ -23,6 +25,8 @@ const DEFAULT_CONFIG: AttendanceConfig = {
   radiusMeters: 200,
   shiftStartHour: 8,
   shiftStartMinute: 0,
+  shiftEndHour: 16,
+  shiftEndMinute: 30,
 };
 
 type LineAction = "status" | "checkIn" | "checkOut";
@@ -134,7 +138,25 @@ async function loadAttendanceConfig(): Promise<AttendanceConfig> {
       typeof data.shiftStartMinute === "number"
         ? data.shiftStartMinute
         : DEFAULT_CONFIG.shiftStartMinute,
+    shiftEndHour:
+      typeof data.shiftEndHour === "number" ? data.shiftEndHour : DEFAULT_CONFIG.shiftEndHour,
+    shiftEndMinute:
+      typeof data.shiftEndMinute === "number"
+        ? data.shiftEndMinute
+        : DEFAULT_CONFIG.shiftEndMinute,
   };
+}
+
+function isAtOrAfterShiftEnd(now: Date, config: AttendanceConfig): boolean {
+  const { hour, minute } = getBangkokHourMinute(now);
+  return (
+    hour > config.shiftEndHour ||
+    (hour === config.shiftEndHour && minute >= config.shiftEndMinute)
+  );
+}
+
+function formatShiftEndLabel(config: AttendanceConfig): string {
+  return `${String(config.shiftEndHour).padStart(2, "0")}:${String(config.shiftEndMinute).padStart(2, "0")}`;
 }
 
 async function resolveHoliday(todayStr: string): Promise<HolidayInfo> {
@@ -221,6 +243,7 @@ function buildStatusPayload(
   holiday: HolidayInfo,
   entry: EntrySnapshot | null,
   displayName: string,
+  checkoutTimeReached: boolean,
 ) {
   const checkedIn = hasEffectiveCheckIn(entry);
   const checkedOut = !!entry?.checkOutTime;
@@ -238,7 +261,7 @@ function buildStatusPayload(
         }
       : null,
     canCheckIn: !holiday.isHoliday && !checkedIn,
-    canCheckOut: !holiday.isHoliday && checkedIn && !checkedOut,
+    canCheckOut: !holiday.isHoliday && checkedIn && !checkedOut && checkoutTimeReached,
   };
 }
 
@@ -285,6 +308,8 @@ export const lineStaffAttendance = onCall(
 
     const todayStr = getBangkokDateIso();
     const holiday = await resolveHoliday(todayStr);
+    const config = await loadAttendanceConfig();
+    const checkoutTimeReached = isAtOrAfterShiftEnd(new Date(), config);
     const entryRef = db
       .collection("staff_attendance_by_date")
       .doc(todayStr)
@@ -296,7 +321,7 @@ export const lineStaffAttendance = onCall(
     if (action === "status") {
       return {
         linked: true,
-        ...buildStatusPayload(todayStr, holiday, entry, user.displayName),
+        ...buildStatusPayload(todayStr, holiday, entry, user.displayName, checkoutTimeReached),
       };
     }
 
@@ -313,7 +338,7 @@ export const lineStaffAttendance = onCall(
           linked: true,
           success: true,
           alreadyDone: true,
-          ...buildStatusPayload(todayStr, holiday, entry, user.displayName),
+          ...buildStatusPayload(todayStr, holiday, entry, user.displayName, checkoutTimeReached),
         };
       }
 
@@ -323,7 +348,6 @@ export const lineStaffAttendance = onCall(
         throw new HttpsError("invalid-argument", "ต้องเปิด GPS เพื่อเช็คอิน");
       }
 
-      const config = await loadAttendanceConfig();
       const distance = haversineDistance(lat, lng, config.lat, config.lng);
       if (distance > config.radiusMeters) {
         throw new HttpsError(
@@ -373,7 +397,7 @@ export const lineStaffAttendance = onCall(
       return {
         linked: true,
         success: true,
-        ...buildStatusPayload(todayStr, holiday, updatedEntry, user.displayName),
+        ...buildStatusPayload(todayStr, holiday, updatedEntry, user.displayName, checkoutTimeReached),
       };
     }
 
@@ -381,12 +405,18 @@ export const lineStaffAttendance = onCall(
     if (!hasEffectiveCheckIn(entry)) {
       throw new HttpsError("failed-precondition", "ไม่พบเวลาเข้าในระบบ กรุณาเช็คอินก่อนเช็กเอาต์");
     }
+    if (!checkoutTimeReached) {
+      throw new HttpsError(
+        "failed-precondition",
+        `ยังไม่ถึงเวลาเลิกงาน (${formatShiftEndLabel(config)}) ไม่สามารถเช็คเอาต์ได้`,
+      );
+    }
     if (entry?.checkOutTime) {
       return {
         linked: true,
         success: true,
         alreadyDone: true,
-        ...buildStatusPayload(todayStr, holiday, entry, user.displayName),
+        ...buildStatusPayload(todayStr, holiday, entry, user.displayName, checkoutTimeReached),
       };
     }
 
@@ -419,7 +449,7 @@ export const lineStaffAttendance = onCall(
     return {
       linked: true,
       success: true,
-      ...buildStatusPayload(todayStr, holiday, updatedEntry, user.displayName),
+      ...buildStatusPayload(todayStr, holiday, updatedEntry, user.displayName, checkoutTimeReached),
     };
   },
 );

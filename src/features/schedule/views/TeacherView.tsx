@@ -9,9 +9,7 @@ import type { Department, Subject } from '@/types/curriculum';
 
 interface TeacherViewProps {
   selectedTeacherId: string;
-  setSelectedTeacherId: (id: string) => void;
   filterDept: 'all' | 'early' | 'primary' | 'secondary';
-  setFilterDept: (v: 'all' | 'early' | 'primary' | 'secondary') => void;
   isEditMode: boolean;
   grid: Record<number, Record<number, ScheduleEntry[]>>;
   openSlotModal: (day: SchoolDay, period: number, entry?: ScheduleEntry | null) => void;
@@ -31,7 +29,6 @@ interface TeacherViewProps {
     className?: string;
     classId?: string;
   }[];
-  mobileHeaderContent?: React.ReactNode;
   jointClassEntryIds?: Set<string>;
   jointClassPartnersByEntryId?: Map<string, string[]>;
 }
@@ -54,9 +51,7 @@ function avatarColor(name: string): React.CSSProperties {
 
 export function TeacherView({
   selectedTeacherId,
-  setSelectedTeacherId,
   filterDept,
-  setFilterDept,
   isEditMode,
   grid,
   openSlotModal,
@@ -67,7 +62,6 @@ export function TeacherView({
   teachers,
   allClasses,
   draggableSubjects,
-  mobileHeaderContent,
   jointClassEntryIds,
   jointClassPartnersByEntryId,
 }: TeacherViewProps) {
@@ -87,14 +81,11 @@ export function TeacherView({
       }}
       onDropSubject={handleSubjectDrop}
       filterDept={filterDept}
-      setFilterDept={setFilterDept}
       teachers={teachers}
       allClasses={allClasses}
       draggableSubjects={draggableSubjects}
       dragTeacherId={selectedTeacherId}
-      mobileHeaderContent={mobileHeaderContent}
       selectedTeacherId={selectedTeacherId}
-      setSelectedTeacherId={setSelectedTeacherId}
       jointClassEntryIds={jointClassEntryIds}
       jointClassPartnersByEntryId={jointClassPartnersByEntryId}
     />

@@ -1,9 +1,6 @@
-import { useMemo, useState, useRef } from 'react';
+import { useMemo, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { ImagePlus, X, Loader2 } from 'lucide-react';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage } from '@/lib/firebase';
 import {
   Dialog,
   DialogContent,
@@ -20,7 +17,6 @@ import { TYPE_CONFIG, type NewQuestionSet, type QuestionSet } from '@/types/ques
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useAuth } from '@/hooks/useAuth';
 import { previewQuestionSetCode } from '@/features/questionBank/utils/questionSetCode';
-import { safeStorageFilename, imageUploadContentType } from '@/lib/safeStorageFilename';
 
 interface Props {
   open: boolean;
@@ -34,7 +30,6 @@ interface Props {
 type BuilderState = {
   title: string;
   description: string;
-  coverImage: string;
   subjectGroup: SubjectGroupId;
   subSubjectGroup: string;
   department: string;
@@ -47,7 +42,6 @@ const getInitialState = (initial?: QuestionSet | null): BuilderState => {
     return {
       title: '',
       description: '',
-      coverImage: '',
       subjectGroup: 'other',
       subSubjectGroup: '',
       department: '',
@@ -58,7 +52,6 @@ const getInitialState = (initial?: QuestionSet | null): BuilderState => {
   return {
     title: initial.title,
     description: initial.description ?? '',
-    coverImage: initial.coverImage ?? '',
     subjectGroup: initial.subjectGroup,
     subSubjectGroup: initial.subSubjectGroup ?? '',
     department: initial.department ?? '',
@@ -83,16 +76,17 @@ export default function QuestionSetBuilder({ open, onClose, initial, prefill, ex
   const [department, setDepartment] = useState(init.department);
   const [gradeLevel, setGradeLevel] = useState(init.gradeLevel);
   const [questionType, setQuestionType] = useState(init.questionType);
-  const [coverImage, setCoverImage] = useState(init.coverImage);
-  const [isUploading, setIsUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canSubmit = useMemo(() => title.trim().length > 0, [title]);
 
   const creatorDisplayName = useMemo(() => {
     if (isEdit) return initial?.createdByName?.trim() || 'ไม่ระบุ';
-    return userData?.displayName?.trim() || user?.displayName?.trim() || user?.email?.trim() || 'ไม่ระบุ';
-  }, [isEdit, initial?.createdByName, user, userData?.displayName]);
+    return userData?.name?.trim()
+      || userData?.displayName?.trim()
+      || userData?.fullName?.trim()
+      || user?.displayName?.trim()
+      || 'ไม่ระบุ';
+  }, [isEdit, initial?.createdByName, user, userData?.displayName, userData?.name, userData?.fullName]);
 
   const previewSetCode = useMemo(() => {
     if (isEdit && initial?.setCode) return initial.setCode;
@@ -122,7 +116,7 @@ export default function QuestionSetBuilder({ open, onClose, initial, prefill, ex
     await onSubmit({
       title: title.trim(),
       description: description.trim() || undefined,
-      coverImage: coverImage || undefined,
+      coverImage: initial?.coverImage,
       subjectGroup,
       subSubjectGroup: subSubjectGroup || undefined,
       department: department || undefined,
@@ -133,31 +127,6 @@ export default function QuestionSetBuilder({ open, onClose, initial, prefill, ex
       createdByName: initial?.createdByName ?? '',
     });
     onClose();
-  };
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsUploading(true);
-    const storageRef = ref(storage, `question_sets/covers/${safeStorageFilename(file.name)}`);
-    const uploadTask = uploadBytesResumable(storageRef, file, {
-      contentType: imageUploadContentType(file),
-    });
-
-    uploadTask.on(
-      'state_changed',
-      null,
-      (error) => {
-        console.error(error);
-        setIsUploading(false);
-      },
-      async () => {
-        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-        setCoverImage(downloadURL);
-        setIsUploading(false);
-      }
-    );
   };
 
   return (
@@ -181,45 +150,6 @@ export default function QuestionSetBuilder({ open, onClose, initial, prefill, ex
           onSubmit={(e) => { e.preventDefault(); void handleSubmit(); }}
           className="px-5 sm:px-6 pb-6 sm:pb-7 space-y-3 max-h-[80vh] overflow-y-auto custom-scrollbar"
         >
-          {/* Cover Image Upload */}
-          <div className="flex justify-center py-2">
-            <div className="relative group w-full max-w-[320px] aspect-[16/9] rounded-3xl bg-slate-100 border-2 border-dashed border-slate-200 overflow-hidden flex items-center justify-center transition-all hover:border-slate-300">
-              {coverImage ? (
-                <>
-                  <img src={coverImage} alt="Cover" className="w-full h-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => setCoverImage('')}
-                    className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all"
-                  >
-                    <X size={16} />
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex flex-col items-center gap-2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  {isUploading ? (
-                    <Loader2 size={24} className="animate-spin text-indigo-500" />
-                  ) : (
-                    <>
-                      <ImagePlus size={24} />
-                      <span className="text-[10px] font-black uppercase tracking-wider">อัปโหลดหน้าปก</span>
-                    </>
-                  )}
-                </button>
-              )}
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleImageUpload}
-                accept="image/*"
-                className="hidden"
-              />
-            </div>
-          </div>
           {/* รหัสชุดข้อสอบ — แสดงก่อนชื่อชุด */}
           <p className="px-1 font-mono text-sm font-black tracking-wide text-blue-600">
             {previewSetCode}

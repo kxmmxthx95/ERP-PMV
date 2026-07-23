@@ -1,21 +1,57 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
+import { SubjectFolderCard } from '@/components/SubjectFolderCard';
 import { cn } from '@/lib/utils';
+import type { SubjectCategory } from '@/types/curriculum';
 import type { MicroSyllabus } from '@/types/microSyllabus';
-import { countTeachingPlanStats } from '../utils/teachingPlanCalendar';
+import { computeSyllabusPct, type SyllabusProgressContext } from '../utils/teachingPlanCalendar';
+import {
+  DEFAULT_COLOR_ID,
+  loadFolderCardColors,
+  saveFolderCardColors,
+  type FolderCardColorId,
+} from '../utils/folderCardColor';
 
 interface Props {
   syllabi: MicroSyllabus[];
   onSelect?: (syllabus: MicroSyllabus) => void;
+  /** subjectId / code / name → ประเภทวิชา (kept for callers; unused in folder UI) */
+  subjectCategoryByKey?: ReadonlyMap<string, SubjectCategory>;
+  progressCtx: SyllabusProgressContext;
 }
 
-function progressColor(pct: number) {
-  if (pct >= 80) return { bar: '#10b981', badge: 'text-emerald-600', badgeBg: 'bg-emerald-50' };
-  if (pct >= 50) return { bar: '#f59e0b', badge: 'text-amber-600', badgeBg: 'bg-amber-50' };
-  return { bar: '#6366f1', badge: 'text-indigo-600', badgeBg: 'bg-indigo-50' };
+function pctMeta(pct: number) {
+  return (
+    <p
+      className={cn(
+        'pt-0.5 text-[11px] font-black',
+        pct >= 80
+          ? 'text-emerald-600'
+          : pct >= 50
+            ? 'text-amber-500'
+            : pct > 0
+              ? 'text-sky-600'
+              : 'text-rose-500',
+      )}
+    >
+      {pct}%
+    </p>
+  );
 }
 
-export default function AdminProgressView({ syllabi, onSelect }: Props) {
+export default function AdminProgressView({ syllabi, onSelect, progressCtx }: Props) {
+  const [folderColors, setFolderColors] = useState<Record<string, FolderCardColorId>>(() =>
+    loadFolderCardColors(),
+  );
+
+  const setFolderColor = useCallback((key: string, id: FolderCardColorId) => {
+    setFolderColors((prev) => {
+      const next = { ...prev, [key]: id };
+      saveFolderCardColors(next);
+      return next;
+    });
+  }, []);
+
   const byGrade = useMemo(() => {
     const groups: Record<string, MicroSyllabus[]> = {};
     for (const s of syllabi) {
@@ -23,19 +59,17 @@ export default function AdminProgressView({ syllabi, onSelect }: Props) {
       if (!groups[grade]) groups[grade] = [];
       groups[grade].push(s);
     }
-    return Object.entries(groups).sort(([a], [b]) =>
-      a.localeCompare(b, 'th'),
-    );
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b, 'th'));
   }, [syllabi]);
 
   if (syllabi.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 gap-3 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-3xl">
+      <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
+        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-50 text-3xl">
           📊
         </div>
-        <p className="font-black text-slate-700 font-sukhumvit">ยังไม่มีข้อมูลแผนการสอน</p>
-        <p className="text-sm text-slate-400 font-sarabun">ครูผู้สอนกรอกข้อมูลจะแสดงที่นี่</p>
+        <p className="font-sukhumvit font-black text-slate-700">ยังไม่มีข้อมูลแผนการสอน</p>
+        <p className="font-sarabun text-sm text-slate-400">ครูผู้สอนกรอกข้อมูลจะแสดงที่นี่</p>
       </div>
     );
   }
@@ -49,88 +83,30 @@ export default function AdminProgressView({ syllabi, onSelect }: Props) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: gi * 0.06 }}
         >
-          <div className="flex items-center gap-3 mb-4">
-            <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest">
-              {grade}
-            </h3>
-            <div className="flex-1 h-px bg-slate-200" />
-            <span className="text-[10px] font-bold text-slate-400">{items.length} วิชา</span>
+          <div className="mb-4 flex items-center gap-3">
+            <h3 className="text-xs font-black uppercase tracking-widest text-black">{grade}</h3>
+            <div className="h-px flex-1 bg-slate-200" />
+            <span className="text-[10px] font-bold text-black">{items.length} วิชา</span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <div className="grid w-full grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 xl:grid-cols-4">
             {[...items]
-              .sort((a, b) => {
-                const aStats = countTeachingPlanStats(a.topics);
-                const bStats = countTeachingPlanStats(b.topics);
-                const aPct = aStats.planned > 0 ? aStats.completed / aStats.planned : 0;
-                const bPct = bStats.planned > 0 ? bStats.completed / bStats.planned : 0;
-                return aPct - bPct;
-              })
-              .map((s, si) => {
-                const { planned, completed } = countTeachingPlanStats(s.topics);
-                const total = planned > 0 ? planned : s.totalWeeks;
-                const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-                const { bar, badge, badgeBg } = progressColor(pct);
+              .sort((a, b) => computeSyllabusPct(a, progressCtx).pct - computeSyllabusPct(b, progressCtx).pct)
+              .map((s) => {
+                const { pct, total } = computeSyllabusPct(s, progressCtx);
+                const colorKey = `${s.subjectId}|${s.classId}`;
 
                 return (
-                  <motion.div
+                  <SubjectFolderCard
                     key={s.id}
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: gi * 0.06 + si * 0.03 }}
-                    role={onSelect ? 'button' : undefined}
-                    tabIndex={onSelect ? 0 : undefined}
-                    onClick={onSelect ? () => onSelect(s) : undefined}
-                    onKeyDown={onSelect ? (e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        onSelect(s);
-                      }
-                    } : undefined}
-                    className={cn(
-                      'rounded-2xl p-4 bg-white border border-slate-200 shadow-sm',
-                      onSelect && 'cursor-pointer hover:border-indigo-200 hover:shadow-md transition-all',
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-black text-slate-800 leading-tight font-sukhumvit truncate">
-                          {s.subjectName}
-                        </p>
-                        <p className="text-[11px] text-slate-400 font-sarabun mt-0.5 truncate">
-                          {s.className} · {s.teacherName}
-                        </p>
-                      </div>
-                      <div
-                        className={cn(
-                          'shrink-0 px-2.5 py-1 rounded-xl text-[12px] font-black',
-                          badge,
-                          badgeBg,
-                        )}
-                      >
-                        {pct}%
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2.5">
-                      <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <motion.div
-                          initial={{ width: 0 }}
-                          animate={{ width: `${pct}%` }}
-                          transition={{
-                            duration: 0.7,
-                            ease: 'easeOut',
-                            delay: gi * 0.06 + si * 0.03 + 0.15,
-                          }}
-                          className="h-full rounded-full"
-                          style={{ background: bar }}
-                        />
-                      </div>
-                      <span className="text-[10px] font-bold text-slate-400 shrink-0 tabular-nums">
-                        {completed}/{total}
-                      </span>
-                    </div>
-                  </motion.div>
+                    title={s.subjectName}
+                    subtitle={s.className || s.gradeLevel}
+                    meta={pctMeta(pct)}
+                    colorId={folderColors[colorKey] ?? DEFAULT_COLOR_ID}
+                    onColorChange={(id) => setFolderColor(colorKey, id)}
+                    onClick={() => onSelect?.(s)}
+                    showPaper={total > 0}
+                  />
                 );
               })}
           </div>

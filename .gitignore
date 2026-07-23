@@ -27,3 +27,9 @@ dist-ssr
 .env
 .env.*
 src/functions/.env
+
+# Firebase CLI deploy cache
+.firebase
+
+# graphify tool output (regenerated on each run)
+graphify-out

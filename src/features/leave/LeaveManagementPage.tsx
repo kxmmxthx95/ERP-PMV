@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ClipboardList, Plus, Check, X, Clock, FileText,
   ChevronLeft, ChevronRight, Save, AlertCircle, SlidersHorizontal,
-  CheckCircle2, XCircle,
 } from 'lucide-react';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/hooks/useAuth';
@@ -680,31 +679,21 @@ export default function LeaveManagementPage() {
       ];
 
   return (
-    <div className="flex flex-1 flex-col min-h-0 gap-5 pb-28">
+    <div className="flex flex-1 flex-col min-h-0 gap-5 pb-28 px-3 md:px-6">
       <LeavePageTabMenu tabs={tabs} pageTab={pageTab} onTabChange={setPageTab} />
 
-      <AnimatePresence mode="wait">
-        {pageTab === 'my' && (
-          <motion.div key="my" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}>
-            <MyLeavePanel displayName={displayName} photoUrl={photoUrl} uid={uid} requesterType={requesterType} userData={userData} showSubmit={showSubmit} setShowSubmit={setShowSubmit} />
-          </motion.div>
-        )}
-        {pageTab === 'team' && (
-          <motion.div key="team" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
-            <TeamLeavePanel isTeacher={isTeacher} />
-          </motion.div>
-        )}
-        {pageTab === 'report' && isAdmin && (
-          <motion.div key="report" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-            <ReportPanel />
-          </motion.div>
-        )}
-        {pageTab === 'settings' && isAdmin && (
-          <motion.div key="settings" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-            <SettingsPanel activeAcademicYear={activeAcademicYear} activeYear={activeYear} uid={uid} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {pageTab === 'my' && (
+        <MyLeavePanel displayName={displayName} photoUrl={photoUrl} uid={uid} requesterType={requesterType} userData={userData} showSubmit={showSubmit} setShowSubmit={setShowSubmit} />
+      )}
+      {pageTab === 'team' && (
+        <TeamLeavePanel isTeacher={isTeacher} />
+      )}
+      {pageTab === 'report' && isAdmin && (
+        <ReportPanel />
+      )}
+      {pageTab === 'settings' && isAdmin && (
+        <SettingsPanel activeAcademicYear={activeAcademicYear} activeYear={activeYear} uid={uid} />
+      )}
     </div>
   );
 }
@@ -729,22 +718,6 @@ function MyLeavePanel({ displayName, photoUrl, uid, requesterType, userData, sho
     () => sortLeaveRequestsByNewest(myHook.requests),
     [myHook.requests],
   );
-  const [page, setPage] = useState(1);
-
-  const totalPages = Math.max(1, Math.ceil(activeRequests.length / LEAVE_REQUESTS_PER_PAGE));
-
-  useEffect(() => {
-    if (page > totalPages) setPage(1);
-  }, [page, totalPages]);
-
-  const paginatedRequests = useMemo(() => {
-    const start = (page - 1) * LEAVE_REQUESTS_PER_PAGE;
-    return activeRequests.slice(start, start + LEAVE_REQUESTS_PER_PAGE);
-  }, [activeRequests, page]);
-
-  const rangeStart = activeRequests.length === 0 ? 0 : (page - 1) * LEAVE_REQUESTS_PER_PAGE + 1;
-  const rangeEnd = Math.min(page * LEAVE_REQUESTS_PER_PAGE, activeRequests.length);
-
   const [headerActionsPortalEl, setHeaderActionsPortalEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -796,27 +769,16 @@ function MyLeavePanel({ displayName, photoUrl, uid, requesterType, userData, sho
             </p>
           </div>
         ) : (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-2.5">
-              {paginatedRequests.map(req => (
-                <LeaveCard
-                  key={req.id}
-                  req={req}
-                  showApprover={true}
-                  requesterProfile={requesterType === 'student' ? (requesterClassMap.get(uid) ?? null) : null}
-                />
-              ))}
-            </motion.div>
-            <LeaveListPagination
-              page={page}
-              totalPages={totalPages}
-              totalItems={activeRequests.length}
-              rangeStart={rangeStart}
-              rangeEnd={rangeEnd}
-              itemLabel="คำขอ"
-              onPageChange={setPage}
-            />
-          </>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-2.5">
+            {activeRequests.map(req => (
+              <LeaveCard
+                key={req.id}
+                req={req}
+                showApprover={true}
+                requesterProfile={requesterType === 'student' ? (requesterClassMap.get(uid) ?? null) : null}
+              />
+            ))}
+          </motion.div>
         )}
       </div>
 
@@ -842,12 +804,19 @@ function TeamLeavePanelContent({
   isTeacher: boolean;
   requests: LeaveRequest[];
   loading: boolean;
-  updateStatus: (id: string, status: LeaveStatus, note?: string) => Promise<void>;
+  updateStatus: (id: string, status: LeaveStatus, note?: string, approverId?: string, approverName?: string) => Promise<void>;
 }) {
   const { year } = useActiveAcademicYear();
+  const { user, userData } = useAuth();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(isTeacher ? 'pending' : 'all');
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+
+  const requesterIds = useMemo(
+    () => requests.map((r) => r.requesterId).filter(Boolean),
+    [requests],
+  );
+  const requesterClassMap = useLeaveRequesterClassMap(year, requesterIds);
 
   const activeRequests = useMemo(() => {
     const filtered = requests.filter((r) => {
@@ -857,86 +826,60 @@ function TeamLeavePanelContent({
     return sortLeaveRequestsByNewest(filtered);
   }, [requests, statusFilter]);
 
-  const requesterIds = useMemo(
-    () => activeRequests.map((r) => r.requesterId).filter(Boolean),
-    [activeRequests],
-  );
-  const requesterClassMap = useLeaveRequesterClassMap(year, requesterIds);
-
-  const totalPages = Math.max(1, Math.ceil(activeRequests.length / LEAVE_REQUESTS_PER_PAGE));
-
   useEffect(() => {
     setPage(1);
   }, [statusFilter]);
 
-  useEffect(() => {
-    if (page > totalPages) setPage(1);
-  }, [page, totalPages]);
+  const totalPages = Math.max(1, Math.ceil(activeRequests.length / LEAVE_REQUESTS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const rangeStart = activeRequests.length === 0 ? 0 : (currentPage - 1) * LEAVE_REQUESTS_PER_PAGE + 1;
+  const rangeEnd = Math.min(currentPage * LEAVE_REQUESTS_PER_PAGE, activeRequests.length);
+  const paginatedRequests = useMemo(
+    () => activeRequests.slice((currentPage - 1) * LEAVE_REQUESTS_PER_PAGE, currentPage * LEAVE_REQUESTS_PER_PAGE),
+    [activeRequests, currentPage],
+  );
 
-  const paginatedRequests = useMemo(() => {
-    const start = (page - 1) * LEAVE_REQUESTS_PER_PAGE;
-    return activeRequests.slice(start, start + LEAVE_REQUESTS_PER_PAGE);
-  }, [activeRequests, page]);
-
-  const rangeStart = activeRequests.length === 0 ? 0 : (page - 1) * LEAVE_REQUESTS_PER_PAGE + 1;
-  const rangeEnd = Math.min(page * LEAVE_REQUESTS_PER_PAGE, activeRequests.length);
-
-  const totalCount = requests.length;
-  const approvedCount = requests.filter(r => r.status === 'approved').length;
-  const pendingCount = requests.filter(r => r.status === 'pending').length;
-  const rejectedCount = requests.filter(r => r.status === 'rejected').length;
+  const currentApproverName = userData?.name || userData?.displayName || userData?.fullName || userData?.email || user?.displayName || 'ผู้ใช้';
+  const currentApproverId = user?.uid || '';
 
   const handleApprove = async (id: string) => {
-    await updateStatus(id, 'approved');
+    await updateStatus(id, 'approved', undefined, currentApproverId, currentApproverName);
   };
 
   const handleRejectConfirm = async (id: string, note: string) => {
-    await updateStatus(id, 'rejected', note);
+    await updateStatus(id, 'rejected', note, currentApproverId, currentApproverName);
   };
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Stat Cards */}
-      <div className="grid grid-cols-4 gap-2 md:gap-3">
+      {/* Status Filter Tabs */}
+      <div className="flex items-center gap-1 rounded-xl bg-slate-100/60 p-1 w-fit border border-slate-200/40">
         {[
-          { label: 'คำขอทั้งหมด', value: totalCount, icon: ClipboardList, color: 'text-slate-600', status: 'all' as StatusFilter },
-          { label: 'อนุมัติ', value: approvedCount, icon: CheckCircle2, color: 'text-emerald-600', status: 'approved' as StatusFilter },
-          { label: 'รอพิจารณา', value: pendingCount, icon: Clock, color: 'text-amber-600', status: 'pending' as StatusFilter },
-          { label: 'ไม่อนุมัติ', value: rejectedCount, icon: XCircle, color: 'text-rose-600', status: 'rejected' as StatusFilter },
-        ].map((item) => {
-          const isActive = statusFilter === item.status;
+          { value: 'all' as StatusFilter, label: 'ทั้งหมด' },
+          { value: 'pending' as StatusFilter, label: 'รอพิจารณา' },
+          { value: 'approved' as StatusFilter, label: 'อนุมัติแล้ว' },
+          { value: 'rejected' as StatusFilter, label: 'ไม่อนุมัติ' },
+        ].map((opt) => {
+          const isActive = statusFilter === opt.value;
           return (
             <button
-              key={item.label}
-              onClick={() => setStatusFilter(item.status)}
+              key={opt.value}
+              type="button"
+              onClick={() => setStatusFilter(opt.value)}
               className={cn(
-                'group relative flex min-w-0 flex-col items-center rounded-xl border-2 p-2.5 text-center transition-all sm:rounded-2xl sm:p-5',
+                'whitespace-nowrap rounded-lg px-3.5 py-1 text-[11px] font-black transition-all font-sukhumvit',
                 isActive
-                  ? 'border-blue-200 bg-white shadow-lg shadow-blue-500/5 ring-2 ring-blue-50/50 sm:ring-4'
-                  : 'border-slate-50 bg-white/50 hover:border-slate-200 hover:bg-white',
+                  ? 'bg-white text-slate-800 shadow-xs border border-slate-200/10'
+                  : 'text-slate-500 hover:text-slate-800',
               )}
             >
-              <div
-                className={cn(
-                  'mb-1.5 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white shadow-sm ring-1 transition-transform group-hover:scale-110 sm:mb-3 sm:h-10 sm:w-10 sm:rounded-2xl',
-                  isActive ? 'ring-blue-100' : 'ring-slate-100',
-                  item.color,
-                )}
-              >
-                <item.icon className="h-4 w-4 sm:h-[18px] sm:w-[18px]" strokeWidth={2.5} />
-              </div>
-              <p className="truncate text-[8px] font-black uppercase tracking-wide text-slate-400 sm:text-[10px] sm:tracking-widest">
-                {item.label}
-              </p>
-              <p className={cn('mt-0.5 text-lg font-black tabular-nums sm:mt-1 sm:text-2xl', item.color)}>
-                {item.value}
-              </p>
+              {opt.label}
             </button>
           );
         })}
       </div>
 
-      <div className="flex w-full flex-col gap-3 min-h-0">
+      <div className="flex w-full flex-col gap-3 min-h-0 overflow-hidden">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
             <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
@@ -954,20 +897,110 @@ function TeamLeavePanelContent({
           </div>
         ) : (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-2.5">
-              {paginatedRequests.map(req => (
-                <LeaveCard
+            {/* Mobile: cards */}
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-2.5 md:hidden">
+              {paginatedRequests.map((req, i) => (
+                <motion.div
                   key={req.id}
-                  req={req}
-                  showRequester={true}
-                  requesterProfile={requesterClassMap.get(req.requesterId) ?? null}
-                  onApprove={handleApprove}
-                  onReject={id => setRejectTarget(id)}
-                />
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.02 }}
+                >
+                  <LeaveCard
+                    req={req}
+                    showRequester={true}
+                    requesterProfile={requesterClassMap.get(req.requesterId) ?? null}
+                    onApprove={handleApprove}
+                    onReject={id => setRejectTarget(id)}
+                  />
+                </motion.div>
               ))}
             </motion.div>
+
+            {/* Desktop: table */}
+            <div className="hidden md:flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card">
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }} className="gap-3 border-b border-border bg-background px-4 py-3">
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ผู้ยื่นคำขอ</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ประเภท</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">วันที่ลา</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">สถานะ</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">การดำเนินการ</p>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {paginatedRequests.map((req, i) => {
+                  const statusCfg = STATUS_CONFIG[req.status];
+                  const days = countDays(req.startDate, req.endDate);
+                  return (
+                    <motion.div
+                      key={req.id}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ delay: i * 0.015 }}
+                      style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }}
+                      className="gap-3 border-b border-border px-4 py-3 items-center hover:bg-muted/40 transition-colors last:border-b-0"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-bold text-foreground font-sukhumvit truncate">
+                          {req.requesterName || '—'}
+                        </p>
+                        {req.requesterStudentCode && (
+                          <p className="text-[11px] font-medium text-blue-600 tabular-nums mt-0.5">
+                            รหัส {req.requesterStudentCode}
+                          </p>
+                        )}
+                      </div>
+                      <p className="text-[13px] font-bold text-foreground font-sukhumvit">
+                        {LEAVE_TYPE_LABEL[req.leaveType]}
+                      </p>
+                      <div>
+                        <p className="text-[13px] font-bold text-foreground font-sukhumvit">
+                          {formatLeaveDateCompact(req.startDate, req.endDate)}
+                        </p>
+                        <p className="text-[11px] font-semibold text-muted-foreground mt-0.5">
+                          {days} วัน
+                        </p>
+                      </div>
+                      <div>
+                        <span className={cn(
+                          'inline-flex min-w-[80px] items-center justify-center rounded-lg px-2 py-0.5 text-[11px] font-black',
+                          statusCfg.bg,
+                          statusCfg.text,
+                        )}>
+                          {statusCfg.label}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {req.status === 'pending' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={async () => { await handleApprove(req.id); }}
+                              className="inline-flex h-7 items-center justify-center rounded-lg bg-emerald-50 px-2 text-[10px] font-black text-emerald-700 transition-all hover:bg-emerald-100"
+                              title="อนุมัติ"
+                            >
+                              อนุมัติ
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRejectTarget(req.id)}
+                              className="inline-flex h-7 items-center justify-center rounded-lg bg-rose-50 px-2 text-[10px] font-black text-rose-700 transition-all hover:bg-rose-100"
+                              title="ปฏิเสธ"
+                            >
+                              ปฏิเสธ
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-slate-300 font-bold text-[13px] pl-4">—</span>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </div>
+
             <LeaveListPagination
-              page={page}
+              page={currentPage}
               totalPages={totalPages}
               totalItems={activeRequests.length}
               rangeStart={rangeStart}
@@ -992,36 +1025,21 @@ function TeamLeavePanelContent({
   );
 }
 
-function TeacherTeamLeavePanel() {
-  const { activeYear } = useActiveAcademicYear();
-  const sinceDate = activeYear?.startDate || defaultAcademicYearStart();
-  const { requests, loading, updateStatus } = useStudentLeaveRequests(sinceDate);
-  return (
-    <TeamLeavePanelContent
-      isTeacher
-      requests={requests}
-      loading={loading}
-      updateStatus={updateStatus}
-    />
-  );
-}
-
-function AdminTeamLeavePanel() {
-  const { activeYear } = useActiveAcademicYear();
-  const sinceDate = activeYear?.startDate || defaultAcademicYearStart();
-  const { requests, loading, updateStatus } = useLeaveRequestsSince(sinceDate);
-  return (
-    <TeamLeavePanelContent
-      isTeacher={false}
-      requests={requests}
-      loading={loading}
-      updateStatus={updateStatus}
-    />
-  );
-}
-
 function TeamLeavePanel({ isTeacher }: { isTeacher: boolean }) {
-  return isTeacher ? <TeacherTeamLeavePanel /> : <AdminTeamLeavePanel />;
+  const { activeYear } = useActiveAcademicYear();
+  const sinceDate = activeYear?.startDate || defaultAcademicYearStart();
+  const { requests, loading, updateStatus } = isTeacher
+    ? useStudentLeaveRequests(sinceDate)
+    : useLeaveRequestsSince(sinceDate);
+
+  return (
+    <TeamLeavePanelContent
+      isTeacher={isTeacher}
+      requests={requests}
+      loading={loading}
+      updateStatus={updateStatus}
+    />
+  );
 }
 
 // ── Report Panel ─────────────────────────────────────────────────────────────

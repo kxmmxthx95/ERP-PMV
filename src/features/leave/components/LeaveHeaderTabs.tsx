@@ -35,7 +35,7 @@ export default function LeaveHeaderTabs() {
           <button
             key={tab.id}
             onClick={() => navigate(tab.path)}
-            className={`relative flex items-center justify-center h-full px-5 rounded-full text-[10.5px] font-black transition-colors z-10 ${
+            className={`relative flex items-center justify-center h-full px-5 rounded-full text-[10.5px] font-black z-10 ${
               isActive ? 'text-white' : 'text-black/35 hover:text-black/60'
             }`}
           >
@@ -43,7 +43,7 @@ export default function LeaveHeaderTabs() {
               <motion.div
                 layoutId="activeTabCapsule"
                 className="absolute inset-0 bg-blue-600 rounded-full shadow-sm"
-                transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
+                transition={{ duration: 0 }}
               />
             )}
             <span className="relative z-20">{tab.label}</span>

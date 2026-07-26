@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import {
   HiBookOpen, HiAdjustmentsHorizontal, HiClipboardDocumentList, HiCalendarDays,
-  HiBars3, HiOutlineFunnel, HiChevronRight, HiMagnifyingGlass, HiXMark, HiArrowLeft,
+  HiBars3, HiOutlineFunnel, HiChevronRight, HiArrowLeft,
   HiAcademicCap,
 } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
@@ -70,12 +70,13 @@ import {
 } from '@/lib/students/studentIdentity';
 import { attemptScorePercent, getBestPercentByStudent } from '@/lib/exam/examRoomScoring';
 import { resolveAttemptTotalScore } from '@/lib/exam/manualEssayGrading';
+import { PORTAL_MENU_TITLES } from '@/lib/portalMenu';
 import type { Exam, ExamScore, ExamType } from '@/types/teaching';
 import type { ExamRoom, ExamAttempt } from '@/types/exam';
 
 type Tab = 'table' | 'config' | 'exams' | 'attendance';
 
-const GRADE_BOOK_FEATURE_TITLE = 'สมุดคะแนน';
+const GRADE_BOOK_FEATURE_TITLE = PORTAL_MENU_TITLES['/portal/grades'];
 
 const GRADE_BOOK_MENU = {
   label: GRADE_BOOK_FEATURE_TITLE,
@@ -250,11 +251,12 @@ export default function GradeBookPage() {
     () => true,
   );
 
-  // Same browse split as แผนการสอน: teacher (or admin linked as teacher) → folder grid;
-  // pure admin/sysadmin → class sidebar.
+  // showPersonalSubjectFolders scopes class/subject data to the teacher's own assignments
+  // (teacher, or admin linked as teacher). Sidebar UI itself is shared with pure admin/sysadmin.
   const showPersonalSubjectFolders =
     role === 'teacher' || teachingMgr.currentTeacher != null;
-  const showAdminClassBrowser = canViewAllSubjects && !showPersonalSubjectFolders;
+  // Sidebar (dept → grade → room) drives class selection for everyone, admin and teacher alike.
+  const showAdminClassBrowser = canViewAllSubjects || showPersonalSubjectFolders;
 
   const [filterDepartment, setFilterDepartment] = useState<string>('');
   const [filterGradeLevel, setFilterGradeLevel] = useState<string>('');
@@ -291,7 +293,6 @@ export default function GradeBookPage() {
   const [breadcrumbPageEl, setBreadcrumbPageEl] = useState<HTMLElement | null>(null);
   const [mobileTabMenuOpen, setMobileTabMenuOpen] = useState(false);
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
-  const [subjectSearchQuery, setSubjectSearchQuery] = useState('');
   const [folderColors, setFolderColors] = useState<Record<string, FolderCardColorId>>(() =>
     loadFolderCardColors(GRADE_BOOK_FOLDER_COLOR_KEY),
   );
@@ -300,8 +301,7 @@ export default function GradeBookPage() {
     setSelectedSubjectId('');
     setSelectedExamId('');
     setSelectedOnlineRoomId('');
-    if (showPersonalSubjectFolders) setSelectedClassId('');
-  }, [showPersonalSubjectFolders]);
+  }, []);
 
   // Personal folders: header back steps out of subject view → subject grid.
   // Admin class browser: portal back goes to menu (sidebar handles class nav).
@@ -526,65 +526,6 @@ export default function GradeBookPage() {
     : selectedSubject
       ? selectedSubject.name
       : null;
-
-  // For teacher role: one card per (class, subject) teaching assignment
-  const myTeachingCards = useMemo(() => {
-    if (!showPersonalSubjectFolders) return [];
-    const cards: Array<{
-      classId: string;
-      className: string;
-      gradeLevel: string;
-      departmentId: string;
-      subjectId: string;
-      subjectName: string;
-      subjectCode: string;
-      credits: number;
-      category: string;
-      studentCount: number;
-    }> = [];
-    const seenKeys = new Set<string>();
-    for (const cls of availableClasses) {
-      for (const ec of (cls.enrolledCourses ?? [])) {
-        if (!matchesTeacherIdentity(ec.teacherId, teachingMgr.teacherIdentityKeys)) continue;
-        if (ec.semester != null && ec.semester !== selectedSemester) continue;
-        const subject = subjectById.get(ec.subjectId);
-        if (!subject) continue;
-        const key = `${cls.id}_${ec.subjectId}`;
-        if (seenKeys.has(key)) continue;
-        seenKeys.add(key);
-        cards.push({
-          classId: cls.id,
-          className: cls.className,
-          gradeLevel: cls.gradeLevel ?? '',
-          departmentId: cls.departmentId ?? '',
-          subjectId: ec.subjectId,
-          subjectName: subject.name,
-          subjectCode: subject.code ?? '',
-          credits: subject.credits,
-          category: subject.category,
-          studentCount: teachingMgr.getStudentsForClass(cls.id).length,
-        });
-      }
-    }
-    return cards.sort((a, b) => {
-      const ga = GRADE_LEVEL_ORDER[a.gradeLevel] ?? 99;
-      const gb = GRADE_LEVEL_ORDER[b.gradeLevel] ?? 99;
-      if (ga !== gb) return ga - gb;
-      if (a.className !== b.className) return a.className.localeCompare(b.className, 'th');
-      return a.subjectCode.localeCompare(b.subjectCode);
-    });
-  }, [availableClasses, teachingMgr, showPersonalSubjectFolders, selectedSemester, subjectById]);
-
-  const filteredTeachingCards = useMemo(() => {
-    const q = subjectSearchQuery.trim().toLowerCase();
-    if (!q) return myTeachingCards;
-    return myTeachingCards.filter((card) =>
-      card.subjectName.toLowerCase().includes(q)
-      || card.className.toLowerCase().includes(q)
-      || card.subjectCode.toLowerCase().includes(q)
-      || card.gradeLevel.toLowerCase().includes(q),
-    );
-  }, [myTeachingCards, subjectSearchQuery]);
 
   const selectedExam = useMemo(
     () => subjectExams.find(ex => ex.id === selectedExamId) ?? null,
@@ -1099,13 +1040,10 @@ export default function GradeBookPage() {
       onRangeChange={setAttendanceDateRange}
     />
   ) : null;
-  const showTeacherSemesterFilter = showPersonalSubjectFolders && !selectedSubjectId;
   const showClassFilterButton = showAdminClassBrowser && !selectedSubjectId;
-  const showFilterButton = showClassFilterButton || showTeacherSemesterFilter;
+  const showFilterButton = showClassFilterButton;
   const defaultSemester = (activeSemester as 1 | 2) ?? 1;
-  const hasActiveFilters = showClassFilterButton
-    ? selectedSemester !== defaultSemester
-    : selectedSemester !== defaultSemester || subjectSearchQuery.trim().length > 0;
+  const hasActiveFilters = selectedSemester !== defaultSemester;
 
   const openFilterDrawer = () => {
     setFilterDrawerOpen(true);
@@ -1288,11 +1226,7 @@ export default function GradeBookPage() {
           onOpenChange={setFilterDrawerOpen}
           direction="right"
           title="ตัวกรองภาคเรียน"
-          description={
-            showTeacherSemesterFilter
-              ? 'เลือกภาคเรียน หรือค้นหาชื่อวิชา/ห้องเรียน'
-              : 'เลือกภาคเรียน'
-          }
+          description="เลือกภาคเรียน"
           footer={<ExamFilterShowResultsButton onClick={() => setFilterDrawerOpen(false)} />}
         >
           <div className="space-y-4">
@@ -1312,32 +1246,6 @@ export default function GradeBookPage() {
                 ))}
               </div>
             </div>
-
-            {showTeacherSemesterFilter && (
-              <div>
-                <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-muted-foreground">ค้นหา</p>
-                <div className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3">
-                  <HiMagnifyingGlass className="h-4 w-4 shrink-0 text-slate-400" />
-                  <input
-                    value={subjectSearchQuery}
-                    onChange={(e) => setSubjectSearchQuery(e.target.value)}
-                    placeholder="ค้นหาวิชา ห้อง หรือรหัสวิชา..."
-                    className="min-w-0 flex-1 border-none bg-transparent font-sukhumvit text-[12px] font-bold text-slate-800 outline-none placeholder:text-slate-400"
-                  />
-                  {subjectSearchQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setSubjectSearchQuery('')}
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
-                      aria-label="ล้างคำค้นหา"
-                    >
-                      <HiXMark className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
           </div>
         </ExamMobileFilterDrawer>
       )}
@@ -1389,7 +1297,8 @@ export default function GradeBookPage() {
         <div
           className={cn(
             'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden',
-            showAdminClassBrowser && 'rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            showAdminClassBrowser && 'px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            showAdminClassBrowser && selectedSubjectId && 'rounded-2xl border border-border bg-card',
             showAdminClassBrowser && !selectedClassId && 'hidden lg:flex',
           )}
         >
@@ -1397,20 +1306,30 @@ export default function GradeBookPage() {
             <motion.div
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
-              className="hidden shrink-0 flex-col gap-3 pb-3 md:flex"
+              className="mb-2 hidden min-h-[3.25rem] w-full shrink-0 items-center justify-between gap-2 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:flex"
             >
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex gap-1 rounded-2xl bg-muted/80 p-1">
+              <div className="flex flex-wrap items-center gap-2 w-full">
+                <button
+                  type="button"
+                  onClick={handleBackFromSubject}
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/70 bg-white text-slate-600 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:bg-slate-50 active:scale-95 cursor-pointer mr-1.5"
+                  title="กลับไปหน้าวิชา"
+                  aria-label="กลับไปหน้าวิชา"
+                >
+                  <ArrowLeft size={13} strokeWidth={2.5} />
+                </button>
+
+                <div className="flex gap-1 rounded-xl bg-slate-100 p-0.5 border border-slate-200/50 shadow-[inset_0_1px_2px_rgba(0,0,0,0.02)]">
                   {(Object.entries(GRADE_BOOK_TAB_CONFIG) as [Tab, typeof GRADE_BOOK_TAB_CONFIG[Tab]][]).map(([key, cfg]) => (
                     <button
                       key={key}
                       type="button"
                       onClick={() => setActiveTab(key)}
                       className={cn(
-                        'rounded-xl px-3 py-1.5 text-[11px] font-bold font-sukhumvit transition-all',
+                        'rounded-lg px-3.5 py-1.5 text-[11px] font-black font-sukhumvit transition-all duration-200 cursor-pointer',
                         activeTab === key
-                          ? 'bg-foreground text-background shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground',
+                          ? 'bg-[#1e1e24] text-white shadow-sm font-black'
+                          : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/30',
                       )}
                     >
                       {cfg.label}
@@ -1471,64 +1390,7 @@ export default function GradeBookPage() {
           </div>
         )}
 
-        {/* ── Teacher / personal: subject folder grid (like แผนการสอน) ── */}
-        {showPersonalSubjectFolders && !selectedSubjectId ? (
-          isSubjectGridLoading ? (
-            <SubjectFolderCardsGridSkeleton count={9} />
-          ) : myTeachingCards.length === 0 ? (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center justify-center gap-4 py-20"
-            >
-              <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-muted">
-                <GraduationCap size={28} className="text-muted-foreground/50" />
-              </div>
-              <div className="text-center">
-                <p className="font-black text-foreground font-sukhumvit">ยังไม่มีรายวิชาที่ได้รับมอบหมาย</p>
-                <p className="mt-1 text-sm text-muted-foreground font-sarabun">
-                  สำหรับภาคเรียนที่ {selectedSemester} — ระบบดึงจากวิชาที่มอบหมายในตารางสอน
-                </p>
-              </div>
-            </motion.div>
-          ) : filteredTeachingCards.length === 0 ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2">
-              <GraduationCap size={28} className="text-muted-foreground/40" />
-              <p className="text-[13px] text-muted-foreground font-sarabun">
-                {`ไม่พบรายวิชาที่ตรงกับ "${subjectSearchQuery.trim()}"`}
-              </p>
-            </div>
-          ) : (
-            <div
-              className="grid w-full grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 xl:grid-cols-4"
-            >
-              {filteredTeachingCards.map(card => {
-                const key = `${card.classId}|${card.subjectId}`;
-                return (
-                  <SubjectFolderCard
-                    key={key}
-                    title={card.subjectName}
-                    subtitle={card.className}
-                    meta={
-                      <p className="pt-0.5 text-[11px] font-black text-muted-foreground">
-                        {card.studentCount} คน
-                      </p>
-                    }
-                    colorId={folderColors[key] ?? DEFAULT_COLOR_ID}
-                    onColorChange={(id) => setFolderColor(key, id)}
-                    onClick={() => {
-                      setSelectedClassId(card.classId);
-                      setSelectedSubjectId(card.subjectId);
-                      setSelectedExamId('');
-                      setSelectedOnlineRoomId('');
-                    }}
-                    showPaper={card.studentCount > 0}
-                  />
-                );
-              })}
-            </div>
-          )
-        ) : showAdminClassBrowser && !selectedClassId ? (
+        {showAdminClassBrowser && !selectedClassId ? (
           <div className="flex min-h-full w-full flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center">
             <HiAcademicCap className="h-8 w-8 text-muted-foreground/40" />
             <p className="text-[13px] font-black text-muted-foreground font-sukhumvit">

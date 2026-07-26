@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     HiCheckCircle, HiExclamationCircle,
-    HiArrowPath, HiXMark, HiLink, HiPlus, HiArrowUpTray, HiChevronDown, HiChevronRight,
+    HiArrowPath, HiXMark, HiLink, HiPlus, HiArrowUpTray, HiChevronRight,
     HiArrowRight
 } from 'react-icons/hi2';
 import { loadXlsx } from '@/lib/lazyXlsx';
@@ -10,6 +10,7 @@ import { collection, doc, writeBatch, query, where, getDocs } from 'firebase/fir
 import { db } from '@/lib/firebase';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 import StudentGoogleSheetModal from './StudentGoogleSheetModal';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface ParsedStudent {
     id: string;
@@ -42,20 +43,16 @@ function CapsuleSelect({
     disabled?: boolean;
 }) {
     return (
-        <div className="relative flex items-center">
-            <select
-                value={value}
-                disabled={disabled}
-                onChange={e => onChange(e.target.value)}
-                className="appearance-none pl-3.5 pr-7 h-8 bg-transparent text-[11px] font-bold text-slate-800 outline-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-                {placeholder && <option value="">{placeholder}</option>}
+        <Select value={value} onValueChange={onChange} disabled={disabled}>
+            <SelectTrigger className="h-8 border-none bg-transparent px-3.5 text-[11px] font-bold text-slate-800 shadow-none">
+                <SelectValue placeholder={placeholder} />
+            </SelectTrigger>
+            <SelectContent>
                 {options.map(o => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                 ))}
-            </select>
-            <HiChevronDown size={10} className={`absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none ${disabled ? 'opacity-30' : 'text-slate-400'}`} />
-        </div>
+            </SelectContent>
+        </Select>
     );
 }
 
@@ -406,17 +403,22 @@ export default function StudentImportTab() {
                                                                     className={`w-full bg-white border ${!student.studentCode ? 'border-rose-300' : 'border-slate-200'} rounded-lg px-2 py-1 text-[11px] font-mono text-slate-800 outline-none focus:border-blue-400`}
                                                                 />
                                                                 <div className="flex gap-1.5 min-w-0">
-                                                                    <select
+                                                                    <Select
                                                                         value={student.prefix}
-                                                                        onChange={e => handleStudentChange(student.id, 'prefix', e.target.value)}
-                                                                        className={`bg-white border ${!student.prefix ? 'border-rose-300' : 'border-slate-200'} rounded-lg px-1.5 py-1 text-[10px] text-slate-800 outline-none w-[72px] shrink-0 appearance-none cursor-pointer`}
+                                                                        onValueChange={v => handleStudentChange(student.id, 'prefix', v)}
                                                                     >
-                                                                        <option value="">คำนำหน้า</option>
-                                                                        <option value="เด็กชาย">เด็กชาย</option>
-                                                                        <option value="เด็กหญิง">เด็กหญิง</option>
-                                                                        <option value="นาย">นาย</option>
-                                                                        <option value="นางสาว">นางสาว</option>
-                                                                    </select>
+                                                                        <SelectTrigger
+                                                                            className={`h-auto w-[72px] shrink-0 bg-white border ${!student.prefix ? 'border-rose-300' : 'border-slate-200'} rounded-lg px-1.5 py-1 text-[10px] text-slate-800 shadow-none`}
+                                                                        >
+                                                                            <SelectValue placeholder="คำนำหน้า" />
+                                                                        </SelectTrigger>
+                                                                        <SelectContent>
+                                                                            <SelectItem value="เด็กชาย">เด็กชาย</SelectItem>
+                                                                            <SelectItem value="เด็กหญิง">เด็กหญิง</SelectItem>
+                                                                            <SelectItem value="นาย">นาย</SelectItem>
+                                                                            <SelectItem value="นางสาว">นางสาว</SelectItem>
+                                                                        </SelectContent>
+                                                                    </Select>
                                                                     <input value={student.firstName} onChange={e => handleStudentChange(student.id, 'firstName', e.target.value)} placeholder="ชื่อ" className={`flex-1 bg-white border ${!student.firstName ? 'border-rose-300' : 'border-slate-200'} rounded-lg px-2 py-1 text-[11px] text-slate-800 outline-none min-w-0`} />
                                                                     <input value={student.lastName} onChange={e => handleStudentChange(student.id, 'lastName', e.target.value)} placeholder="นามสกุล" className={`flex-1 bg-white border ${!student.lastName ? 'border-rose-300' : 'border-slate-200'} rounded-lg px-2 py-1 text-[11px] text-slate-800 outline-none min-w-0`} />
                                                                 </div>

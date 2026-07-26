@@ -151,7 +151,6 @@ export function useCurriculumVersioned() {
 
   const toggleAllowEdit = useCallback(async (id: string, allow: boolean) => {
     await updateDoc(doc(db, 'curriculums', id), { allowEdit: allow });
-    toast.success(allow ? 'เปิดโหมดแก้ไขแล้ว' : 'ปิดโหมดแก้ไขแล้ว');
   }, []);
 
   // ── Course CRUD (sub-collection) ──────────────────────────────────────────

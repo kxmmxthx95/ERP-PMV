@@ -27,7 +27,6 @@ const RolePermissionManager = lazy(() => import('@/features/roles/RolePermission
 const SettingsPage = lazy(() => import('@/features/settings/SettingsPage'));
 const CourseMigrationTool = lazy(() => import('@/features/settings/CourseMigrationTool'));
 const ExamLayout = lazy(() => import('@/features/exam/ExamLayout'));
-const ExamDashboardPage = lazy(() => import('@/features/exam/ExamDashboardPage'));
 const ExamManager = lazy(() => import('@/features/exam/ExamManager'));
 const StudentExamPage = lazy(() => import('@/features/exam/StudentExamPage'));
 const QuestionBankManager = lazy(() => import('@/features/questionBank/QuestionBankManager'));
@@ -49,9 +48,7 @@ const GradeBookPage = lazy(() => import('@/features/grades/GradeBookPage'));
 const StudentAnalyticsPage = lazy(() => import('@/features/studentAnalytics/StudentAnalyticsPage'));
 const LineConnectPage = lazy(() => import('@/features/profile/LineConnectPage'));
 const LineCheckInPage = lazy(() => import('@/features/lineCheckIn/LineCheckInPage'));
-const MorningRollCallLayout = lazy(() => import('@/features/attendance/MorningRollCallLayout'));
 const MorningRollCallPage = lazy(() => import('@/features/attendance/MorningRollCallPage'));
-const MorningRollCallDashboardPage = lazy(() => import('@/features/attendance/MorningRollCallDashboardPage'));
 const FuturePlanPage = lazy(() => import('@/features/futurePlan/FuturePlanPage'));
 const WordGamePage = lazy(() => import('@/features/wordGame/WordGamePage'));
 const AiAgentCommandPage = lazy(() => import('@/features/aiAgents/AiAgentCommandPage'));
@@ -195,7 +192,7 @@ export default function App() {
               </PermissionGate>
             }>
               <Route path="rooms" element={<ExamManager />} />
-              <Route index element={<ExamDashboardPage />} />
+              <Route index element={<Navigate to="rooms" replace />} />
             </Route>
             <Route path="question-bank" element={
               <PermissionGate featureKey="questionBank">
@@ -244,13 +241,9 @@ export default function App() {
             } />
             <Route path="morning-rollcall" element={
               <PermissionGate featureKey="morningRollCall">
-                <MorningRollCallLayout />
+                <MorningRollCallPage />
               </PermissionGate>
-            }>
-              <Route path="dashboard" element={<Navigate to="/portal/morning-rollcall" replace />} />
-              <Route path="check" element={<MorningRollCallPage />} />
-              <Route index element={<MorningRollCallDashboardPage />} />
-            </Route>
+            } />
             <Route path="leave" element={
               <PermissionGate featureKey="leave">
                 <LeaveManagementPage />

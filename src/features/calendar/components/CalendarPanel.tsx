@@ -51,7 +51,7 @@ export default function CalendarPanel({
   return (
     <motion.div
       variants={cardAnim}
-      className="rounded-[2rem] overflow-hidden"
+      className="rounded-[2rem] overflow-hidden flex flex-col h-full"
       style={glassCard}
     >
       <CalendarMonthNav
@@ -61,16 +61,18 @@ export default function CalendarPanel({
         onGoToToday={onGoToToday}
       />
 
-      <CalendarDayGrid
-        days={days}
-        currentMonth={currentMonth}
-        selectedDate={selectedDate}
-        activeFilters={activeFilters}
-        getEventsForDate={getEventsForDate}
-        onSelectDate={onSelectDate}
-        onAddEventForDate={onAddEventForDate}
-        onMoveEvent={onMoveEvent}
-      />
+      <div className="flex-1 flex flex-col overflow-auto min-h-0">
+        <CalendarDayGrid
+          days={days}
+          currentMonth={currentMonth}
+          selectedDate={selectedDate}
+          activeFilters={activeFilters}
+          getEventsForDate={getEventsForDate}
+          onSelectDate={onSelectDate}
+          onAddEventForDate={onAddEventForDate}
+          onMoveEvent={onMoveEvent}
+        />
+      </div>
     </motion.div>
   );
 }

@@ -537,22 +537,25 @@ export default function AdminTeacherPlanBrowser({
 
         <div
           className={cn(
-            'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden px-1 pb-2',
             !hasRightSelection && 'hidden lg:flex',
           )}
         >
           {selectedSyllabus && (
-            <div className="mb-3 flex shrink-0 items-center gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                className="h-9 gap-1.5 rounded-xl px-3 text-[12px] font-bold"
-                onClick={() => setSelectedSyllabusId(null)}
-              >
-                <HiArrowLeft className="h-4 w-4" />
-                รายวิชา
-              </Button>
-              <p className="min-w-0 truncate font-sukhumvit text-[13px] font-black text-foreground">
+            <div className="relative mb-3 flex min-h-[3.25rem] shrink-0 items-center justify-center border-b border-border px-0 pb-3 pt-2 sm:pt-2.5">
+              <div className="absolute left-0">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="size-9 shrink-0 rounded-xl p-0 flex items-center justify-center"
+                  onClick={() => setSelectedSyllabusId(null)}
+                  title="กลับไปเลือกรายวิชา"
+                  aria-label="กลับไปเลือกรายวิชา"
+                >
+                  <HiArrowLeft className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="max-w-[70%] truncate font-sukhumvit text-[13px] font-black text-foreground text-center">
                 {selectedSyllabus.subjectName}
                 {selectedSyllabus.className ? ` · ${selectedSyllabus.className}` : ''}
               </p>
@@ -582,7 +585,7 @@ export default function AdminTeacherPlanBrowser({
                     initial={{ opacity: 0, x: 12 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 12 }}
-                    className="flex w-full flex-col gap-3"
+                    className="flex h-full min-h-0 w-full flex-1 flex-col gap-3"
                   >
                     <WeeklyTopicGrid
                       topics={selectedSyllabus.topics}

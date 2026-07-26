@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(git add:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(awk 'NR>=5766 && NR<=6200' /Users/kim/school-management-app/src/features/exam/ExamManager.tsx)",
+      "Bash(grep -n \"AnimatePresence>\\\\|^          </div>$\\\\|^        \\)}$\" /Users/kim/school-management-app/src/features/exam/ExamManager.tsx)",
+      "Bash(awk -F: '$1 >= 5900 && $1 <= 5930')"
     ]
   }
 }

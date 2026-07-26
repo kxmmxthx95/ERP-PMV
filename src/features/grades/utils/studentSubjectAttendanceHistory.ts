@@ -1,4 +1,7 @@
 import type { AttendanceStatus } from '@/types/teaching';
+import { isHolidayDate } from '@/lib/dateUtils';
+
+type HolidayEvent = { type: string; startDate: string; endDate: string };
 
 export type StudentSubjectAttendanceRow = {
   key: string;
@@ -49,8 +52,11 @@ export function summarizeStudentSubjectAttendance(rows: StudentSubjectAttendance
   rows.forEach((row) => {
     counts[row.status] = (counts[row.status] ?? 0) + 1;
   });
-  const pct = rows.length > 0 ? Math.round((presentLike / rows.length) * 100) : null;
-  return { total: rows.length, presentLike, pct, counts };
+  // ลา มีเอกสารรับรอง — ไม่นับเป็นตัวหาร (ไม่กระทบ % เข้าเรียน)
+  const excusable = rows.filter((row) => row.status === 'leave').length;
+  const total = rows.length - excusable;
+  const pct = total > 0 ? Math.round((presentLike / total) * 100) : null;
+  return { total, presentLike, pct, counts };
 }
 
 export function buildStudentSubjectAttendanceHistory({
@@ -60,6 +66,8 @@ export function buildStudentSubjectAttendanceHistory({
   rangeStart,
   rangeEnd,
   academicYearId,
+  calendarEvents = [],
+  noTeachingDates,
 }: {
   studentId: string;
   sessions: ClassSessionDoc[];
@@ -67,6 +75,9 @@ export function buildStudentSubjectAttendanceHistory({
   rangeStart: string;
   rangeEnd: string;
   academicYearId?: string;
+  calendarEvents?: HolidayEvent[];
+  /** วันที่ (YYYY-MM-DD) ที่แผนการสอนระบุ isNoTeaching — ไม่นับการเช็คชื่อ */
+  noTeachingDates?: Set<string>;
 }): StudentSubjectAttendanceRow[] {
   const today = toLocalDateString(new Date());
   const effectiveEnd = rangeEnd && rangeEnd < today ? rangeEnd : today;
@@ -75,6 +86,8 @@ export function buildStudentSubjectAttendanceHistory({
     if (!Number.isFinite(be) || be <= 2400) return '';
     return `${be - 543}-05-01`;
   })();
+  const isExcludedDate = (date: string) =>
+    isHolidayDate(date, calendarEvents) || (noTeachingDates?.has(date) ?? false);
   const sessionKeySet = new Set<string>();
   const rows: StudentSubjectAttendanceRow[] = [];
 
@@ -84,6 +97,7 @@ export function buildStudentSubjectAttendanceHistory({
     if (!date || !period) return;
     if (effectiveStart && date < effectiveStart) return;
     if (effectiveEnd && date > effectiveEnd) return;
+    if (isExcludedDate(date)) return;
 
     const entry = (session.attendance ?? []).find((item) => item.studentId === studentId);
     const key = `${date}|${period}`;
@@ -92,7 +106,8 @@ export function buildStudentSubjectAttendanceHistory({
       key: session.id,
       date,
       period,
-      status: entry?.status ?? 'absent',
+      // 'excused' คือสถานะเก่าที่ถูกยุบรวมเข้ากับ 'leave' แล้ว (ไม่มีปุ่มตั้งค่านี้แยกอีกต่อไป)
+      status: entry?.status === 'excused' ? 'leave' : (entry?.status ?? 'absent'),
       note: entry?.note,
     });
   });
@@ -100,6 +115,7 @@ export function buildStudentSubjectAttendanceHistory({
   scheduleSlots.forEach((slot) => {
     if (!slot.day || !slot.period || !effectiveStart) return;
     enumerateScheduleDates(effectiveStart, effectiveEnd, slot.day).forEach((date) => {
+      if (isExcludedDate(date)) return;
       const key = `${date}|${slot.period}`;
       if (sessionKeySet.has(key)) return;
       sessionKeySet.add(key);
@@ -129,6 +145,8 @@ export function calcStudentSubjectAttendancePct(
   rangeStart: string,
   rangeEnd: string,
   academicYearId?: string,
+  calendarEvents: HolidayEvent[] = [],
+  noTeachingDates?: Set<string>,
 ): number | null {
   const scopedSessions = sessions.filter((session) => {
     const data = session as ClassSessionDoc & { subjectId?: string; semester?: 1 | 2 };
@@ -145,6 +163,8 @@ export function calcStudentSubjectAttendancePct(
     rangeStart,
     rangeEnd,
     academicYearId,
+    calendarEvents,
+    noTeachingDates,
   });
 
   return summarizeStudentSubjectAttendance(rows).pct;

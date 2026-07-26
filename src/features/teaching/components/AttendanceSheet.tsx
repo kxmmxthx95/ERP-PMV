@@ -36,7 +36,6 @@ import {
 import { useScheduleSettings } from '@/hooks/useScheduleSettings';
 import { subjectColorByName, subjectGradient, withAlpha } from '../../schedule/constants/colors';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
-import { PickerCoverflow } from '@/components/school/DepartmentPickerCoverflow';
 import {
   ClassSelectionFlow,
   DEPARTMENT_GRADES,
@@ -65,14 +64,14 @@ import {
   DrawerTitle,
 } from '@/components/ui/drawer';
 import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
-import { HiArrowLeft, HiPencilSquare } from 'react-icons/hi2';
+import { HiArrowLeft, HiBookOpen, HiPencilSquare } from 'react-icons/hi2';
+import { SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
 import { useAuth } from '@/hooks/useAuth';
 import {
   buildTeacherIdentityKeys,
   matchesTeacherIdentity,
   resolveTeacherFromAuth,
 } from '@/lib/teachers/teacherIdentity';
-import { findApprovedLeaveForStudentOnDate } from '@/lib/attendance/leaveRequestStudentMatch';
 import SummaryTab from '@/features/attendance/components/SummaryTab';
 
 const ATTENDANCE_DRAWER_CONTENT_CLASS = cn(
@@ -232,6 +231,8 @@ interface StudentRow {
   studentId: string;
   studentCode: string;
   studentName: string;
+  /** All identity keys (doc id, authUid, userId, uid) — needed to match leave requests submitted via student login (Auth UID) against the roster doc id. */
+  identityKeys: string[];
   imageUrl?: string;
   gender?: 'male' | 'female';
   status: AttendanceStatus | null;
@@ -539,6 +540,24 @@ function toIdentityList(student: StudentRosterItem['student']): string[] {
 
 function normalizeThaiName(value: string): string {
   return value.replace(/\s+/g, '').trim();
+}
+
+/** Single source of truth for "does this row have an approved leave on this date" — used both to auto-fill status and to gate the ลว button/save, so they never disagree. */
+function findApprovedStudentLeave(
+  leaveRequests: LeaveRequest[],
+  row: { identityKeys: string[]; studentCode: string; studentName: string },
+  date: string,
+): LeaveRequest | undefined {
+  return leaveRequests.find((r) =>
+    r.requesterType === 'student' &&
+    r.status === 'approved' &&
+    date >= r.startDate && date <= r.endDate &&
+    (
+      row.identityKeys.includes(r.requesterId)
+      || (typeof r.requesterStudentCode === 'string' && r.requesterStudentCode !== '' && r.requesterStudentCode === row.studentCode)
+      || normalizeThaiName(r.requesterName) === normalizeThaiName(row.studentName)
+    ),
+  );
 }
 
 const REST_GRADIENT = [
@@ -1014,7 +1033,9 @@ export default function AttendanceSheet({
 
       return students.map(({ student }) => {
         const existingRecord = existingMap.get(student.id);
-        
+        const identityKeys = toIdentityList(student);
+        const studentName = `${student.prefix}${student.firstName} ${student.lastName}`;
+
         // Auto-detect leave — ทำงานทั้งกรณีที่มีและไม่มี existingRecord
         // ครูยังไม่กรอก (status null) → ให้ระบบเติม leave อัตโนมัติ
         // ครูกรอกไปแล้ว (status ไม่ใช่ null) → ไม่ override
@@ -1023,15 +1044,10 @@ export default function AttendanceSheet({
         const teacherHasSet = existingRecord && existingRecord.status != null;
 
         if (!teacherHasSet) {
-          const studentFullName = `${student.prefix}${student.firstName}${student.lastName}`;
-          const approvedInRange = leaveRequests.filter(r =>
-            r.requesterType === 'student' && r.status === 'approved' &&
-            date >= r.startDate && date <= r.endDate
-          );
-          const approvedLeave = approvedInRange.find(r =>
-            toIdentityList(student).includes(r.requesterId)
-            || (typeof r.requesterStudentCode === 'string' && r.requesterStudentCode !== '' && r.requesterStudentCode === student.studentCode)
-            || normalizeThaiName(r.requesterName) === normalizeThaiName(studentFullName)
+          const approvedLeave = findApprovedStudentLeave(
+            leaveRequests,
+            { identityKeys, studentCode: student.studentCode, studentName },
+            date,
           );
           if (approvedLeave) {
             autoStatus = 'leave';
@@ -1043,7 +1059,8 @@ export default function AttendanceSheet({
         return {
           studentId: student.id,
           studentCode: student.studentCode,
-          studentName: `${student.prefix}${student.firstName} ${student.lastName}`,
+          studentName,
+          identityKeys,
           imageUrl: student.photoURL,
           gender: student.gender,
           status: existingRecord?.status ?? autoStatus,
@@ -1274,7 +1291,17 @@ export default function AttendanceSheet({
   }, [filteredClasses, isAdminOverview, isTeacherPicker, selectedClassId, selectedEntry?.classId, selectedRoom]);
 
   const adminSubjectCards = useMemo(() => {
-    if (!isAdminOverview || !effectiveSelectedClassId) return [];
+    if (!isAdminOverview) return [];
+
+    const targetClassIds = new Set<string>();
+    if (selectedClassId) {
+      targetClassIds.add(selectedClassId);
+    } else if (selectedLevel && selectedDept !== 'all') {
+      adminClassOptions.forEach((cls) => targetClassIds.add(cls.id));
+    }
+
+    if (targetClassIds.size === 0) return [];
+
     const map = new Map<string, {
       subjectId: string;
       subjectCode: string;
@@ -1288,21 +1315,28 @@ export default function AttendanceSheet({
       teacherLastName: string;
       teacherPhotoURL?: string;
     }>();
+
     for (const e of scheduleEntries) {
       if (String(e.year) !== String(academicYearId)) continue;
       if (Number(e.semester) !== Number(semester)) continue;
-      if (e.classId !== effectiveSelectedClassId) continue;
-      if (map.has(e.subjectId)) continue;
+      if (!targetClassIds.has(e.classId)) continue;
+
+      const key = `${e.subjectId}_${e.classId}`;
+      if (map.has(key)) continue;
+
       const teacher = teachersById[e.teacherId];
       const parts = (e.teacherName || '').trim().split(/\s+/).filter(Boolean);
       const teacherFirstName = teacher?.firstName
         || (parts.length >= 2 ? parts.slice(0, -1).join(' ') : (e.teacherName || ''));
       const teacherLastName = teacher?.lastName
         || (parts.length >= 2 ? parts[parts.length - 1]! : '');
-      map.set(e.subjectId, {
+
+      map.set(key, {
         subjectId: e.subjectId,
         subjectCode: e.subjectCode,
-        subjectName: e.subjectName,
+        subjectName: targetClassIds.size > 1
+          ? `${e.subjectName} (${classNameById[e.classId] ?? e.classId})`
+          : e.subjectName,
         subjectGroup: e.subjectGroup,
         classId: e.classId,
         className: classNameById[e.classId] ?? e.classId,
@@ -1313,10 +1347,11 @@ export default function AttendanceSheet({
         teacherPhotoURL: teacher?.photoURL,
       });
     }
+
     return [...map.values()].sort((a, b) =>
-      a.subjectCode.localeCompare(b.subjectCode, 'th'),
+      a.subjectCode.localeCompare(b.subjectCode, 'th') || a.className.localeCompare(b.className, 'th'),
     );
-  }, [academicYearId, classNameById, effectiveSelectedClassId, isAdminOverview, scheduleEntries, semester, teachersById]);
+  }, [academicYearId, classNameById, isAdminOverview, scheduleEntries, semester, teachersById, selectedClassId, selectedLevel, selectedDept, adminClassOptions]);
 
   const { periodTimes } = useScheduleSettings(effectiveSelectedClassId);
 
@@ -1481,12 +1516,7 @@ export default function AttendanceSheet({
 
     const nextStatus = row.status === status ? null : status;
     if (nextStatus === 'leave') {
-      const approved = findApprovedLeaveForStudentOnDate(
-        leaveRequests,
-        { id: studentId, studentCode: row.studentCode },
-        selectedDate,
-        row.studentName,
-      );
+      const approved = findApprovedStudentLeave(leaveRequests, row, selectedDate);
       if (!approved) {
         toast.error('เช็ก «ลา» ได้เฉพาะเมื่อมีใบลาที่อนุมัติแล้ว');
         return;
@@ -1624,12 +1654,7 @@ export default function AttendanceSheet({
     const validRows = rows.filter((row) => {
       if (row.status === null) return false;
       if (row.status !== 'leave') return true;
-      return !!findApprovedLeaveForStudentOnDate(
-        leaveRequests,
-        { id: row.studentId, studentCode: row.studentCode },
-        selectedDate,
-        row.studentName,
-      );
+      return !!findApprovedStudentLeave(leaveRequests, row, selectedDate);
     });
 
     if (!silent) setSaving(true);
@@ -1895,12 +1920,7 @@ export default function AttendanceSheet({
             canSetLeave={(studentId) => {
               const row = rows.find((r) => r.studentId === studentId);
               if (!row) return false;
-              return !!findApprovedLeaveForStudentOnDate(
-                leaveRequests,
-                { id: studentId, studentCode: row.studentCode },
-                selectedDate,
-                row.studentName,
-              );
+              return !!findApprovedStudentLeave(leaveRequests, row, selectedDate);
             }}
             onUnlock={() => {
               if (isAttendanceReadOnly) {
@@ -1922,15 +1942,7 @@ export default function AttendanceSheet({
         <AnimatePresence mode="wait" initial={false}>
           {subView === 'today' ? (
             <motion.div
-              key={
-                isAdminOverview
-                  ? (adminSummary
-                    ? 'admin-summary'
-                    : selectedClassId
-                      ? 'admin-subjects'
-                      : `admin-picker-${selectedDept}-${selectedLevel ?? 'none'}`)
-                  : viewMode
-              }
+              key={isAdminOverview ? 'admin-picker' : viewMode}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -1966,7 +1978,7 @@ export default function AttendanceSheet({
                     className={cn(
                       'flex h-full min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden',
                       sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
-                      selectedClassId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+                      adminSummary ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
                     )}
                   >
                     {!classesReady ? (
@@ -1992,14 +2004,85 @@ export default function AttendanceSheet({
                             onToggle={() => setSidebarCollapsed((v) => !v)}
                           />
                         )}
-                      />
+                      >
+                        {/* Subject list — shown when a room is selected */}
+                        <AnimatePresence initial={false}>
+                          {selectedClassId && scheduleReady && adminSubjectCards.length > 0 && (
+                            <motion.section
+                              key={`subjects-${selectedClassId}`}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -6 }}
+                              className="pb-1"
+                            >
+                              <p className="mb-2 pl-1 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                                รายวิชา
+                              </p>
+                              <div className="flex flex-col gap-2">
+                                {adminSubjectCards.map((card) => {
+                                  const uniqKey = `${card.subjectId}_${card.classId}`;
+                                  const active =
+                                    adminSummary?.subjectId === card.subjectId &&
+                                    adminSummary?.classId === card.classId;
+                                  const color = subjectColorByName(card.subjectName, card.subjectGroup);
+
+                                  return (
+                                    <button
+                                      key={uniqKey}
+                                      type="button"
+                                      onClick={() =>
+                                        setAdminSummary({ subjectId: card.subjectId, classId: card.classId })
+                                      }
+                                      className={cn(
+                                        'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all shadow-sm',
+                                      )}
+                                      style={{
+                                        backgroundColor: active ? color.text : color.bg,
+                                        borderColor: active ? color.text : color.border,
+                                      }}
+                                    >
+                                      <span
+                                        className={cn(
+                                          'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg shadow-sm',
+                                          active ? 'bg-white/20' : 'bg-white'
+                                        )}
+                                        style={{ color: active ? '#ffffff' : color.text }}
+                                      >
+                                        <SubjectIcon
+                                          subjectGroup={card.subjectGroup}
+                                          size={16}
+                                          className="text-current drop-shadow-sm"
+                                        />
+                                      </span>
+                                      <span className="min-w-0 flex-1">
+                                        <span
+                                          className="block truncate text-[13px] font-black font-sukhumvit"
+                                          style={{ color: active ? '#ffffff' : color.text }}
+                                        >
+                                          {card.subjectName}
+                                        </span>
+                                        <span
+                                          className="block text-[10px] font-bold"
+                                          style={{ color: active ? 'rgba(255,255,255,0.75)' : color.text, opacity: active ? 1 : 0.75 }}
+                                        >
+                                          {card.subjectCode}
+                                        </span>
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </motion.section>
+                          )}
+                        </AnimatePresence>
+                      </GradeBookClassSidebar>
                     )}
                   </div>
 
                   <div
                     className={cn(
                       'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
-                      !selectedClassId && 'hidden lg:flex',
+                      !adminSummary && 'hidden lg:flex',
                     )}
                   >
                     {adminSummary ? (
@@ -2011,58 +2094,24 @@ export default function AttendanceSheet({
                           getStudentsForClass={getStudentsForClass}
                           lockedSubjectId={adminSummary.subjectId}
                           lockedClassId={adminSummary.classId}
+                          calendarEvents={calendarEvents}
+                          scheduleEntries={scheduleEntries}
+                          rangeStart={academicYearRange.start}
+                          rangeEnd={academicYearRange.end}
                         />
                       </div>
-                    ) : !selectedClassId ? (
+                    ) : (
                       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
-                        <Users className="h-8 w-8 text-muted-foreground/40" />
+                        <HiBookOpen className="h-8 w-8 text-muted-foreground/40" />
                         <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
                           {selectedDept === 'all'
                             ? 'เลือกแผนกจากแถบด้านซ้าย'
                             : !selectedLevel
                               ? 'เลือกระดับชั้นเพื่อดูห้องเรียน'
-                              : 'เลือกห้องเรียนเพื่อดูรายวิชา'}
+                              : !selectedClassId
+                                ? 'เลือกห้องเรียนเพื่อดูรายวิชา'
+                                : 'เลือกรายวิชาจากแถบด้านซ้าย'}
                         </p>
-                      </div>
-                    ) : !scheduleReady ? (
-                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-2 md:px-6">
-                        <ClassPickerSkeleton />
-                      </div>
-                    ) : adminSubjectCards.length === 0 ? (
-                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 text-center md:px-6">
-                        <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-sm font-bold text-muted-foreground">
-                          ยังไม่มีรายวิชาในตารางสอนของห้องนี้
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 pb-6 pt-2 md:px-6">
-                        <PickerCoverflow
-                          ariaLabel="รายวิชา"
-                          onSelect={(subjectId) => {
-                            const card = adminSubjectCards.find((c) => c.subjectId === subjectId);
-                            if (!card) return;
-                            setAdminSummary({
-                              subjectId: card.subjectId,
-                              classId: card.classId,
-                            });
-                          }}
-                          items={adminSubjectCards.map((card) => ({
-                            id: card.subjectId,
-                            label: card.subjectName,
-                            subtitle: card.subjectCode || undefined,
-                            gradient: subjectGradient(
-                              subjectColorByName(card.subjectName, card.subjectGroup),
-                            ),
-                            imageUrl: card.teacherPhotoURL,
-                            imageAlt: card.teacherName || card.subjectName,
-                            imageCaption: card.teacherFirstName
-                              ? {
-                                  line1: card.teacherFirstName,
-                                  line2: card.teacherLastName || undefined,
-                                }
-                              : undefined,
-                          }))}
-                        />
                       </div>
                     )}
                   </div>
@@ -2339,12 +2388,7 @@ export default function AttendanceSheet({
                                       disabled={
                                         isAttendanceReadOnly
                                         || (status === 'leave'
-                                          && !findApprovedLeaveForStudentOnDate(
-                                            leaveRequests,
-                                            { id: student.studentId, studentCode: student.studentCode },
-                                            selectedDate,
-                                            student.studentName,
-                                          ))
+                                          && !findApprovedStudentLeave(leaveRequests, student, selectedDate))
                                       }
                                       title={
                                         isPastSession

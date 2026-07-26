@@ -49,7 +49,7 @@ type AttendanceBreakdown = {
 };
 
 const ATTENDANCE_TABLE_COLUMNS =
-  'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(4, minmax(0, 1fr)) minmax(0, 1fr) minmax(5rem, 0.85fr)';
+  'minmax(4.5rem, 0.5fr) minmax(0, 3fr) repeat(4, minmax(0, 0.4fr)) minmax(0, 0.5fr) minmax(5.5rem, 0.6fr)';
 
 const TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden';
 const TABLE_HEADER_CELL = 'text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap';
@@ -439,10 +439,10 @@ export default function GradeTable({
       </div>
 
       {/* Desktop: table */}
-      <div className={cn('hidden md:block', TABLE_SHELL)}>
+      <div className={cn('hidden md:block', view === 'attendance' ? 'overflow-hidden' : TABLE_SHELL)}>
         {/* Header */}
         <div
-          className="grid gap-3 border-b border-border bg-background px-4 py-3 w-full"
+          className={cn("grid gap-3 border-b border-border px-4 py-3 w-full", view === 'attendance' ? 'bg-transparent' : 'bg-background')}
           style={{
             gridTemplateColumns: view === 'scores' ? tableGridColumns : ATTENDANCE_TABLE_COLUMNS,
           }}
@@ -489,6 +489,7 @@ export default function GradeTable({
                 transition={{ delay: i * 0.015 }}
                 className={cn(
                   'grid gap-3 px-4 py-3 items-center border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors w-full',
+                  view === 'attendance' ? 'bg-transparent' : 'bg-card',
                   s.absent && 'bg-destructive/5',
                   view === 'scores' && !s.absent && isLowGpa(gpa) && LOW_GPA_ROW,
                 )}

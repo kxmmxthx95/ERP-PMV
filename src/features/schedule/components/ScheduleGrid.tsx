@@ -89,20 +89,20 @@ function categoryBadgeStyle(raw?: string) {
   if (key === 'additional') {
     return {
       label: 'เพิ่มเติม',
-      className: 'bg-amber-50 text-amber-700 border-amber-100',
+      className: 'bg-white text-amber-700 border-amber-200/60 shadow-2xs',
       dotClassName: 'bg-amber-400',
     };
   }
   if (key === 'activity') {
     return {
       label: 'กิจกรรม',
-      className: 'bg-violet-50 text-violet-700 border-violet-100',
+      className: 'bg-white text-violet-700 border-violet-200/60 shadow-2xs',
       dotClassName: 'bg-violet-400',
     };
   }
   return {
     label: 'พื้นฐาน',
-    className: 'bg-sky-50 text-sky-700 border-sky-100',
+    className: 'bg-white text-sky-700 border-sky-200/60 shadow-2xs',
     dotClassName: 'bg-sky-400',
   };
 }
@@ -315,7 +315,7 @@ export default function ScheduleGrid({
   const periods = Array.from({ length: effectivePeriodCount }, (_, i) => i + 1);
   const canEdit = !readOnly && (!!classId || viewMode === 'teacher');
   const isEditing = isEditMode && canEdit;
-  const showSubjectCarousel = isEditing;
+  const showSubjectCarousel = false;
   const shouldHideGrid =
     (viewMode === 'class' && !classId) ||
     (viewMode === 'teacher' && (filterDept === 'all' || !selectedTeacherId));
@@ -335,7 +335,6 @@ export default function ScheduleGrid({
 
   const handleSlotClick = (day: SchoolDay, period: number, entry?: ScheduleEntry | null) => {
     if (readOnly && entry) {
-      setDetailEntry(entry);
       return;
     }
     if (!readOnly) onSlotClick(day, period, entry ?? null);
@@ -546,7 +545,7 @@ export default function ScheduleGrid({
 
           const cardShell = cn(
             'relative flex overflow-hidden rounded-2xl bg-white transition-all duration-200',
-            'shadow-[0_4px_24px_rgba(15,23,42,0.06)] border border-black/[0.04]',
+            'border border-black/[0.08]',
             isOver && 'ring-2 ring-blue-600',
             isEditing && !isOver && 'border-rose-200/70',
           );
@@ -942,13 +941,13 @@ export default function ScheduleGrid({
           </div>
         ) : (
         <div
-          className="rounded-2xl overflow-hidden"
+          className="rounded-2xl overflow-hidden h-full min-h-0 flex flex-col"
           style={{
             background: 'rgba(255,255,255,0.78)',
             backdropFilter: 'blur(28px) saturate(160%)',
             WebkitBackdropFilter: 'blur(28px) saturate(160%)',
             border: `1px solid ${isEditing ? 'rgba(225,29,72,0.3)' : 'rgba(0,0,0,0.08)'}`,
-            boxShadow: '0 4px 24px rgba(15,23,42,0.08), 0 1px 3px rgba(15,23,42,0.04)',
+            boxShadow: 'none',
             minWidth: 700,
           }}
         >
@@ -989,7 +988,8 @@ export default function ScheduleGrid({
             ))}
           </div>
 
-          {/* ── Period rows ── */}
+          {/* ── Period rows (scrollable) ── */}
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide">
           {periods.map((period) => {
             const isLunch = lunchPeriods.includes(period);
             const isBreak = breakPeriods.includes(period);
@@ -1157,6 +1157,7 @@ export default function ScheduleGrid({
               </div>
             );
           })}
+          </div>
 
           {/* ── Add period ── */}
           {canEdit && (
@@ -1614,8 +1615,7 @@ function DesktopScheduleCard({
       transition={{ duration: 0.13 }}
       className={cn(
         'group relative w-full h-full overflow-hidden rounded-xl cursor-pointer transition-all duration-150',
-        'bg-white border border-black/[0.04]',
-        'shadow-[0_4px_16px_rgba(15,23,42,0.06)]',
+        'bg-white',
         isExcess && 'ring-2 ring-amber-400/40',
       )}
       style={{ minHeight: compact ? 44 : 70 }}

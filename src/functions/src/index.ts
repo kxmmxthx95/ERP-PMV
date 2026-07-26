@@ -9,6 +9,7 @@ admin.initializeApp();
 const db = getAdminFirestore();
 
 export { sendLineReport } from "./sendLineReport";
+export { notifyHomeroomOnStudentLeave } from "./notifyHomeroomOnStudentLeave";
 export { reportDailyScheduled } from "./reportDailyScheduled";
 export { examRoomAutoClose } from "./examRoomAutoClose";
 export { processLineLinkRequest } from "./processLineLinkRequest";

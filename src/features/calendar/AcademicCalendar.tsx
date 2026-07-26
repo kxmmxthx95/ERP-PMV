@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { isSameDay } from 'date-fns';
+import { cn } from '@/lib/utils';
+import { isSameDay, startOfMonth, endOfMonth } from 'date-fns';
 import { collection, getDocs, query, where, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
@@ -21,12 +22,12 @@ export default function AcademicCalendar() {
   const { departments } = useSchoolStructure();
   const { activeYear } = useActiveAcademicYear();
 
-  const [headerCenterPortalEl, setHeaderCenterPortalEl] = useState<HTMLElement | null>(null);
+  const [headerLeftPortalEl, setHeaderLeftPortalEl] = useState<HTMLElement | null>(null);
   const [headerMobileCenterPortalEl, setHeaderMobileCenterPortalEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    setHeaderCenterPortalEl(document.getElementById('header-portal-center'));
+    setHeaderLeftPortalEl(document.getElementById('header-portal-left'));
     setHeaderMobileCenterPortalEl(document.getElementById('header-portal-center-mobile'));
   }, []);
 
@@ -150,12 +151,15 @@ export default function AcademicCalendar() {
     });
   }, [dbEvents, holidays, activeYear?.year, role, semesterSettings]);
 
-  const upcomingEvents = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+  const monthStart = startOfMonth(currentMonth).toISOString().slice(0, 10);
+  const monthEnd = endOfMonth(currentMonth).toISOString().slice(0, 10);
+
+  const monthEvents = useMemo(() => {
     return allEvents
-      .filter(e => e.startDate >= today)
+      .filter(e => e.startDate <= monthEnd && e.endDate >= monthStart)
       .sort((a, b) => a.startDate.localeCompare(b.startDate));
-  }, [allEvents]);
+  }, [allEvents, monthStart, monthEnd]);
+
 
   const getEventsForDate = (dateStr: string) => {
     return allEvents.filter(e => dateStr >= e.startDate && dateStr <= e.endDate);
@@ -258,8 +262,6 @@ export default function AcademicCalendar() {
     return deptMatch && searchMatch;
   };
 
-  const filteredUpcomingEvents = upcomingEvents.filter(ev => checkMatch(ev, filterDepartment, searchQuery));
-
   const handleGetEventsForDate = (dateStr: string) => {
     const evs = getEventsForDate(dateStr);
     return evs.filter(ev => checkMatch(ev, filterDepartment, searchQuery));
@@ -277,31 +279,28 @@ export default function AcademicCalendar() {
   };
 
   return (
-    <div className="space-y-3 lg:space-y-5 text-black">
+    <div
+      className={cn(
+        'relative flex min-h-0 w-full flex-1 basis-0 flex-col overflow-hidden bg-transparent font-sukhumvit',
+        'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+      )}
+    >
+      <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
+        <div className="absolute -top-24 -left-16 w-72 h-72 rounded-full bg-sky-200/45 blur-3xl" />
+        <div className="absolute top-24 -right-20 w-80 h-80 rounded-full bg-cyan-200/40 blur-3xl" />
+      </div>
+
       <CalendarHeader />
 
       <motion.div
         variants={containerAnim}
         initial="hidden"
         animate="show"
-        className="grid grid-cols-1 lg:grid-cols-10 gap-4"
+        className="flex flex-1 min-h-0 gap-4 px-4"
       >
-        <div className="lg:col-span-7">
-          <CalendarPanel
-            currentMonth={currentMonth}
-            selectedDate={selectedDate}
-            activeFilters={activeFilters}
-            getEventsForDate={handleGetEventsForDate}
-            onChangeMonth={setCurrentMonth}
-            onSelectDate={handleSelectDate}
-            onMoveEvent={handleMoveEvent}
-            onGoToToday={handleGoToToday}
-          />
-        </div>
-
-        <div className="lg:col-span-3">
+        <div className="hidden lg:flex w-[320px] min-w-[320px] min-h-0 flex-col shrink-0">
           <UpcomingPanel
-            upcomingEvents={filteredUpcomingEvents}
+            upcomingEvents={monthEvents}
             activeFilters={activeFilters}
             selectedDate={selectedDate}
             selectedEvents={selectedDate ? handleGetEventsForDate(new Date(selectedDate.getTime() - selectedDate.getTimezoneOffset() * 60000).toISOString().slice(0, 10)) : []}
@@ -311,6 +310,19 @@ export default function AcademicCalendar() {
             allTypes={ALL_TYPES}
             onEditEvent={handleEditEvent}
             onDeleteEvent={deleteEvent}
+          />
+        </div>
+
+        <div className="flex-1 min-h-0">
+          <CalendarPanel
+            currentMonth={currentMonth}
+            selectedDate={selectedDate}
+            activeFilters={activeFilters}
+            getEventsForDate={handleGetEventsForDate}
+            onChangeMonth={setCurrentMonth}
+            onSelectDate={handleSelectDate}
+            onMoveEvent={handleMoveEvent}
+            onGoToToday={handleGoToToday}
           />
         </div>
       </motion.div>
@@ -330,9 +342,9 @@ export default function AcademicCalendar() {
         );
         return (
           <>
-            {headerCenterPortalEl && createPortal(capsule, headerCenterPortalEl)}
+            {headerLeftPortalEl && createPortal(capsule, headerLeftPortalEl)}
             {headerMobileCenterPortalEl && createPortal(capsule, headerMobileCenterPortalEl)}
-            {!headerCenterPortalEl && !headerMobileCenterPortalEl && capsule}
+            {!headerLeftPortalEl && !headerMobileCenterPortalEl && capsule}
           </>
         );
       })()}

@@ -5,7 +5,6 @@ import {
   Search, X,
   DoorOpen,
   Trash2,
-  ChevronDown,
   Camera, Loader2, Save
 } from 'lucide-react';
 import {
@@ -31,6 +30,7 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from '@/components/ui/drawer';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '@/lib/firebase';
 import { toast } from 'sonner';
@@ -72,8 +72,8 @@ const TABLE_GRID = 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) minmax(4rem, 0.7fr) m
 const STUDENT_TAB_CONFIG: Record<StudentTab, { label: string; icon: IconType }> = {
   overview: { label: 'ภาพรวม', icon: HiUsers },
   list: { label: 'รายชื่อ', icon: HiViewColumns },
-  class: { label: 'ห้องเรียน', icon: HiBuildingOffice2 },
-  promote: { label: 'เลื่อนชั้น', icon: HiArrowUpCircle },
+  class: { label: 'จัดการห้องเรียน', icon: HiBuildingOffice2 },
+  promote: { label: 'จัดการสถานะ', icon: HiArrowUpCircle },
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -107,21 +107,18 @@ function DrawerFilterField({
       <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">
         {label}
       </label>
-      <div className="relative">
-        <select
-          value={value}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-          className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 pr-9 text-[13px] font-bold text-slate-800 outline-none transition-all focus:border-blue-200 focus:ring-4 focus:ring-blue-50/50 disabled:cursor-not-allowed disabled:opacity-40"
-        >
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger className="h-11 w-full rounded-xl border-slate-200 bg-white px-3.5 text-[13px] font-bold text-slate-800 focus-visible:border-blue-200 focus-visible:ring-blue-50/50 disabled:opacity-40">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
           {options.map((o) => (
-            <option key={o.value} value={o.value} className="bg-white font-bold text-slate-800">
+            <SelectItem key={o.value} value={o.value}>
               {o.label}
-            </option>
+            </SelectItem>
           ))}
-        </select>
-        <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-      </div>
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -152,6 +149,12 @@ export default function StudentManager() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  const [promoteYear, setPromoteYear] = useState<string>(academicYear ?? '2568');
+  const [promoteDept, setPromoteDept] = useState<Department | ''>('');
+  const [promoteGrade, setPromoteGrade] = useState<string>('');
+  const [promoteClassId, setPromoteClassId] = useState<string>('');
+  const [promoteAction, setPromoteAction] = useState<'promote' | 'graduate' | 'leave'>('promote');
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { prefixes: guardianPrefixes } = useNamePrefix('adult');
@@ -224,6 +227,53 @@ export default function StudentManager() {
     setFilter((prev) => ({ ...prev, classId }));
     setSelectedId(null);
   }, [setFilter]);
+
+  const promoteYearClassrooms = useMemo(
+    () => (classrooms as unknown as ClassRoom[]).filter((c) => {
+      const row = c as ClassRoom & { academicYear?: string };
+      return (
+        String(c.academicYearId) === String(promoteYear) ||
+        String(row.academicYear ?? '') === String(promoteYear)
+      );
+    }),
+    [classrooms, promoteYear],
+  );
+
+  const promoteGradeOptions = useMemo(() => {
+    if (!promoteDept) return [] as string[];
+    const grades = new Set<string>();
+    promoteYearClassrooms.forEach((c) => {
+      if (c.departmentId === promoteDept && c.gradeLevel) grades.add(String(c.gradeLevel));
+    });
+    return Array.from(grades).sort(
+      (a, b) => (GRADE_LEVEL_ORDER[a] ?? 99) - (GRADE_LEVEL_ORDER[b] ?? 99),
+    );
+  }, [promoteYearClassrooms, promoteDept]);
+
+  const promoteClassOptions = useMemo(() => {
+    if (!promoteDept || !promoteGrade) return [] as ClassRoom[];
+    return promoteYearClassrooms
+      .filter((c) => c.departmentId === promoteDept && c.gradeLevel === promoteGrade)
+      .slice()
+      .sort((a, b) =>
+        String(a.roomNumber || a.className).localeCompare(
+          String(b.roomNumber || b.className),
+          undefined,
+          { numeric: true },
+        ),
+      );
+  }, [promoteYearClassrooms, promoteDept, promoteGrade]);
+
+  const handlePromoteSelectDept = useCallback((dept: Department) => {
+    setPromoteDept((prev) => (prev === dept ? '' : dept));
+    setPromoteGrade('');
+    setPromoteClassId('');
+  }, []);
+
+  const handlePromoteSelectGrade = useCallback((grade: string) => {
+    setPromoteGrade((prev) => (prev === grade ? '' : grade));
+    setPromoteClassId('');
+  }, []);
 
   const handleClearFilters = () => {
     setFilter(prev => ({
@@ -301,7 +351,7 @@ export default function StudentManager() {
     try {
       // 1. Compress
       const compressedBlob = await compressImage(file);
-      
+
       // 2. Upload
       const fileName = `student_photos/${selectedId}_${Date.now()}.jpg`;
       const storageRef = ref(storage, fileName);
@@ -311,7 +361,7 @@ export default function StudentManager() {
       // 3. Keep in draft form and save with "บันทึก" button
       setDetailForm((prev: any) => ({ ...prev, photoURL: url }));
       setHasPendingChanges(true);
-      
+
       toast.success('อัปโหลดรูปภาพสำเร็จ (รอบันทึกข้อมูล)', { id: loadingToast });
     } catch (error) {
       console.error('Upload error:', error);
@@ -367,27 +417,27 @@ export default function StudentManager() {
   const ActiveTabIcon = activeTabConfig.icon;
 
   const navigation = (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="flex items-center h-10 bg-white/60 backdrop-blur-xl border border-white p-1 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.04)] pointer-events-auto"
+    <div
+      className="flex items-center h-10 bg-slate-100/70 border border-slate-200/30 p-1 rounded-xl pointer-events-auto"
     >
       {studentTabs.map(([key, cfg]) => {
         const isActive = activeTab === key;
-        const Icon = cfg.icon;
         return (
           <button
             key={key}
             type="button"
             onClick={() => setActiveTab(key)}
-            className={`flex items-center justify-center h-8 px-6 rounded-full text-[11px] font-black transition-all whitespace-nowrap gap-1.5 cursor-pointer ${isActive ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'}`}
+            className={`flex items-center justify-center h-8 px-6 rounded-lg text-[11px] font-black transition-all whitespace-nowrap cursor-pointer ${
+              isActive
+                ? 'bg-slate-900 text-white'
+                : 'text-slate-500 hover:text-slate-800 hover:bg-black/[0.02]'
+            }`}
           >
-            <Icon className="h-3.5 w-3.5 sm:hidden" />
             <span>{cfg.label}</span>
           </button>
         );
       })}
-    </motion.div>
+    </div>
   );
 
   const mobileTabPortal = isMdOrBelow && headerCenterMobileEl && createPortal(
@@ -428,11 +478,10 @@ export default function StudentManager() {
                   key={key}
                   type="button"
                   onClick={() => setActiveTab(key)}
-                  className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left font-sukhumvit text-[13px] font-bold transition-colors ${
-                    isActive
+                  className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left font-sukhumvit text-[13px] font-bold transition-colors ${isActive
                       ? 'bg-slate-900 text-white'
                       : 'text-slate-600 hover:bg-slate-50'
-                  }`}
+                    }`}
                 >
                   <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
                   <span>{cfg.label}</span>
@@ -500,30 +549,30 @@ export default function StudentManager() {
 
       {filter.gradeLevel
         ? sidebarClassOptions.map((room) => {
-            const active = filter.classId === room.id;
-            const label = shortRoomLabel(room);
-            return (
-              <button
-                key={room.id}
-                type="button"
-                onClick={() => handleSidebarSelectClass(room.id)}
-                title={room.className}
-                aria-label={room.className}
-                aria-pressed={active}
-                className={cn(
-                  'flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border transition-all',
-                  active
-                    ? 'border-2 border-foreground bg-foreground text-background'
-                    : 'border border-border bg-card text-foreground hover:bg-muted/50',
-                )}
-              >
-                <HiHomeModern className="h-3.5 w-3.5" />
-                <span className="max-w-full truncate px-0.5 text-[9px] font-black font-sukhumvit leading-none">
-                  {label}
-                </span>
-              </button>
-            );
-          })
+          const active = filter.classId === room.id;
+          const label = shortRoomLabel(room);
+          return (
+            <button
+              key={room.id}
+              type="button"
+              onClick={() => handleSidebarSelectClass(room.id)}
+              title={room.className}
+              aria-label={room.className}
+              aria-pressed={active}
+              className={cn(
+                'flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border transition-all',
+                active
+                  ? 'border-2 border-foreground bg-foreground text-background'
+                  : 'border border-border bg-card text-foreground hover:bg-muted/50',
+              )}
+            >
+              <HiHomeModern className="h-3.5 w-3.5" />
+              <span className="max-w-full truncate px-0.5 text-[9px] font-black font-sukhumvit leading-none">
+                {label}
+              </span>
+            </button>
+          );
+        })
         : null}
     </div>
   ) : null;
@@ -639,29 +688,32 @@ export default function StudentManager() {
                 headerAction={(
                   <>
                     {!sidebarCollapsed && (
-                      <div className="relative flex h-8 min-w-0 flex-1 items-center rounded-full border border-border bg-muted/50 px-2 shadow-sm">
-                        <select
-                          value={filter.academicYearId || '2568'}
-                          onChange={(e) => {
-                            setFilter((prev) => ({
-                              ...prev,
-                              academicYearId: e.target.value,
-                              gradeLevel: '',
-                              classId: '',
-                            }));
-                            setSelectedId(null);
-                          }}
+                      <Select
+                        value={filter.academicYearId || '2568'}
+                        onValueChange={(v) => {
+                          setFilter((prev) => ({
+                            ...prev,
+                            academicYearId: v,
+                            gradeLevel: '',
+                            classId: '',
+                          }));
+                          setSelectedId(null);
+                        }}
+                      >
+                        <SelectTrigger
                           aria-label="ปีการศึกษา"
-                          className="w-full min-w-0 appearance-none bg-transparent pr-5 text-[11px] font-bold text-foreground outline-none font-sukhumvit"
+                          className="h-8 min-w-0 flex-1 rounded-full border-border bg-background px-2 text-[11px] font-bold text-foreground font-sukhumvit"
                         >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
                           {yearOptions.map((o) => (
-                            <option key={o.value} value={o.value}>
+                            <SelectItem key={o.value} value={o.value}>
                               {o.label}
-                            </option>
+                            </SelectItem>
                           ))}
-                        </select>
-                        <HiChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                      </div>
+                        </SelectContent>
+                      </Select>
                     )}
                     <div className={cn('flex shrink-0', HEADER_ICON_BTN_GROUP)}>
                       {!sidebarCollapsed && (
@@ -700,338 +752,338 @@ export default function StudentManager() {
             )}
 
             <AnimatePresence mode="wait">
-            {selectedStudent ? (
-              <motion.div
-                key={selectedStudent.id}
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                transition={{ duration: 0.2 }}
-                className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0 overflow-hidden"
-              >
-                {/* LEFT SIDE: Photo, Info, Edit Toggle, Tabs Selection */}
-                <div className="w-full lg:w-[300px] flex flex-col shrink-0 lg:border-r lg:border-black/[0.05] lg:pr-6 min-h-0 overflow-y-auto scrollbar-hide">
-                  {/* Back button */}
-                  <div className="mb-4">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(null)}
-                      className={HEADER_ICON_BTN}
-                      title="กลับไปหน้ารายชื่อ"
-                      aria-label="กลับไปหน้ารายชื่อ"
-                    >
-                      <HiArrowLeft size={16} />
-                    </button>
-                  </div>
-
-                  {/* Student Photo */}
-                  <div className="w-32 h-32 mx-auto rounded-full overflow-hidden shadow-[0_8px_20px_-8px_rgba(0,0,0,0.2)] shrink-0 group relative transition-all duration-500 hover:shadow-[0_12px_24px_-10px_rgba(0,0,0,0.25)] hover:-translate-y-0.5 mb-5 border-2 border-white/50">
-                    <img
-                      src={(isEditMode ? detailForm?.photoURL : selectedStudent.photoURL) || selectedStudent.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedStudent.id}`}
-                      className={`w-full h-full object-cover transition-all duration-700 ${isEditMode ? 'blur-sm scale-110' : 'group-hover:scale-110'}`}
-                      alt={selectedStudent.firstName}
-                    />
-                    
-                    {isEditMode ? (
-                      <label className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center cursor-pointer transition-all backdrop-blur-[2px]">
-                        {isUploading ? (
-                          <Loader2 className="text-white animate-spin mb-2" size={32} />
-                        ) : (
-                          <Camera className="text-white mb-2" size={32} />
-                        )}
-                        <span className="text-white text-[12px] font-black uppercase tracking-widest text-center px-2">
-                          {isUploading ? 'กำลังอัปโหลด...' : 'เปลี่ยนรูปถ่าย'}
-                        </span>
-                        <input
-                          type="file"
-                          className="hidden"
-                          accept="image/*"
-                          onChange={handlePhotoUpload}
-                          disabled={isUploading}
-                        />
-                      </label>
-                    ) : (
-                      <div className="absolute inset-0 bg-black/5 group-hover:bg-transparent transition-colors pointer-events-none" />
-                    )}
-                  </div>
-
-                  {/* Student Info */}
-                  <div className="mb-5 text-center">
-                    <h2 className="text-xl font-bold text-slate-900 tracking-tight leading-snug mb-1">
-                      {selectedStudent.prefix}{selectedStudent.firstName} {selectedStudent.lastName}
-                    </h2>
-                    <p className="text-base font-bold text-blue-600 mb-2">
-                      รหัส: {selectedStudent.studentCode}
-                    </p>
-                    <p className="text-[10px] font-bold text-slate-400 mb-2 break-all">
-                      Firebase ID: {selectedStudent.id}
-                    </p>
-                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center justify-center gap-2">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full inline-block"
-                        style={{ background: STATUS_COLOR[selectedStudent.status] || '#94a3b8' }}
-                      />
-                      {STATUS_LABEL[selectedStudent.status] || 'ไม่ทราบสถานะ'}
-                    </p>
-                  </div>
-
-                  {/* Edit Toggle and Actions */}
-                  <div className="flex flex-col gap-3 mb-6">
-                    <div className="flex items-center justify-between px-4 py-2 bg-[#f2f2f7]/85 border border-black/[0.03] rounded-2xl transition-all">
-                      <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">โหมดแก้ไข</span>
-                      <div
-                        onClick={handleEditModeToggle}
-                        className={`w-9 h-5 rounded-full p-0.5 flex cursor-pointer transition-colors ${isEditMode ? 'bg-blue-600 justify-end' : 'bg-slate-300 justify-start'}`}
+              {selectedStudent ? (
+                <motion.div
+                  key={selectedStudent.id}
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -10 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0 overflow-hidden h-full"
+                >
+                  {/* LEFT SIDE: Photo, Info, Edit Toggle, Tabs Selection */}
+                  <div className="w-full lg:w-[300px] flex flex-col shrink-0 lg:border-r lg:border-black/[0.05] lg:pr-6 lg:pl-2 lg:pt-2 min-h-0 overflow-y-auto scrollbar-hide h-full">
+                    {/* Back button */}
+                    <div className="mb-4">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(null)}
+                        className={HEADER_ICON_BTN}
+                        title="กลับไปหน้ารายชื่อ"
+                        aria-label="กลับไปหน้ารายชื่อ"
                       >
-                        <motion.div
-                          layout
-                          className="w-4 h-4 bg-white rounded-full shadow-sm"
-                        />
-                      </div>
+                        <HiArrowLeft size={16} />
+                      </button>
                     </div>
 
-                    <AnimatePresence mode="wait">
-                      {isEditMode && (
-                        <motion.div
-                          initial={{ opacity: 0, y: -10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -10 }}
-                          className="grid grid-cols-3 gap-1.5 w-full"
-                        >
-                          <motion.button
-                            whileHover={{ scale: hasPendingChanges && !isSavingChanges ? 1.02 : 1 }}
-                            whileTap={{ scale: hasPendingChanges && !isSavingChanges ? 0.98 : 1 }}
-                            onClick={handleSaveDetailChanges}
-                            disabled={!hasPendingChanges || isSavingChanges}
-                            className={`flex items-center justify-center gap-1 w-full py-2 rounded-xl transition-all font-black text-[10px] tracking-tight shadow-sm border ${hasPendingChanges && !isSavingChanges ? 'bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-600' : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'}`}
-                          >
-                            {isSavingChanges ? (
-                              <Loader2 size={12} className="animate-spin" />
-                            ) : (
-                              <Save size={12} strokeWidth={2.5} />
-                            )}
-                            <span>บันทึก</span>
-                          </motion.button>
+                    {/* Student Photo */}
+                    <div className="w-32 h-32 mx-auto rounded-full overflow-hidden shadow-[0_8px_20px_-8px_rgba(0,0,0,0.2)] shrink-0 group relative transition-all duration-500 hover:shadow-[0_12px_24px_-10px_rgba(0,0,0,0.25)] hover:-translate-y-0.5 mb-5 border-2 border-white/50">
+                      <img
+                        src={(isEditMode ? detailForm?.photoURL : selectedStudent.photoURL) || selectedStudent.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedStudent.id}`}
+                        className={`w-full h-full object-cover transition-all duration-700 ${isEditMode ? 'blur-sm scale-110' : 'group-hover:scale-110'}`}
+                        alt={selectedStudent.firstName}
+                      />
 
-                          <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => toggleStudentStatus(selectedStudent.id)}
-                            className={`flex items-center justify-center gap-1 w-full py-2 rounded-xl transition-all font-black text-[10px] tracking-tight ${selectedStudent.status === 'active' ? 'bg-white text-blue-600 border-black/5 hover:bg-slate-50' : 'bg-rose-50 text-rose-600 border-rose-100 hover:bg-rose-100'} shadow-sm border`}
-                          >
-                            <div className={`w-7 h-4 rounded-full p-0.5 flex transition-colors ${selectedStudent.status === 'active' ? 'bg-blue-500 justify-end' : 'bg-rose-500 justify-start'} shrink-0`}>
-                              <motion.div
-                                layout
-                                className="w-2.5 h-2.5 bg-white rounded-full shadow-sm"
-                              />
-                            </div>
-                            <span>{selectedStudent.status === 'active' ? 'พักเรียน' : 'เปิดสถานะ'}</span>
-                          </motion.button>
-
-                          <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => {
-                              if (confirm(`ลบรายชื่อ ${selectedStudent.prefix}${selectedStudent.firstName}?`)) {
-                                handleDelete(selectedStudent.id);
-                              }
-                            }}
-                            className="flex items-center justify-center gap-1 w-full py-2 bg-[#fff1f2] hover:bg-[#ffe4e6] text-rose-600 rounded-xl transition-all font-black text-[10px] tracking-tight shadow-sm border border-rose-100"
-                          >
-                            <Trash2 size={12} strokeWidth={2.5} />
-                            <span>ลบข้อมูล</span>
-                          </motion.button>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-
-                  <div className="h-px bg-black/[0.05] mb-5" />
-
-                  {/* Tabs Selection inside Left Panel (Vertical style) */}
-                  <div className="flex flex-col gap-1">
-                    {[
-                      { id: 'personal', label: 'ข้อมูลส่วนตัว', icon: HiUser },
-                      { id: 'family', label: 'ข้อมูลครอบครัว', icon: HiUsers },
-                      { id: 'map', label: 'แผนที่บ้าน', icon: HiMapPin },
-                    ].map((tab) => {
-                      const isActive = detailTab === tab.id;
-                      const Icon = tab.icon;
-                      return (
-                        <button
-                          key={tab.id}
-                          onClick={() => setDetailTab(tab.id as DetailTab)}
-                          className={`flex items-center gap-3 py-2.5 px-4 rounded-xl transition-all text-left w-full cursor-pointer ${isActive ? 'bg-blue-600 text-white shadow-sm font-black' : 'text-slate-600 hover:text-slate-900 hover:bg-black/[0.02] font-bold'}`}
-                        >
-                          <Icon size={16} className={isActive ? 'text-white' : 'text-slate-400'} />
-                          <span className="text-[13px]">{tab.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* RIGHT SIDE: Detail Form Content */}
-                <div className="flex-1 min-w-0 flex flex-col overflow-hidden h-full lg:pl-2">
-                  <div className="flex-1 overflow-y-auto scrollbar-hide min-h-0 px-1">
-                    <AnimatePresence mode="wait">
-                      <motion.div
-                        key={detailTab + (isEditMode ? '-edit' : '-view')}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        transition={{ duration: 0.2 }}
-                      >
-                        {detailForm && (
-                          <StudentDetailFormTab
-                            tab={detailTab}
-                            viewData={selectedStudent}
-                            formData={detailForm}
-                            isEditMode={isEditMode}
-                            onChange={(key, value) => handleDetailFormChange(key as string, value)}
-                            guardianPrefixes={guardianPrefixes}
-                            studentId={selectedStudent.id}
+                      {isEditMode ? (
+                        <label className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center cursor-pointer transition-all backdrop-blur-[2px]">
+                          {isUploading ? (
+                            <Loader2 className="text-white animate-spin mb-2" size={32} />
+                          ) : (
+                            <Camera className="text-white mb-2" size={32} />
+                          )}
+                          <span className="text-white text-[12px] font-black uppercase tracking-widest text-center px-2">
+                            {isUploading ? 'กำลังอัปโหลด...' : 'เปลี่ยนรูปถ่าย'}
+                          </span>
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept="image/*"
+                            onChange={handlePhotoUpload}
+                            disabled={isUploading}
                           />
-                        )}
-                      </motion.div>
-                    </AnimatePresence>
+                        </label>
+                      ) : (
+                        <div className="absolute inset-0 bg-black/5 group-hover:bg-transparent transition-colors pointer-events-none" />
+                      )}
+                    </div>
 
-                  </div>
-                </div>
-              </motion.div>
-            ) : (
-              /* STUDENT LIST TABLE */
-              <motion.div
-                key="grid"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15 }}
-                className="flex-1 min-h-0 overflow-y-auto scrollbar-hide"
-              >
-                {!filter.classId ? (
-                  <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center">
-                    <HiHomeModern className="h-8 w-8 text-muted-foreground/40" />
-                    <p className="text-[13px] font-black text-muted-foreground font-sukhumvit">
-                      {!filter.department
-                        ? 'เลือกแผนกจากแถบด้านซ้าย'
-                        : !filter.gradeLevel
-                          ? 'เลือกชั้นจากแถบด้านซ้าย'
-                          : 'เลือกห้องเรียนจากแถบด้านซ้าย'}
-                    </p>
-                  </div>
-                ) : filteredStudentCards.length === 0 ? (
-                  <div className="py-12 text-center text-muted-foreground">
-                    <p className="text-[13px] font-sarabun">ไม่พบรายชื่อ</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-3 pb-6">
-                    {/* Mobile cards */}
-                    <div className="flex flex-col gap-2.5 md:hidden">
-                      {filteredStudentCards.map(({ student, currentGrade }, i) => {
-                        const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
-                        return (
+                    {/* Student Info */}
+                    <div className="mb-5 text-center">
+                      <h2 className="text-xl font-bold text-slate-900 tracking-tight leading-snug mb-1">
+                        {selectedStudent.prefix}{selectedStudent.firstName} {selectedStudent.lastName}
+                      </h2>
+                      <p className="text-base font-bold text-blue-600 mb-2">
+                        รหัส: {selectedStudent.studentCode}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-400 mb-2 break-all">
+                        Firebase ID: {selectedStudent.id}
+                      </p>
+                      <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center justify-center gap-2">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full inline-block"
+                          style={{ background: STATUS_COLOR[selectedStudent.status] || '#94a3b8' }}
+                        />
+                        {STATUS_LABEL[selectedStudent.status] || 'ไม่ทราบสถานะ'}
+                      </p>
+                    </div>
+
+                    {/* Edit Toggle and Actions */}
+                    <div className="flex flex-col gap-3 mb-6">
+                      <div className="flex items-center justify-between px-4 py-2 bg-[#f2f2f7]/85 border border-black/[0.03] rounded-2xl transition-all">
+                        <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">โหมดแก้ไข</span>
+                        <div
+                          onClick={handleEditModeToggle}
+                          className={`w-9 h-5 rounded-full p-0.5 flex cursor-pointer transition-colors ${isEditMode ? 'bg-blue-600 justify-end' : 'bg-slate-300 justify-start'}`}
+                        >
                           <motion.div
-                            key={student.id}
-                            initial={{ opacity: 0, y: 8 }}
+                            layout
+                            className="w-4 h-4 bg-white rounded-full shadow-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <AnimatePresence mode="wait">
+                        {isEditMode && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -10 }}
                             animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: i * 0.02 }}
-                            onClick={() => setSelectedId(student.id)}
-                            className="cursor-pointer rounded-2xl border border-border bg-card p-3 transition-colors hover:bg-muted/40 active:scale-[0.99]"
+                            exit={{ opacity: 0, y: -10 }}
+                            className="grid grid-cols-3 gap-1.5 w-full"
                           >
-                            <div className="flex items-center gap-3">
-                              <StudentAvatar
-                                photoURL={student.photoURL}
-                                studentId={student.id}
-                                name={fullName}
-                                className="h-9 w-9 shrink-0 rounded-full"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
-                                  {fullName}
-                                </p>
-                                <p className="mt-0.5 text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
-                                  {student.studentCode || '—'}
-                                </p>
+                            <motion.button
+                              whileHover={{ scale: hasPendingChanges && !isSavingChanges ? 1.02 : 1 }}
+                              whileTap={{ scale: hasPendingChanges && !isSavingChanges ? 0.98 : 1 }}
+                              onClick={handleSaveDetailChanges}
+                              disabled={!hasPendingChanges || isSavingChanges}
+                              className={`flex items-center justify-center gap-1 w-full py-2 rounded-xl transition-all font-black text-[10px] tracking-tight shadow-sm border ${hasPendingChanges && !isSavingChanges ? 'bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-600' : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'}`}
+                            >
+                              {isSavingChanges ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              ) : (
+                                <Save size={12} strokeWidth={2.5} />
+                              )}
+                              <span>บันทึก</span>
+                            </motion.button>
+
+                            <motion.button
+                              whileHover={{ scale: 1.02 }}
+                              whileTap={{ scale: 0.98 }}
+                              onClick={() => toggleStudentStatus(selectedStudent.id)}
+                              className={`flex items-center justify-center gap-1 w-full py-2 rounded-xl transition-all font-black text-[10px] tracking-tight ${selectedStudent.status === 'active' ? 'bg-white text-blue-600 border-black/5 hover:bg-slate-50' : 'bg-rose-50 text-rose-600 border-rose-100 hover:bg-rose-100'} shadow-sm border`}
+                            >
+                              <div className={`w-7 h-4 rounded-full p-0.5 flex transition-colors ${selectedStudent.status === 'active' ? 'bg-blue-500 justify-end' : 'bg-rose-500 justify-start'} shrink-0`}>
+                                <motion.div
+                                  layout
+                                  className="w-2.5 h-2.5 bg-white rounded-full shadow-sm"
+                                />
                               </div>
-                              {currentGrade ? (
-                                <span className="inline-flex shrink-0 rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-bold text-primary font-sukhumvit">
-                                  {currentGrade}
-                                </span>
-                              ) : null}
-                            </div>
-                            <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
-                              <span className="text-[11px] font-bold text-muted-foreground font-sukhumvit">
-                                สถานะ
-                              </span>
-                              <span className="text-[12px] font-bold text-foreground font-sukhumvit">
-                                {STATUS_LABEL[student.status] || '—'}
-                              </span>
-                            </div>
+                              <span>{selectedStudent.status === 'active' ? 'พักเรียน' : 'เปิดสถานะ'}</span>
+                            </motion.button>
+
+                            <motion.button
+                              whileHover={{ scale: 1.02 }}
+                              whileTap={{ scale: 0.98 }}
+                              onClick={() => {
+                                if (confirm(`ลบรายชื่อ ${selectedStudent.prefix}${selectedStudent.firstName}?`)) {
+                                  handleDelete(selectedStudent.id);
+                                }
+                              }}
+                              className="flex items-center justify-center gap-1 w-full py-2 bg-[#fff1f2] hover:bg-[#ffe4e6] text-rose-600 rounded-xl transition-all font-black text-[10px] tracking-tight shadow-sm border border-rose-100"
+                            >
+                              <Trash2 size={12} strokeWidth={2.5} />
+                              <span>ลบข้อมูล</span>
+                            </motion.button>
                           </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    <div className="h-px bg-black/[0.05] mb-5" />
+
+                    {/* Tabs Selection inside Left Panel (Vertical style) */}
+                    <div className="flex flex-col gap-1">
+                      {[
+                        { id: 'personal', label: 'ข้อมูลส่วนตัว', icon: HiUser },
+                        { id: 'family', label: 'ข้อมูลครอบครัว', icon: HiUsers },
+                        { id: 'map', label: 'แผนที่บ้าน', icon: HiMapPin },
+                      ].map((tab) => {
+                        const isActive = detailTab === tab.id;
+                        const Icon = tab.icon;
+                        return (
+                          <button
+                            key={tab.id}
+                            onClick={() => setDetailTab(tab.id as DetailTab)}
+                            className={`flex items-center gap-3 py-2.5 px-4 rounded-xl transition-all text-left w-full cursor-pointer ${isActive ? 'bg-blue-600 text-white shadow-sm font-black' : 'text-slate-600 hover:text-slate-900 hover:bg-black/[0.02] font-bold'}`}
+                          >
+                            <Icon size={16} className={isActive ? 'text-white' : 'text-slate-400'} />
+                            <span className="text-[13px]">{tab.label}</span>
+                          </button>
                         );
                       })}
                     </div>
+                  </div>
 
-                    {/* Desktop table */}
-                    <div className={cn('hidden md:block', TABLE_SHELL)}>
-                      <div className="border-b border-border bg-background">
-                        <div
-                          className="grid gap-3 px-4 py-3"
-                          style={{ gridTemplateColumns: TABLE_GRID }}
+                  {/* RIGHT SIDE: Detail Form Content */}
+                  <div className="flex-1 min-w-0 flex flex-col overflow-hidden h-full lg:pl-2 lg:border-r lg:border-black/[0.05]">
+                    <div className="flex-1 overflow-y-auto scrollbar-hide min-h-0 px-1 pt-2 sm:px-2 sm:pt-3">
+                      <AnimatePresence mode="wait">
+                        <motion.div
+                          key={detailTab + (isEditMode ? '-edit' : '-view')}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          transition={{ duration: 0.2 }}
                         >
-                          <span className={TABLE_HEADER_CELL}>รหัส</span>
-                          <span className={TABLE_HEADER_CELL}>นักเรียน</span>
-                          <span className={TABLE_HEADER_CELL}>ชั้น</span>
-                          <span className={TABLE_HEADER_CELL}>สถานะ</span>
-                        </div>
-                      </div>
-                      <div className="flex flex-col">
+                          {detailForm && (
+                            <StudentDetailFormTab
+                              tab={detailTab}
+                              viewData={selectedStudent}
+                              formData={detailForm}
+                              isEditMode={isEditMode}
+                              onChange={(key, value) => handleDetailFormChange(key as string, value)}
+                              guardianPrefixes={guardianPrefixes}
+                              studentId={selectedStudent.id}
+                            />
+                          )}
+                        </motion.div>
+                      </AnimatePresence>
+
+                    </div>
+                  </div>
+                </motion.div>
+              ) : (
+                /* STUDENT LIST TABLE */
+                <motion.div
+                  key="grid"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="flex-1 min-h-0 overflow-y-auto scrollbar-hide"
+                >
+                  {!filter.classId ? (
+                    <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center">
+                      <HiHomeModern className="h-8 w-8 text-muted-foreground/40" />
+                      <p className="text-[13px] font-black text-muted-foreground font-sukhumvit">
+                        {!filter.department
+                          ? 'เลือกแผนกจากแถบด้านซ้าย'
+                          : !filter.gradeLevel
+                            ? 'เลือกชั้นจากแถบด้านซ้าย'
+                            : 'เลือกห้องเรียนจากแถบด้านซ้าย'}
+                      </p>
+                    </div>
+                  ) : filteredStudentCards.length === 0 ? (
+                    <div className="py-12 text-center text-muted-foreground">
+                      <p className="text-[13px] font-sarabun">ไม่พบรายชื่อ</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-3 pb-6">
+                      {/* Mobile cards */}
+                      <div className="flex flex-col gap-2.5 md:hidden">
                         {filteredStudentCards.map(({ student, currentGrade }, i) => {
                           const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
                           return (
                             <motion.div
                               key={student.id}
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              transition={{ delay: i * 0.015 }}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: i * 0.02 }}
                               onClick={() => setSelectedId(student.id)}
-                              className="grid cursor-pointer items-center gap-3 border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-muted/40"
-                              style={{ gridTemplateColumns: TABLE_GRID }}
+                              className="cursor-pointer rounded-2xl border border-border bg-card p-3 transition-colors hover:bg-muted/40 active:scale-[0.99]"
                             >
-                              <span className="truncate text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
-                                {student.studentCode || '—'}
-                              </span>
-                              <div className="flex min-w-0 items-center gap-3">
+                              <div className="flex items-center gap-3">
                                 <StudentAvatar
                                   photoURL={student.photoURL}
                                   studentId={student.id}
                                   name={fullName}
                                   className="h-9 w-9 shrink-0 rounded-full"
                                 />
-                                <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
-                                  {fullName}
-                                </p>
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                    {fullName}
+                                  </p>
+                                  <p className="mt-0.5 text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+                                    {student.studentCode || '—'}
+                                  </p>
+                                </div>
+                                {currentGrade ? (
+                                  <span className="inline-flex shrink-0 rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-bold text-primary font-sukhumvit">
+                                    {currentGrade}
+                                  </span>
+                                ) : null}
                               </div>
-                              <span className="truncate text-[13px] font-semibold text-foreground font-sukhumvit">
-                                {currentGrade || (
-                                  <span className="text-muted-foreground/40">—</span>
-                                )}
-                              </span>
-                              <span className="truncate text-[13px] font-semibold text-foreground font-sukhumvit">
-                                {STATUS_LABEL[student.status] || (
-                                  <span className="text-muted-foreground/40">—</span>
-                                )}
-                              </span>
+                              <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
+                                <span className="text-[11px] font-bold text-muted-foreground font-sukhumvit">
+                                  สถานะ
+                                </span>
+                                <span className="text-[12px] font-bold text-foreground font-sukhumvit">
+                                  {STATUS_LABEL[student.status] || '—'}
+                                </span>
+                              </div>
                             </motion.div>
                           );
                         })}
                       </div>
+
+                      {/* Desktop table */}
+                      <div className={cn('hidden md:block', TABLE_SHELL)}>
+                        <div className="border-b border-border bg-muted shrink-0">
+                          <div
+                            className="grid gap-3 px-4 py-3"
+                            style={{ gridTemplateColumns: TABLE_GRID }}
+                          >
+                            <span className={TABLE_HEADER_CELL}>รหัส</span>
+                            <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                            <span className={TABLE_HEADER_CELL}>ชั้น</span>
+                            <span className={TABLE_HEADER_CELL}>สถานะ</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col">
+                          {filteredStudentCards.map(({ student, currentGrade }, i) => {
+                            const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
+                            return (
+                              <motion.div
+                                key={student.id}
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                transition={{ delay: i * 0.015 }}
+                                onClick={() => setSelectedId(student.id)}
+                                className="grid cursor-pointer items-center gap-3 border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-muted/40"
+                                style={{ gridTemplateColumns: TABLE_GRID }}
+                              >
+                                <span className="truncate text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+                                  {student.studentCode || '—'}
+                                </span>
+                                <div className="flex min-w-0 items-center gap-3">
+                                  <StudentAvatar
+                                    photoURL={student.photoURL}
+                                    studentId={student.id}
+                                    name={fullName}
+                                    className="h-9 w-9 shrink-0 rounded-full"
+                                  />
+                                  <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                    {fullName}
+                                  </p>
+                                </div>
+                                <span className="truncate text-[13px] font-semibold text-foreground font-sukhumvit">
+                                  {currentGrade || (
+                                    <span className="text-muted-foreground/40">—</span>
+                                  )}
+                                </span>
+                                <span className="truncate text-[13px] font-semibold text-foreground font-sukhumvit">
+                                  {STATUS_LABEL[student.status] || (
+                                    <span className="text-muted-foreground/40">—</span>
+                                  )}
+                                </span>
+                              </motion.div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </motion.div>
-            )}
+                  )}
+                </motion.div>
+              )}
             </AnimatePresence>
           </div>
 
@@ -1078,14 +1130,75 @@ export default function StudentManager() {
           <ClassroomAssignmentTab headerTabs={paneHeaderTabs} />
         </Suspense>
       ) : (
-        <div className="relative flex h-full min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
-          <div className="mb-2 hidden min-h-[3.25rem] w-full shrink-0 items-center border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:flex">
-            {paneHeaderTabs}
+        <div className="relative flex h-full min-h-0 max-h-full flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+          <div
+            className={cn(
+              'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
+              sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+            )}
+          >
+            <GradeBookClassSidebar
+              selectedDept={promoteDept}
+              selectedGrade={promoteGrade}
+              selectedClassId={promoteClassId}
+              gradeOptions={promoteGradeOptions}
+              classOptions={promoteClassOptions}
+              onSelectDept={handlePromoteSelectDept}
+              onSelectGrade={handlePromoteSelectGrade}
+              onSelectClass={setPromoteClassId}
+              collapsed={sidebarCollapsed}
+              headerAction={(
+                <>
+                  {!sidebarCollapsed && (
+                    <Select
+                      value={promoteYear}
+                      onValueChange={(v) => {
+                        setPromoteYear(v);
+                        setPromoteGrade('');
+                        setPromoteClassId('');
+                      }}
+                    >
+                      <SelectTrigger
+                        aria-label="ปีการศึกษา"
+                        className="h-8 min-w-0 flex-1 rounded-full border-border bg-background px-2 text-[11px] font-bold text-foreground font-sukhumvit"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {yearOptions.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <div className={cn('flex shrink-0', HEADER_ICON_BTN_GROUP)}>
+                    <SidebarCollapseButton
+                      collapsed={sidebarCollapsed}
+                      onToggle={() => setSidebarCollapsed((v) => !v)}
+                    />
+                  </div>
+                </>
+              )}
+            />
           </div>
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <Suspense fallback={<div className="py-10 text-center text-sm text-slate-500">กำลังโหลด...</div>}>
-              <StudentTransitionTab />
-            </Suspense>
+
+          <div className="relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
+            <div className="mb-2 hidden min-h-[3.25rem] w-full shrink-0 items-center border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:flex">
+              {paneHeaderTabs}
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <Suspense fallback={<div className="py-10 text-center text-sm text-slate-500">กำลังโหลด...</div>}>
+                <StudentTransitionTab
+                  sourceYear={promoteYear}
+                  sourceLevel={promoteGrade}
+                  sourceClassroomId={promoteClassId}
+                  transitionAction={promoteAction}
+                  onTransitionActionChange={setPromoteAction}
+                />
+              </Suspense>
+            </div>
           </div>
         </div>
       )}

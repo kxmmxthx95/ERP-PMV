@@ -983,7 +983,7 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
 }
 
 // ── Hook: useExamAttempt (student side) ───────────────────────────────────────
-export type ExamRoomPreview = Pick<ExamRoom, 'title' | 'gradeLevel' | 'subjectName' | 'className'>;
+export type ExamRoomPreview = Pick<ExamRoom, 'title' | 'gradeLevel' | 'subjectName' | 'className' | 'subjectGroupId' | 'subSubjectGroup'>;
 
 export type ExamPdfPart = {
   setId: string;
@@ -1104,6 +1104,8 @@ export function useExamAttempt(roomId: string) {
           gradeLevel: data.gradeLevel,
           subjectName: data.subjectName,
           className: data.className,
+          subjectGroupId: data.subjectGroupId,
+          subSubjectGroup: data.subSubjectGroup,
         });
       })
       .catch(() => {

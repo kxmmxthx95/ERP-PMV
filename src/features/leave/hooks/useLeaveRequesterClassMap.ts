@@ -14,6 +14,7 @@ import type { TeacherProfile } from '@/types/teacher';
 export type LeaveRequesterProfile = {
   gradeLevel: string;
   className: string;
+  classId: string;
   departmentId: Department | null;
   approverNames: string[];
 };
@@ -159,6 +160,7 @@ export function useLeaveRequesterClassMap(
       map.set(studentId, {
         gradeLevel,
         className: className || gradeLevel,
+        classId: resolvedClassId ?? '',
         departmentId,
         approverNames,
       });

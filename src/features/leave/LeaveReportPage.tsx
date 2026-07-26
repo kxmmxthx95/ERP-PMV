@@ -285,12 +285,12 @@ function LeaveReportView({
           { label: 'รอพิจารณา', value: summary.pending, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50/50' },
           { label: 'ไม่อนุมัติ', value: summary.rejected, icon: XCircle, color: 'text-rose-600', bg: 'bg-rose-50/50' },
         ].map((item) => (
-          <div key={item.label} className="rounded-3xl border border-slate-100 bg-white/80 backdrop-blur-sm p-5 flex flex-col items-center text-center transition-all hover:shadow-md">
-            <div className={cn("mb-3 inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-slate-100", item.color)}>
-              <item.icon size={18} strokeWidth={2.5} />
+          <div key={item.label} className="rounded-2xl border border-slate-100 bg-white/80 backdrop-blur-sm p-3 flex flex-col items-center text-center transition-all hover:shadow-md">
+            <div className={cn("mb-2 inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white shadow-sm ring-1 ring-slate-100", item.color)}>
+              <item.icon size={16} strokeWidth={2.5} />
             </div>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{item.label}</p>
-            <p className={cn("mt-1 text-2xl font-black tabular-nums", item.color)}>{item.value}</p>
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{item.label}</p>
+            <p className={cn("mt-2 text-xl font-black tabular-nums", item.color)}>{item.value}</p>
           </div>
         ))}
       </div>

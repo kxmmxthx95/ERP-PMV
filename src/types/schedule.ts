@@ -43,6 +43,7 @@ export interface Teacher {
   name: string;
   nameEn?: string;
   department: string; // 'early' | 'primary' | 'secondary'
+  photoURL?: string;
   /** รายวิชาที่ครูได้รับมอบหมาย (อ้างอิง Subject.id จาก curriculum) */
   teachingSubjectIds?: string[];
 }

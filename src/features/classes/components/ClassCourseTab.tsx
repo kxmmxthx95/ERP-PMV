@@ -336,7 +336,7 @@ export default function ClassCourseTab({ classRoom }: Props) {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col gap-4 font-sukhumvit md:h-auto">
+    <div className="flex h-full min-h-0 w-full flex-col gap-4 font-sukhumvit">
       {headerPortalTarget && createPortal(
         <div className={`relative flex w-full flex-1 flex-wrap items-center justify-end gap-3.5 ${isTeacherPickerOpen ? 'z-50' : 'z-20'}`}>
           <div className="flex w-full items-center justify-end gap-2 md:w-auto">
@@ -448,9 +448,9 @@ export default function ClassCourseTab({ classRoom }: Props) {
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.05 }}
-        className="relative z-10 flex min-h-0 flex-1 flex-col md:flex-none"
+        className="relative z-10 flex min-h-0 flex-1 flex-col"
       >
-        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hide pb-24 md:flex-none md:overflow-visible md:pb-0">
+        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hide pb-24 md:pb-8">
           <div className="flex flex-col gap-3">
             {/* Mobile */}
             <div className="flex flex-col gap-2.5 px-0.5 md:hidden">

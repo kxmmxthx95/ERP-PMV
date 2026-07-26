@@ -5,52 +5,9 @@ const firestore_1 = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const getAdminFirestore_1 = require("./getAdminFirestore");
 const reportMessage_1 = require("./reportMessage");
+const linePush_1 = require("./linePush");
 const REGION = "asia-southeast1";
 const db = (0, getAdminFirestore_1.getAdminFirestore)();
-function getLineChannelToken() {
-    return (process.env.LINE_CHANNEL_TOKEN || "").trim();
-}
-async function pushMessage(lineUid, text, token) {
-    const https = await Promise.resolve().then(() => require("https"));
-    const body = JSON.stringify({
-        to: lineUid,
-        messages: [{ type: "text", text }],
-    });
-    console.log(`[pushMessage] sending to lineUid: ${lineUid.slice(0, 8)}...`);
-    console.log(`[pushMessage] message text length: ${text.length}`);
-    return new Promise((resolve) => {
-        const req = https.request({
-            hostname: "api.line.me",
-            path: "/v2/bot/message/push",
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-                "Content-Length": Buffer.byteLength(body),
-            },
-        }, (res) => {
-            let data = "";
-            res.on("data", (chunk) => {
-                data += chunk;
-            });
-            res.on("end", () => {
-                if (res.statusCode === 200) {
-                    console.log("[pushMessage] success");
-                    resolve({ ok: true });
-                    return;
-                }
-                console.error(`[pushMessage] failed: HTTP ${res.statusCode}`, data);
-                resolve({ ok: false, error: `HTTP ${res.statusCode}: ${data}` });
-            });
-        });
-        req.on("error", (err) => {
-            console.error(`[pushMessage] request error: ${err.message}`);
-            resolve({ ok: false, error: err.message });
-        });
-        req.write(body);
-        req.end();
-    });
-}
 function resolveLineUid(userData, payloadToken) {
     const fromUserToken = typeof userData?.lineToken === "string" ? userData.lineToken.trim() : "";
     const fromUserUid = typeof userData?.lineUid === "string" ? userData.lineUid.trim() : "";
@@ -116,7 +73,7 @@ exports.sendLineReport = (0, firestore_1.onDocumentCreated)({
         console.log(`[sendLineReport] ${sendId} already processed, skipping`);
         return;
     }
-    const token = getLineChannelToken();
+    const token = (0, linePush_1.getLineChannelToken)();
     if (!token) {
         console.error("[sendLineReport] LINE_CHANNEL_TOKEN not configured");
         await snap.ref.update({
@@ -173,7 +130,7 @@ exports.sendLineReport = (0, firestore_1.onDocumentCreated)({
             results.push({ uid: r.uid, ok: false, error: "no lineUid/lineToken" });
             continue;
         }
-        const result = await pushMessage(lineUid, messageText, token);
+        const result = await (0, linePush_1.pushLineMessage)(lineUid, messageText, token);
         results.push({ uid: r.uid, ...result });
         if (!result.ok) {
             console.error(`[sendLineReport] push failed for uid=${r.uid}:`, result.error);

@@ -3,9 +3,13 @@ import { motion } from 'framer-motion';
 import { HiOutlineChartBar } from 'react-icons/hi2';
 import { cn } from '@/lib/utils';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
+import StudentCalendarAttendanceDrawer, { type StudentInfo } from './StudentCalendarAttendancePanel';
+import { useMicroSyllabusAll } from '@/hooks/useMicroSyllabus';
 import type { AttendanceStatus, AttendanceRecord } from '@/types/teaching';
 import type { Subject } from '@/types/curriculum';
 import type { ClassRoom } from '@/types/class';
+import type { CalendarEvent } from '@/types/calendar';
+import type { ScheduleEntry } from '@/types/schedule';
 
 interface Props {
   mySubjects: Subject[];
@@ -15,6 +19,11 @@ interface Props {
   /** When set with lockedClassId, pin the table to this pair. */
   lockedSubjectId?: string;
   lockedClassId?: string;
+  calendarEvents?: CalendarEvent[];
+  /** ตารางสอนทั้งหมด — ใช้ enumerate คาบที่ครูยังไม่เช็คชื่อ ให้นับเป็นขาดแทนที่จะหายไปเงียบๆ */
+  scheduleEntries?: ScheduleEntry[];
+  rangeStart?: string;
+  rangeEnd?: string;
 }
 
 type StatusCounts = Record<'present' | 'absent' | 'late' | 'leave', number>;
@@ -46,12 +55,40 @@ export default function SummaryTab({
   getStudentsForClass,
   lockedSubjectId,
   lockedClassId,
+  calendarEvents = [],
+  scheduleEntries = [],
+  rangeStart = '',
+  rangeEnd = '',
 }: Props) {
   const [internalSubjectId] = useState(mySubjects[0]?.id ?? '');
   const [internalClassId] = useState(classes[0]?.id ?? '');
 
   const selectedSubjectId = lockedSubjectId ?? internalSubjectId;
   const selectedClassId = lockedClassId ?? internalClassId;
+
+  // Drawer state
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState<StudentInfo | null>(null);
+
+  const { syllabi } = useMicroSyllabusAll(drawerOpen);
+  const noTeachingDates = useMemo(() => {
+    const dates = new Set<string>();
+    syllabi.forEach((s) => {
+      if (s.classId !== selectedClassId || s.subjectId !== selectedSubjectId) return;
+      s.topics.forEach((t) => {
+        if (t.isNoTeaching && t.date) dates.add(t.date);
+      });
+    });
+    return dates;
+  }, [syllabi, selectedClassId, selectedSubjectId]);
+
+  const scheduleSlots = useMemo(
+    () =>
+      scheduleEntries
+        .filter((e) => e.classId === selectedClassId && e.subjectId === selectedSubjectId)
+        .map((e) => ({ day: e.day, period: e.period })),
+    [scheduleEntries, selectedClassId, selectedSubjectId],
+  );
 
   const sessions = useMemo(() => {
     const seen = new Map<string, { date: string; period: number }>();
@@ -85,7 +122,8 @@ export default function SummaryTab({
   const totalSessions = sessions.length;
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="relative flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+      {/* ── Summary table ── */}
       {students.length === 0 || totalSessions === 0 ? (
         <div className="flex flex-1 items-center justify-center">
           <div className="text-center text-muted-foreground">
@@ -131,7 +169,9 @@ export default function SummaryTab({
                 return (
                   <tr
                     key={student.id}
-                    className="border-b border-border/60 transition-colors last:border-b-0 hover:bg-muted/30"
+                    className="cursor-pointer border-b border-border/60 transition-colors last:border-b-0 hover:bg-muted/30 active:bg-muted/50"
+                    onClick={() => { setSelectedStudent(student); setDrawerOpen(true); }}
+                    title="ดูประวัติการเข้าเรียน"
                   >
                     <td className="sticky left-0 z-10 bg-white px-5 py-4">
                       <div className="flex min-w-[200px] items-center gap-3">
@@ -189,6 +229,21 @@ export default function SummaryTab({
           </table>
         </motion.div>
       )}
+
+      {/* ── Calendar Drawer ── */}
+      <StudentCalendarAttendanceDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        student={selectedStudent}
+        attendance={attendance}
+        subjectId={selectedSubjectId}
+        classId={selectedClassId}
+        calendarEvents={calendarEvents}
+        noTeachingDates={noTeachingDates}
+        scheduleSlots={scheduleSlots}
+        rangeStart={rangeStart}
+        rangeEnd={rangeEnd}
+      />
     </div>
   );
 }

@@ -3,64 +3,10 @@ import * as admin from "firebase-admin";
 import { getAdminFirestore, getFirestoreDatabaseId } from "./getAdminFirestore";
 import { buildDailyMessage } from "./reportMessage";
 import type { StaffSummary, StudentSummary } from "./reportMessage";
+import { getLineChannelToken, pushLineMessage } from "./linePush";
 
 const REGION = "asia-southeast1";
 const db = getAdminFirestore();
-
-function getLineChannelToken(): string {
-  return (process.env.LINE_CHANNEL_TOKEN || "").trim();
-}
-
-async function pushMessage(
-  lineUid: string,
-  text: string,
-  token: string,
-): Promise<{ ok: boolean; error?: string }> {
-  const https = await import("https");
-  const body = JSON.stringify({
-    to: lineUid,
-    messages: [{ type: "text", text }],
-  });
-
-  console.log(`[pushMessage] sending to lineUid: ${lineUid.slice(0, 8)}...`);
-  console.log(`[pushMessage] message text length: ${text.length}`);
-
-  return new Promise((resolve) => {
-    const req = https.request(
-      {
-        hostname: "api.line.me",
-        path: "/v2/bot/message/push",
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-          "Content-Length": Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        let data = "";
-        res.on("data", (chunk) => {
-          data += chunk;
-        });
-        res.on("end", () => {
-          if (res.statusCode === 200) {
-            console.log("[pushMessage] success");
-            resolve({ ok: true });
-            return;
-          }
-          console.error(`[pushMessage] failed: HTTP ${res.statusCode}`, data);
-          resolve({ ok: false, error: `HTTP ${res.statusCode}: ${data}` });
-        });
-      },
-    );
-    req.on("error", (err) => {
-      console.error(`[pushMessage] request error: ${err.message}`);
-      resolve({ ok: false, error: err.message });
-    });
-    req.write(body);
-    req.end();
-  });
-}
 
 interface LeaveSummary {
   pendingStaff: number;
@@ -231,7 +177,7 @@ export const sendLineReport = onDocumentCreated(
         continue;
       }
 
-      const result = await pushMessage(lineUid, messageText, token);
+      const result = await pushLineMessage(lineUid, messageText, token);
       results.push({ uid: r.uid, ...result });
 
       if (!result.ok) {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import {} from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar, CalendarX, ArrowLeft, SlidersHorizontal } from 'lucide-react';
 import { format } from 'date-fns';
@@ -39,22 +39,10 @@ export default function UpcomingPanel({
   onEditEvent,
   onDeleteEvent
 }: UpcomingPanelProps) {
-  const [currentPage, setCurrentPage] = useState(0);
-  const itemsPerPage = 5;
-  
   const isSelected = selectedDate && !isNaN(selectedDate.getTime());
   const displayEvents = isSelected ? selectedEvents : upcomingEvents;
-  
-  // Apply type filter logic here too if needed, but it's already handled by activeFilters in AcademicCalendar.
-  // However, the Select will update filterType which updates activeFilters.
-  const filtered = displayEvents.filter(e => activeFilters.has(e.type));
-  
-  const totalPages = Math.ceil(filtered.length / itemsPerPage);
-  const paginatedEvents = filtered.slice(currentPage * itemsPerPage, (currentPage + 1) * itemsPerPage);
 
-  useEffect(() => {
-    setCurrentPage(0);
-  }, [isSelected, activeFilters]);
+  const filtered = displayEvents.filter(e => activeFilters.has(e.type));
 
   const title = isSelected 
     ? `${format(selectedDate, 'd MMMM', { locale: th })} พ.ศ. ${selectedDate.getFullYear() + 543}`
@@ -65,10 +53,10 @@ export default function UpcomingPanel({
     : `${filtered.length} กิจกรรมทั้งหมด`;
 
   return (
-    <motion.div variants={cardAnim} className="flex flex-col gap-3">
+    <motion.div variants={cardAnim} className="flex flex-col gap-3 h-full min-h-0">
       {/* Main card */}
       <div
-        className="rounded-[2rem] overflow-hidden flex-1 flex flex-col min-h-[480px]"
+        className="rounded-[2rem] overflow-hidden flex-1 flex flex-col"
         style={glassCard}
       >
         {/* Header */}
@@ -119,26 +107,14 @@ export default function UpcomingPanel({
         </div>
 
         {/* List */}
-        <div className="flex-1">
+        <div className="flex-1 min-h-0 overflow-y-auto">
           <AnimatePresence mode="wait">
             <motion.div
-              key={`${isSelected ? 'selected' : 'upcoming'}-${currentPage}`}
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
+              key={`${isSelected ? 'selected' : 'upcoming'}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              drag="x"
-              dragConstraints={{ left: 0, right: 0 }}
-              dragElastic={0.2}
-              onDragEnd={(_, info) => {
-                const swipeThreshold = 50;
-                if (info.offset.x < -swipeThreshold && currentPage < totalPages - 1) {
-                  setCurrentPage(prev => prev + 1);
-                } else if (info.offset.x > swipeThreshold && currentPage > 0) {
-                  setCurrentPage(prev => prev - 1);
-                }
-              }}
-              className="cursor-grab active:cursor-grabbing"
             >
               {filtered.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-14 gap-2 text-slate-300">
@@ -154,7 +130,7 @@ export default function UpcomingPanel({
                 </div>
               ) : (
                 <div className="divide-y" style={{ borderColor: 'rgba(0,0,0,0.04)' }}>
-                  {paginatedEvents.map((ev, i) => (
+                  {filtered.map((ev, i) => (
                     <UpcomingEventItem 
                       key={ev.id} 
                       event={ev} 
@@ -168,23 +144,6 @@ export default function UpcomingPanel({
             </motion.div>
           </AnimatePresence>
         </div>
-
-        {/* Pagination Footer */}
-        {totalPages > 1 && (
-          <div className="flex justify-center items-center gap-2 py-6 px-5" style={{ borderTop: '1px solid rgba(0,0,0,0.03)' }}>
-            {Array.from({ length: totalPages }).map((_, i) => (
-              <button
-                key={i}
-                onClick={() => setCurrentPage(i)}
-                className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                  currentPage === i 
-                    ? 'bg-slate-800 w-6 shadow-sm' 
-                    : 'bg-slate-200 hover:bg-slate-300'
-                }`}
-              />
-            ))}
-          </div>
-        )}
       </div>
     </motion.div>
   );

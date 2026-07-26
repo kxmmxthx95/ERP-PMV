@@ -4,7 +4,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   HiPlus,
   HiMagnifyingGlass,
-  HiLockClosed,
   HiChevronRight,
   HiSparkles,
   HiAcademicCap,
@@ -17,8 +16,13 @@ import AddCurriculumVersionModal from './components/AddCurriculumVersionModal';
 import GoogleSheetImportModal from './components/GoogleSheetImportModal';
 import AddCourseModal from './components/AddCourseModal';
 import AssignGradesModal from './components/AssignGradesModal';
+import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
+import { cn } from '@/lib/utils';
 import {
   type CurriculumVersion, type CurriculumCourse, type NewCurriculumCourse, type CourseCategory, type CurriculumTrack,
+  type Department,
   DEPARTMENT_CONFIG, CURRICULUM_TRACK_CONFIG,
 } from '@/types/curriculum';
 
@@ -48,8 +52,13 @@ export default function CurriculumManager() {
   const [filterGradeLevel, setFilterGradeLevel] = useState('all');
   const [filterCategory, setFilterCategory] = useState<CourseCategory | 'all'>('all');
   const [filterSubjectGroup, setFilterSubjectGroup] = useState('all');
-  const [filterSemester, setFilterSemester] = useState<number | 'all'>('all');
+  const [filterSemester, setFilterSemester] = useState<number | 'all'>(1);
   const [searchTerm, setSearchTerm] = useState('');
+
+  // ── Sidebar drill-down: แผนก → ชั้น ──────────────────────────────────────
+  const [sidebarDept, setSidebarDept] = useState<Department | ''>('');
+  const [sidebarGrade, setSidebarGrade] = useState('');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const {
     isLoading,
@@ -87,6 +96,14 @@ export default function CurriculumManager() {
   useEffect(() => {
     setHeaderCenterMobilePortalEl(document.getElementById('header-portal-center-mobile'));
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (selectedVersion?.id) {
+        toggleAllowEdit(selectedVersion.id, false);
+      }
+    };
+  }, [selectedVersion?.id, toggleAllowEdit]);
 
   useEffect(() => {
     const handleResize = () => setIsMdOrBelow(window.innerWidth < 1024);
@@ -146,18 +163,63 @@ export default function CurriculumManager() {
     : null;
 
   const filteredVersions = useMemo(() => {
-    return versions.filter(v =>
-      v.name.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  }, [versions, searchTerm]);
+    return versions.filter((v) => {
+      if (!v.name.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+      if (sidebarDept && v.department !== sidebarDept) return false;
+      if (sidebarGrade && !(v.assignedGrades?.includes(sidebarGrade) || v.level === sidebarGrade)) return false;
+      return true;
+    });
+  }, [versions, searchTerm, sidebarDept, sidebarGrade]);
+
+  const sidebarGradeOptions = sidebarDept ? DEPARTMENT_CONFIG[sidebarDept].grades : [];
+
+  const handleSidebarSelectDept = (dept: Department) => {
+    setSidebarDept((prev) => (prev === dept ? '' : dept));
+    setSidebarGrade('');
+  };
+
+  const handleSidebarSelectGrade = (grade: string) => {
+    setSidebarGrade((prev) => (prev === grade ? '' : grade));
+  };
 
   const currentCourses = currentVersion ? (coursesByVersion[currentVersion.id] || []) : [];
   const existingCodes = currentCourses.map(c => c.courseCode);
-
-
+  const collapsedVersionRail = useMemo(() => {
+    if (!sidebarDept || !sidebarGrade) return null;
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 mt-2 overflow-y-auto scrollbar-hide py-1 w-full min-h-0">
+        {filteredVersions.map((v) => {
+          const isActive = currentVersion?.id === v.id;
+          const gradient = getVersionGradient(v.id);
+          return (
+            <button
+              key={v.id}
+              onClick={() => {
+                setSelectedVersion(v);
+                loadCoursesForVersion(v.id);
+              }}
+              className={cn(
+                'w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center text-white text-[11px] font-black transition-all shrink-0 bg-gradient-to-br shadow-sm cursor-pointer',
+                gradient,
+                isActive ? 'ring-2 ring-blue-600 ring-offset-2 scale-105' : 'hover:scale-105'
+              )}
+              title={v.name}
+            >
+              {(v.year || '').toString().slice(-2)}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }, [filteredVersions, currentVersion, loadCoursesForVersion, sidebarDept, sidebarGrade]);
 
   return (
-    <div className="flex h-full w-full bg-transparent overflow-hidden pb-4 gap-0 font-sukhumvit text-black">
+    <div
+      className={cn(
+        'flex w-full bg-transparent overflow-hidden pb-4 gap-0 font-sukhumvit text-black',
+        'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
+      )}
+    >
 
       {isMdOrBelow && headerCenterMobilePortalEl && createPortal(
         <div className="pointer-events-none flex items-center gap-1.5 lg:hidden">
@@ -178,144 +240,166 @@ export default function CurriculumManager() {
           exit={{ opacity: 0 }}
           className="flex flex-1 min-w-0 h-full overflow-hidden relative gap-4"
         >
-            {/* LEFT — Version Sidebar */}
-            <div className={`${currentVersion ? 'hidden lg:flex' : 'flex'} w-full lg:w-[300px] xl:w-[320px] shrink-0 flex-col h-full overflow-hidden rounded-[2rem] border border-white/30 bg-white/30 backdrop-blur-sm shadow-sm p-4`}>
-              {/* Sidebar Header */}
-              <div className="flex items-center justify-between pb-3 flex-shrink-0">
-                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">หลักสูตรทั้งหมด</p>
-                  <p className="text-[13px] font-black text-slate-800 mt-0.5">{filteredVersions.length} หลักสูตร</p>
-                </div>
-                {!isReadOnly && (
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => { setVersionToEdit(null); setVersionModalOpen(true); }}
-                    className="flex items-center justify-center w-8 h-8 bg-blue-600 text-white rounded-full shadow-md hover:bg-blue-700 transition-all"
-                    title="เพิ่มหลักสูตร"
-                  >
-                    <HiPlus size={14} className="stroke-[2px]" />
-                  </motion.button>
-                )}
-              </div>
-
-              {/* Search */}
-              <div className="relative mb-3 flex-shrink-0">
-                <HiMagnifyingGlass className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
-                <input
-                  type="text"
-                  placeholder="ค้นหาหลักสูตร..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-8 pr-3 py-2 bg-slate-50/80 border border-slate-200/60 rounded-xl text-[11px] font-bold focus:ring-2 focus:ring-slate-200 focus:border-slate-300 transition-all w-full outline-none placeholder:text-slate-300"
-                />
-              </div>
-
-              {/* Version List */}
-              <div className="flex-1 overflow-y-auto scrollbar-hide flex flex-col gap-2 pr-1">
-                <AnimatePresence>
-                  {isLoading ? (
-                    [...Array(4)].map((_, i) => (
-                      <div key={i} className="h-[90px] rounded-2xl bg-slate-100 animate-pulse" />
-                    ))
-                  ) : filteredVersions.length === 0 ? (
-                    <div className="h-32 flex flex-col items-center justify-center text-slate-400 opacity-50 border-2 border-dashed border-slate-200 rounded-2xl">
-                      <HiMagnifyingGlass size={22} className="mb-2" />
-                      <span className="text-xs font-bold">ไม่พบหลักสูตร</span>
+            {/* LEFT — Version Sidebar (แผนก → ชั้น drill-down) */}
+            <div className={cn(
+              currentVersion ? 'hidden lg:flex' : 'flex',
+              sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[300px] xl:w-[320px]',
+              'w-full shrink-0 flex-col h-full overflow-hidden'
+            )}>
+              <GradeBookClassSidebar
+                selectedDept={sidebarDept}
+                selectedGrade={sidebarGrade}
+                selectedClassId=""
+                gradeOptions={sidebarGradeOptions}
+                classOptions={[]}
+                onSelectDept={handleSidebarSelectDept}
+                onSelectGrade={handleSidebarSelectGrade}
+                onSelectClass={() => {}}
+                showRooms={false}
+                collapsed={sidebarCollapsed}
+                collapsedExtra={collapsedVersionRail}
+                headerAction={(
+                  <div className={cn('flex items-center gap-1.5 w-full', sidebarCollapsed ? 'justify-center' : 'justify-between')}>
+                    {!sidebarCollapsed && (
+                      <div className="relative flex-1 min-w-0">
+                        <HiMagnifyingGlass className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={12} />
+                        <input
+                          type="text"
+                          placeholder="ค้นหาหลักสูตร..."
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                          className="pl-8 pr-2.5 py-1 bg-slate-50 border border-slate-200/60 rounded-xl text-[11px] font-bold focus:ring-2 focus:ring-slate-200 focus:border-slate-300 transition-all w-full outline-none placeholder:text-slate-300 h-8"
+                        />
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {!sidebarCollapsed && !isReadOnly && (
+                        <button
+                          type="button"
+                          onClick={() => { setVersionToEdit(null); setVersionModalOpen(true); }}
+                          className={cn(HEADER_ICON_BTN, "shrink-0")}
+                          title="เพิ่มหลักสูตร"
+                          aria-label="เพิ่มหลักสูตร"
+                        >
+                          <HiPlus size={16} />
+                        </button>
+                      )}
+                      <SidebarCollapseButton
+                        collapsed={sidebarCollapsed}
+                        onToggle={() => setSidebarCollapsed((v) => !v)}
+                      />
                     </div>
-                  ) : (
-                    [...filteredVersions]
-                      .sort((a, b) => a.name.localeCompare(b.name, 'th'))
-                      .map((v) => {
-                        const summary = getCourseSummary(v.id);
-                        const isActive = currentVersion?.id === v.id;
-                        const trackCfg = v.track ? CURRICULUM_TRACK_CONFIG[v.track] : null;
-                        const deptCfg = v.department ? DEPARTMENT_CONFIG[v.department as keyof typeof DEPARTMENT_CONFIG] : null;
-                        const gradient = getVersionGradient(v.id);
+                  </div>
+                )}
+              >
 
-                        return (
-                          <motion.button
-                            key={v.id}
-                            layout
-                            initial={{ opacity: 0, y: 8 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.96 }}
-                            onClick={() => {
-                              setSelectedVersion(v);
-                              loadCoursesForVersion(v.id);
-                            }}
-                            className={`w-full text-left rounded-2xl transition-all p-3 flex items-center gap-3 border ${
-                              isActive
-                                ? 'bg-blue-600 border-blue-500 shadow-lg shadow-blue-500/20'
-                                : 'bg-white/80 border-slate-100 hover:border-slate-200 hover:shadow-md hover:shadow-slate-100/80 backdrop-blur-sm'
-                            }`}
-                          >
-                            {/* Color block avatar */}
-                            <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center shrink-0 shadow-sm`}>
-                              <span className="text-white text-[13px] font-black">{(v.year || '').toString().slice(-2)}</span>
-                            </div>
+                {sidebarDept && sidebarGrade && (
+                  <p className="mb-2 flex-shrink-0 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    {filteredVersions.length} หลักสูตร
+                  </p>
+                )}
 
-                            {/* Info */}
-                            <div className="flex-1 min-w-0">
-                              <h4 className={`text-[12px] font-black tracking-tight leading-tight truncate mb-1 ${isActive ? 'text-white' : 'text-slate-800'}`}>
-                                {v.name}
-                              </h4>
+                {/* Version List */}
+                <div className="flex-1 overflow-y-auto scrollbar-hide flex flex-col gap-2 pr-1">
+                  <AnimatePresence>
+                    {!sidebarDept ? (
+                      <div className="h-32 flex flex-col items-center justify-center text-slate-400 opacity-60 rounded-2xl text-center px-4">
+                        <span className="text-[11px] font-bold">เลือกแผนกด้านบนเพื่อดูหลักสูตร</span>
+                      </div>
+                    ) : !sidebarGrade ? (
+                      <div className="h-32 flex flex-col items-center justify-center text-slate-400 opacity-60 rounded-2xl text-center px-4">
+                        <span className="text-[11px] font-bold">เลือกระดับชั้นด้านบนเพื่อดูหลักสูตร</span>
+                      </div>
+                    ) : isLoading ? (
+                      [...Array(4)].map((_, i) => (
+                        <div key={i} className="h-[90px] rounded-2xl bg-slate-100 animate-pulse" />
+                      ))
+                    ) : filteredVersions.length === 0 ? (
+                      <div className="h-32 flex flex-col items-center justify-center text-slate-400 opacity-50 border-2 border-dashed border-slate-200 rounded-2xl">
+                        <HiMagnifyingGlass size={22} className="mb-2" />
+                        <span className="text-xs font-bold">ไม่พบหลักสูตร</span>
+                      </div>
+                    ) : (
+                      [...filteredVersions]
+                        .sort((a, b) => a.name.localeCompare(b.name, 'th'))
+                        .map((v) => {
+                          const isActive = currentVersion?.id === v.id;
+                          const trackCfg = v.track ? CURRICULUM_TRACK_CONFIG[v.track] : null;
+                          const deptCfg = v.department ? DEPARTMENT_CONFIG[v.department as keyof typeof DEPARTMENT_CONFIG] : null;
+                          const gradient = getVersionGradient(v.id);
 
-                              {/* Badges */}
-                              <div className="flex items-center flex-wrap gap-1 mb-1">
-                                {deptCfg && (
-                                  <span
-                                    className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold"
-                                    style={isActive
-                                      ? { background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.85)' }
-                                      : { background: deptCfg.bg, color: deptCfg.color, border: `1px solid ${deptCfg.border}` }
-                                    }
-                                  >
-                                    {deptCfg.label}
-                                  </span>
-                                )}
-                                {v.level && (
-                                  <span
-                                    className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold"
-                                    style={isActive
-                                      ? { background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.85)' }
-                                      : { background: 'rgba(100,116,139,0.08)', color: '#475569', border: '1px solid rgba(100,116,139,0.18)' }
-                                    }
-                                  >
-                                    {v.level}
-                                  </span>
-                                )}
-                                {trackCfg && (
-                                  <span
-                                    className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold"
-                                    style={isActive
-                                      ? { background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.85)' }
-                                      : { background: trackCfg.bg, color: trackCfg.color, border: `1px solid ${trackCfg.border}` }
-                                    }
-                                  >
-                                    {trackCfg.label}
-                                  </span>
-                                )}
+                          return (
+                            <motion.button
+                              key={v.id}
+                              layout
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, scale: 0.96 }}
+                              onClick={() => {
+                                setSelectedVersion(v);
+                                loadCoursesForVersion(v.id);
+                              }}
+                              className={`w-full text-left rounded-xl transition-all p-2.5 flex items-center gap-3 border ${
+                                isActive
+                                  ? 'bg-white border-blue-600 shadow-sm'
+                                  : 'bg-white border-slate-100 hover:border-slate-200 hover:shadow-sm'
+                              }`}
+                            >
+                              {/* Color block avatar */}
+                              <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center shrink-0 shadow-sm`}>
+                                <span className="text-white text-[13px] font-black">{(v.year || '').toString().slice(-2)}</span>
                               </div>
 
-                              <div className="flex items-center justify-between">
-                                <p className={`text-[10px] font-medium ${isActive ? 'text-white/50' : 'text-slate-400'}`}>
-                                  {summary.count} วิชา · {summary.totalCredit.toFixed(1)} นก.
-                                  {!v.allowEdit && <HiLockClosed size={9} className="inline ml-1.5 opacity-60" />}
-                                </p>
-                                <HiChevronRight size={12} className={isActive ? 'text-white/40' : 'text-slate-300'} />
+                              {/* Info */}
+                              <div className="flex-1 min-w-0">
+                                <h4 className={`text-[12px] font-black tracking-tight leading-tight truncate mb-1.5 ${isActive ? 'text-blue-600' : 'text-slate-800'}`}>
+                                  {v.name}
+                                </h4>
+
+                                {/* Badges */}
+                                <div className="flex items-center flex-wrap gap-1">
+                                  {deptCfg && (
+                                    <span
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold"
+                                      style={{ background: deptCfg.bg, color: deptCfg.color, border: `1px solid ${deptCfg.border}` }}
+                                    >
+                                      {deptCfg.label}
+                                    </span>
+                                  )}
+                                  {v.level && (
+                                    <span
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold"
+                                      style={{ background: 'rgba(100,116,139,0.08)', color: '#475569', border: '1px solid rgba(100,116,139,0.18)' }}
+                                    >
+                                      {v.level}
+                                    </span>
+                                  )}
+                                  {trackCfg && (
+                                    <span
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold"
+                                      style={{ background: trackCfg.bg, color: trackCfg.color, border: `1px solid ${trackCfg.border}` }}
+                                    >
+                                      {trackCfg.label}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          </motion.button>
-                        );
-                      })
-                  )}
-                </AnimatePresence>
-              </div>
+
+                              {/* Chevron centered vertically */}
+                              <div className="shrink-0 flex items-center justify-center text-slate-300">
+                                <HiChevronRight size={12} className={isActive ? 'text-blue-500' : 'text-slate-300'} />
+                              </div>
+                            </motion.button>
+                          );
+                        })
+                    )}
+                  </AnimatePresence>
+                </div>
+              </GradeBookClassSidebar>
             </div>
 
             {/* RIGHT — Detail / Course Editor */}
-            <div className={`${!currentVersion ? 'hidden lg:flex' : 'flex'} flex-1 min-w-0 flex-col overflow-hidden rounded-[2rem] border border-white/30 bg-white/30 backdrop-blur-sm shadow-sm p-4`}>
+            <div className={`${!currentVersion ? 'hidden lg:flex' : 'flex'} flex-1 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card p-4 md:p-6 shadow-sm`}>
               <AnimatePresence mode="wait">
                 {currentVersion ? (
                   <motion.div

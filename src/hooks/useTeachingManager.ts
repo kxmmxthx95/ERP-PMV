@@ -49,6 +49,11 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
   const semester = (activeSemester ?? 1) as 1 | 2;
 
   const teacherMgr = useTeacherManager();
+  // Memoize teachers array by ID list to avoid recreating teacherIdentityKeys on every store emit
+  const memoizedTeachers = useMemo(
+    () => teacherMgr.teachers,
+    [teacherMgr.teachers.map(t => t.id).join(',')], // depend on ID list, not array ref
+  );
   const studentMgr = useStudentManager(activeYearStr);
   // Always-current students ref — lets the attendance listener below read the latest
   // roster without listing studentMgr.students as a dependency, so the listener isn't
@@ -72,8 +77,8 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
 
   // ── Current Teacher ──────────────────────────────────────────────────────────
   const currentTeacher = useMemo(
-    () => resolveTeacherFromAuth(currentTeacherId, teacherMgr.teachers),
-    [teacherMgr.teachers, currentTeacherId],
+    () => resolveTeacherFromAuth(currentTeacherId, memoizedTeachers),
+    [memoizedTeachers, currentTeacherId],
   );
 
   const teacherIdentityKeys = useMemo(() => {
@@ -110,6 +115,7 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
 
   // เหมือน useClassroomManager.classes (activeClasses) — กรองปี+เทอม, sort, fallback แสดง
   // ทั้งหมดถ้ากรองแล้วว่างเปล่า (กันหน้าว่างตอนข้อมูล semester ไม่ตรง)
+  // Memoize by ID list to stabilize across store updates
   const activeClasses = useMemo(() => {
     if (allClasses.length === 0) return [];
     const filtered = allClasses.filter((c) =>
@@ -123,15 +129,16 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
       if (orderA !== orderB) return orderA - orderB;
       return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
     });
-  }, [allClasses, activeYearStr, semester]);
+  }, [allClasses.map(c => c.id).join(','), activeYearStr, semester]);
 
   // ห้องเรียนทั้งปี — ไม่กรองตาม class.semester (ภาคเรียนอยู่ที่ enrolledCourses)
+  // Memoize by ID list to stabilize across store updates
   const yearClasses = useMemo(
     () => allClasses.filter(c =>
       String(c.academicYearId) === String(activeYearStr)
       || String((c as { academicYear?: string }).academicYear) === String(activeYearStr),
     ),
-    [allClasses, activeYearStr],
+    [allClasses.map(c => c.id).join(','), activeYearStr],
   );
 
   // Preload versioned courses so enrolledCourses.subjectId can resolve to names
@@ -307,7 +314,8 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
             semester: session.semester,
             date: session.date,
             period: Number(session.period),
-            status: entry.status,
+            // 'excused' คือสถานะเก่าที่ถูกยุบรวมเข้ากับ 'leave' แล้ว (ไม่มีปุ่มตั้งค่านี้แยกอีกต่อไป)
+            status: entry.status === 'excused' ? 'leave' : entry.status,
             note: entry.note ?? '',
             recordedAt,
           } as AttendanceRecord;
@@ -707,6 +715,6 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
     semester,
     classes: activeClasses,
     yearClasses,
-    teachers: teacherMgr.teachers,
+    teachers: memoizedTeachers,
   };
 }

@@ -95,9 +95,11 @@ export function CreateRoomModal({
   const subSubjectOptions = form.subjectGroupId
     ? SUBJECT_SUBGROUP_CONFIG[form.subjectGroupId as SubjectGroupId] ?? []
     : [];
+  const subSubjectRequired = subSubjectOptions.length > 0;
 
   const handleSubmit = async () => {
     if (!form.title || !form.password || !user?.uid || !academicYear || !activeSemester) return;
+    if (subSubjectRequired && !form.subSubjectGroup) return;
     setIsSubmitting(true);
     try {
       const selectedSubject = subjects.find((s) => s.id === form.subjectId);
@@ -261,13 +263,15 @@ export function CreateRoomModal({
 
             {subSubjectOptions.length > 0 && (
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">วิชา / สาระย่อย</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                  วิชา / สาระย่อย <span className="text-rose-400">*</span>
+                </label>
                 <select
                   value={form.subSubjectGroup}
                   onChange={(e) => setForm((p) => ({ ...p, subSubjectGroup: e.target.value }))}
                   className="h-9 w-full rounded-xl bg-slate-50 border-none px-3 text-xs font-bold outline-none"
                 >
-                  <option value="">เลือกสาระย่อย (ถ้ามี)</option>
+                  <option value="">เลือกสาระย่อย</option>
                   {subSubjectOptions.map((sub) => (
                     <option key={sub} value={sub}>{sub}</option>
                   ))}
@@ -326,7 +330,7 @@ export function CreateRoomModal({
             </Button>
             <Button
               type="submit"
-              disabled={isSubmitting || !form.title || !form.password}
+              disabled={isSubmitting || !form.title || !form.password || (subSubjectRequired && !form.subSubjectGroup)}
               className="rounded-xl bg-slate-900 text-white font-bold px-10 h-10 border border-slate-800"
             >
               {isSubmitting ? 'กำลังบันทึก...' : editRoom ? 'บันทึกการแก้ไข' : 'สร้างห้องสอบ'}

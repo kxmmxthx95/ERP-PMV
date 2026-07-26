@@ -8,6 +8,7 @@ import {
   HiPencilSquare,
   HiXMark,
   HiHomeModern,
+  HiAcademicCap,
 } from 'react-icons/hi2';
 import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
 import { ROLL_CALL_OPTIONS } from '@/features/attendance/rollCallUi';
@@ -33,6 +34,13 @@ import type { RollCallStatus, StudentRollCall, MorningRollCallSession } from '@/
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import type { Department } from '@/types/curriculum';
 import { GRADE_LEVEL_ORDER, type ClassRoom } from '@/types/class';
+
+function shortRoomLabel(room: ClassRoom): string {
+  const n = String(room.roomNumber ?? '').trim();
+  if (n) return n;
+  const name = String(room.className ?? '').trim();
+  return name.length > 4 ? name.slice(0, 4) : name || '—';
+}
 import { Button } from '@/components/ui/button';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
@@ -44,7 +52,7 @@ import {
   DrawerTitle,
 } from '@/components/ui/drawer';
 import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
-import { getLocalDateString, formatThaiDateRangeFromIso } from '@/lib/dateUtils';
+import { getLocalDateString } from '@/lib/dateUtils';
 import { getClassesByYearStore } from '@/lib/firestoreShared/studentSummaryStore';
 import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
 import {
@@ -258,10 +266,11 @@ export default function MorningRollCallPage() {
   );
 
   const isDateEditable = Boolean(
-    rollCallDate && rollCallDate === today && !isRollCallBlocked && !isInterSemesterBreakDay,
+    rollCallDate && rollCallDate === today && !isInterSemesterBreakDay,
   );
-  const isReadOnly = !isDateEditable || Boolean(existingSession && !editMode);
-  const isRollCallLocked = Boolean(isReadOnly || !isDateEditable);
+  const isDateEditableIgnoringHoliday = isDateEditable && !isRollCallBlocked;
+  const isReadOnly = !isDateEditableIgnoringHoliday || Boolean(existingSession && !editMode);
+  const isRollCallLocked = Boolean(isReadOnly || !isDateEditableIgnoringHoliday);
 
   const academicYearRange = useMemo(() => {
     const configuredStart = activeYear?.startDate?.trim() ?? '';
@@ -318,23 +327,11 @@ export default function MorningRollCallPage() {
         (c: any) => String(c.academicYearId ?? c.academicYear ?? '') === String(year),
       );
     }
-    const myProfile = classMgr.availableTeachers?.find(
-      (t: any) => t.userId === user?.uid || t.id === user?.uid,
+    // For teachers/staff: allow all classes (not just homeroom classes) for flagpole roll-call
+    return classMgr.classes.filter(
+      (c: any) => String(c.academicYearId ?? c.academicYear ?? '') === String(year),
     );
-    const myTeacherDocId = myProfile?.id;
-
-    return classMgr.classes.filter((c: any) => {
-      const sameYear = String(c.academicYearId ?? c.academicYear ?? '') === String(year);
-      const teacherIds: string[] = Array.isArray(c.homeroomTeacherIds) ? c.homeroomTeacherIds : [];
-      const isOwner =
-        (myTeacherDocId != null && (
-          c.homeroomTeacherId === myTeacherDocId || teacherIds.includes(myTeacherDocId)
-        )) ||
-        c.homeroomTeacherId === user?.uid ||
-        teacherIds.includes(String(user?.uid ?? ''));
-      return sameYear && isOwner;
-    });
-  }, [classMgr.classes, classMgr.availableTeachers, user?.uid, year, isAdmin]);
+  }, [classMgr.classes, year, isAdmin]);
 
   const sidebarGradeOptions = useMemo(() => {
     if (filterDept === 'all') return [] as string[];
@@ -394,6 +391,61 @@ export default function MorningRollCallPage() {
     setDayDrawerOpen(false);
     setActiveTab('rollcall');
   };
+
+  const collapsedBrowseRail = filterDept !== 'all' ? (
+    <div className="flex w-full flex-col items-center gap-2 border-t border-border px-1.5 py-2">
+      {sidebarGradeOptions.map((grade) => {
+        const active = filterGradeLevel === grade;
+        return (
+          <button
+            key={grade}
+            type="button"
+            onClick={() => handleSidebarSelectGrade(grade)}
+            title={grade}
+            aria-label={grade}
+            aria-pressed={active}
+            className={cn(
+              'flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border transition-all',
+              active
+                ? 'border-2 border-foreground bg-foreground text-background'
+                : 'border border-border bg-muted/40 text-foreground hover:bg-muted',
+            )}
+          >
+            <HiAcademicCap className="h-3.5 w-3.5" />
+            <span className="text-[9px] font-black font-sukhumvit leading-none">{grade}</span>
+          </button>
+        );
+      })}
+
+      {filterGradeLevel
+        ? sidebarClassOptions.map((room) => {
+            const active = selectedClassId === room.id;
+            const label = shortRoomLabel(room);
+            return (
+              <button
+                key={room.id}
+                type="button"
+                onClick={() => selectClassForRollCall(room.id)}
+                title={room.className}
+                aria-label={room.className}
+                aria-pressed={active}
+                className={cn(
+                  'flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border transition-all',
+                  active
+                    ? 'border-2 border-foreground bg-foreground text-background'
+                    : 'border border-border bg-card text-foreground hover:bg-muted/50',
+                )}
+              >
+                <HiHomeModern className="h-3.5 w-3.5" />
+                <span className="max-w-full truncate px-0.5 text-[9px] font-black font-sukhumvit leading-none">
+                  {label}
+                </span>
+              </button>
+            );
+          })
+        : null}
+    </div>
+  ) : null;
 
   const students = useMemo<StudentRowData[]>(() => {
     if (!selectedClass || !year) return [];
@@ -619,7 +671,7 @@ export default function MorningRollCallPage() {
 
   const doSave = () => {
     if (!selectedClass || !year || activeSemester == null || !rollCallDate) return;
-    if (!isDateEditable) {
+    if (!isDateEditableIgnoringHoliday) {
       setSaveError(
         rollCallDate > today
           ? 'ยังไม่ถึงวัน ไม่สามารถเช็กชื่อเข้าแถวได้'
@@ -627,9 +679,11 @@ export default function MorningRollCallPage() {
             ? 'วันที่ผ่านมาแล้ว สามารถดูได้อย่างเดียว'
             : isInterSemesterBreakDay
               ? 'ช่วงปิดระหว่างเทอม ไม่สามารถเช็กชื่อเข้าแถวได้'
-              : isWeekend
+              : isRollCallBlocked && isWeekend
                 ? 'วันนี้เป็นวันหยุดสุดสัปดาห์ ไม่สามารถเช็กชื่อเข้าแถวได้'
-                : `วันนี้เป็นวันหยุด${holidayTitle ? ` (${holidayTitle})` : ''} ไม่สามารถเช็กชื่อเข้าแถวได้`,
+                : isRollCallBlocked
+                  ? `วันนี้เป็นวันหยุด${holidayTitle ? ` (${holidayTitle})` : ''} ไม่สามารถเช็กชื่อเข้าแถวได้`
+                  : 'ไม่สามารถเช็กชื่อเข้าแถวได้',
       );
       return;
     }
@@ -778,11 +832,12 @@ export default function MorningRollCallPage() {
             )}
         </>
       )}
-      <div className="flex min-h-0 flex-1 basis-0 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+      <div className="flex min-h-0 flex-1 basis-0 flex-col gap-0 overflow-hidden lg:flex-row lg:items-stretch lg:gap-4">
         <div
           className={cn(
-            'flex h-full min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden',
-            sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+            'flex h-full min-h-0 shrink-0 flex-col self-stretch overflow-hidden',
+            'w-full lg:w-[280px] xl:w-[300px]',
+            sidebarCollapsed && 'lg:w-20 xl:w-20',
             selectedClassId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
           )}
         >
@@ -796,6 +851,7 @@ export default function MorningRollCallPage() {
             onSelectGrade={handleSidebarSelectGrade}
             onSelectClass={selectClassForRollCall}
             collapsed={sidebarCollapsed}
+            collapsedExtra={collapsedBrowseRail}
             headerAction={(
               <SidebarCollapseButton
                 collapsed={sidebarCollapsed}
@@ -807,12 +863,12 @@ export default function MorningRollCallPage() {
 
         <div
           className={cn(
-            'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden px-2 pb-2 sm:px-2.5 sm:pb-2.5',
             !selectedClassId && 'hidden lg:flex',
           )}
         >
           {!selectedClassId ? (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 pb-4 text-center">
               <HiHomeModern className="h-8 w-8 text-muted-foreground/40" />
               <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
                 {filterDept === 'all'
@@ -842,11 +898,6 @@ export default function MorningRollCallPage() {
                 )
               ) : (
                 <div className="min-h-0 flex-1 overflow-y-auto">
-                  {reportFrom && reportTo && (
-                    <p className="mb-2 px-0.5 text-[11px] font-bold text-slate-500">
-                      ช่วงวันที่ {formatThaiDateRangeFromIso(reportFrom, reportTo)}
-                    </p>
-                  )}
                   {isLoadingReport ? (
                     <ReportListSkeleton />
                   ) : (
@@ -1103,7 +1154,7 @@ export default function MorningRollCallPage() {
                 )}
                 <button
                   type="button"
-                  disabled={isSaving}
+                  disabled={isSaving || !isDateEditableIgnoringHoliday}
                   onClick={doSave}
                   className={cn(
                     'h-11 w-full rounded-xl text-sm font-black transition active:scale-[0.99] disabled:opacity-60',

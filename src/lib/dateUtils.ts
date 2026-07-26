@@ -55,3 +55,13 @@ export function enumerateIsoDates(from: string, to: string): string[] {
   }
   return dates;
 }
+
+/** วันที่ (YYYY-MM-DD) ตรงกับ calendar_events ที่ type === 'holiday' หรือไม่ */
+export function isHolidayDate(
+  dateIso: string,
+  calendarEvents: { type: string; startDate: string; endDate: string }[],
+): boolean {
+  return calendarEvents.some(
+    (e) => e.type === 'holiday' && e.startDate <= dateIso && e.endDate >= dateIso,
+  );
+}

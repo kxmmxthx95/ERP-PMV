@@ -331,7 +331,7 @@ export default function ClassStudentPanel({
   );
 
   return (
-    <div className="flex flex-col h-full w-full overflow-hidden pb-4 font-sukhumvit gap-4 md:gap-5 md:p-2">
+    <div className="flex flex-col h-full w-full overflow-hidden font-sukhumvit gap-4 md:gap-5 md:p-2">
       {/* ── Mobile Header Title Portal ── */}
       {isMdOrBelow && mobileTitlePortalTarget && createPortal(
         <div className="pointer-events-auto flex items-center justify-center w-full">

@@ -12,6 +12,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { toast } from 'sonner';
 import { storage } from '@/lib/firebase';
 import type { Student } from '@/types/student';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   calcStudentAge,
   compressImage,
@@ -80,12 +81,15 @@ export function StudentDetailFormTab({
             <div className="space-y-1">
               <label className="text-[12px] font-black text-slate-700">คำนำหน้า <span className="text-rose-500">*</span></label>
               {isEditMode ? (
-                <select value={formData.prefix || ''} onChange={e => onChange('prefix', e.target.value)} className={DETAIL_INPUT_CLS}>
-                  <option value="เด็กชาย">เด็กชาย</option>
-                  <option value="เด็กหญิง">เด็กหญิง</option>
-                  <option value="นาย">นาย</option>
-                  <option value="นางสาว">นางสาว</option>
-                </select>
+                <Select value={formData.prefix || ''} onValueChange={v => onChange('prefix', v)}>
+                  <SelectTrigger className={DETAIL_INPUT_CLS}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="เด็กชาย">เด็กชาย</SelectItem>
+                    <SelectItem value="เด็กหญิง">เด็กหญิง</SelectItem>
+                    <SelectItem value="นาย">นาย</SelectItem>
+                    <SelectItem value="นางสาว">นางสาว</SelectItem>
+                  </SelectContent>
+                </Select>
               ) : (
                 <DetailViewField value={viewData.prefix} />
               )}
@@ -152,13 +156,15 @@ export function StudentDetailFormTab({
             <div className="space-y-1">
               <label className="text-[12px] font-black text-slate-700">หมู่เลือด <span className="text-rose-500">*</span></label>
               {isEditMode ? (
-                <select value={formData.bloodType || ''} onChange={e => onChange('bloodType', e.target.value)} className={DETAIL_INPUT_CLS}>
-                  <option value="">เลือก</option>
-                  <option value="A">A</option>
-                  <option value="B">B</option>
-                  <option value="AB">AB</option>
-                  <option value="O">O</option>
-                </select>
+                <Select value={formData.bloodType || ''} onValueChange={v => onChange('bloodType', v)}>
+                  <SelectTrigger className={DETAIL_INPUT_CLS}><SelectValue placeholder="เลือก" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="A">A</SelectItem>
+                    <SelectItem value="B">B</SelectItem>
+                    <SelectItem value="AB">AB</SelectItem>
+                    <SelectItem value="O">O</SelectItem>
+                  </SelectContent>
+                </Select>
               ) : (
                 <DetailViewField value={viewData.bloodType} />
               )}
@@ -217,10 +223,12 @@ export function StudentDetailFormTab({
                 <label className="text-[12px] font-black text-slate-700">{label} <span className="text-rose-500">*</span></label>
                 {isEditMode ? (
                   type === 'select' ? (
-                    <select value={(formData[key] as string) || ''} onChange={e => onChange(key, e.target.value)} className={DETAIL_INPUT_CLS}>
-                      <option value="">เลือก</option>
-                      {options!.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
+                    <Select value={(formData[key] as string) || ''} onValueChange={v => onChange(key, v)}>
+                      <SelectTrigger className={DETAIL_INPUT_CLS}><SelectValue placeholder="เลือก" /></SelectTrigger>
+                      <SelectContent>
+                        {options!.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
                   ) : (
                     <input value={(formData[key] as string) || ''} onChange={e => onChange(key, e.target.value)} className={DETAIL_INPUT_CLS} />
                   )
@@ -234,10 +242,12 @@ export function StudentDetailFormTab({
             <div className="space-y-1">
               <label className="text-[12px] font-black text-slate-700">ระดับการศึกษา <span className="text-rose-500">*</span></label>
               {isEditMode ? (
-                <select value={formData.father_education || ''} onChange={e => onChange('father_education', e.target.value)} className={DETAIL_INPUT_CLS}>
-                  <option value="">เลือก</option>
-                  {EDUCATION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
+                <Select value={formData.father_education || ''} onValueChange={v => onChange('father_education', v)}>
+                  <SelectTrigger className={DETAIL_INPUT_CLS}><SelectValue placeholder="เลือก" /></SelectTrigger>
+                  <SelectContent>
+                    {EDUCATION_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               ) : (
                 <DetailViewField value={viewData.father_education} />
               )}
@@ -278,10 +288,12 @@ export function StudentDetailFormTab({
                 <label className="text-[12px] font-black text-slate-700">{label} <span className="text-rose-500">*</span></label>
                 {isEditMode ? (
                   type === 'select' ? (
-                    <select value={(formData[key] as string) || ''} onChange={e => onChange(key, e.target.value)} className={DETAIL_INPUT_CLS}>
-                      <option value="">เลือก</option>
-                      {options!.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
+                    <Select value={(formData[key] as string) || ''} onValueChange={v => onChange(key, v)}>
+                      <SelectTrigger className={DETAIL_INPUT_CLS}><SelectValue placeholder="เลือก" /></SelectTrigger>
+                      <SelectContent>
+                        {options!.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
                   ) : (
                     <input value={(formData[key] as string) || ''} onChange={e => onChange(key, e.target.value)} className={DETAIL_INPUT_CLS} />
                   )
@@ -295,10 +307,12 @@ export function StudentDetailFormTab({
             <div className="space-y-1">
               <label className="text-[12px] font-black text-slate-700">ระดับการศึกษา <span className="text-rose-500">*</span></label>
               {isEditMode ? (
-                <select value={formData.mother_education || ''} onChange={e => onChange('mother_education', e.target.value)} className={DETAIL_INPUT_CLS}>
-                  <option value="">เลือก</option>
-                  {EDUCATION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
+                <Select value={formData.mother_education || ''} onValueChange={v => onChange('mother_education', v)}>
+                  <SelectTrigger className={DETAIL_INPUT_CLS}><SelectValue placeholder="เลือก" /></SelectTrigger>
+                  <SelectContent>
+                    {EDUCATION_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               ) : (
                 <DetailViewField value={viewData.mother_education} />
               )}
@@ -372,10 +386,12 @@ export function StudentDetailFormTab({
                     <label className="text-[12px] font-black text-slate-700">{label} <span className="text-rose-500">*</span></label>
                     {isEditMode ? (
                       type === 'select' ? (
-                        <select value={(formData[key] as string) || ''} onChange={e => onChange(key, e.target.value)} className={DETAIL_INPUT_CLS}>
-                          <option value="">เลือก</option>
-                          {options!.map(p => <option key={p} value={p}>{p}</option>)}
-                        </select>
+                        <Select value={(formData[key] as string) || ''} onValueChange={v => onChange(key, v)}>
+                          <SelectTrigger className={DETAIL_INPUT_CLS}><SelectValue placeholder="เลือก" /></SelectTrigger>
+                          <SelectContent>
+                            {options!.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
                       ) : (
                         <input value={(formData[key] as string) || ''} onChange={e => onChange(key, e.target.value)} className={DETAIL_INPUT_CLS} />
                       )
@@ -389,10 +405,12 @@ export function StudentDetailFormTab({
                 <div className="space-y-1">
                   <label className="text-[12px] font-black text-slate-700">ระดับการศึกษา <span className="text-rose-500">*</span></label>
                   {isEditMode ? (
-                    <select value={formData.guardian_education || ''} onChange={e => onChange('guardian_education', e.target.value)} className={DETAIL_INPUT_CLS}>
-                      <option value="">เลือก</option>
-                      {EDUCATION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                    </select>
+                    <Select value={formData.guardian_education || ''} onValueChange={v => onChange('guardian_education', v)}>
+                      <SelectTrigger className={DETAIL_INPUT_CLS}><SelectValue placeholder="เลือก" /></SelectTrigger>
+                      <SelectContent>
+                        {EDUCATION_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
                   ) : (
                     <DetailViewField value={viewData.guardian_education} />
                   )}

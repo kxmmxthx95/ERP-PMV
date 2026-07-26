@@ -2,6 +2,7 @@ import { useState, useEffect, type ReactNode } from 'react'
 import type { Student, NewStudent, Gender } from '@/types/student'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -183,20 +184,18 @@ export default function StudentFormModal({
 
               <div className="space-y-1">
                 <FieldLabel required>คำนำหน้า</FieldLabel>
-                <select
-                  value={form.prefix}
-                  onChange={(e) => handlePrefixChange(e.target.value)}
-                  className={cn(FIELD_INPUT, 'w-full outline-none')}
-                >
-                  <option value="" disabled>
-                    กรุณาเลือกคำนำหน้า
-                  </option>
-                  {studentPrefixes.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
+                <Select value={form.prefix} onValueChange={handlePrefixChange}>
+                  <SelectTrigger className={cn(FIELD_INPUT, 'w-full outline-none')}>
+                    <SelectValue placeholder="กรุณาเลือกคำนำหน้า" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {studentPrefixes.map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {p}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

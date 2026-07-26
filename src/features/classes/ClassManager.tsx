@@ -107,7 +107,7 @@ export default function ClassManager() {
       : 'เลือกห้องเรียนเพื่อจัดการ';
 
   const collapsedBrowseRail = filterDepartment ? (
-    <div className="flex max-h-[min(50vh,24rem)] w-full flex-col items-center gap-2 overflow-y-auto overscroll-y-contain scrollbar-hide border-t border-border px-1.5 py-2">
+    <div className="flex w-full flex-col items-center gap-2 border-t border-border px-1.5 py-2">
       {availableGrades.map((grade) => {
         const active = filterGradeLevel === grade;
         return (
@@ -162,7 +162,7 @@ export default function ClassManager() {
   ) : null;
 
   return (
-    <div className="flex h-[calc(100dvh-8.5rem)] max-h-[calc(100dvh-8.5rem)] min-h-0 w-full flex-col overflow-hidden font-sukhumvit">
+    <div className="flex h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)] min-h-0 w-full flex-col overflow-hidden font-sukhumvit">
       {!selectedClassId && headerCenterMobilePortalEl && createPortal(
         <div className="pointer-events-none flex items-center gap-1.5 lg:hidden">
           <HiAcademicCap className="h-4 w-4 shrink-0 text-black/80" />
@@ -244,12 +244,12 @@ export default function ClassManager() {
 
         <div
           className={cn(
-            'flex min-h-0 flex-1 basis-0 flex-col overflow-hidden',
+            'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
             !selectedClassId && 'hidden lg:flex',
           )}
         >
           {selectedClass && (
-            <div className="mb-2 hidden min-h-[3.25rem] shrink-0 items-center border-b border-border pb-2 pt-2 sm:pt-2.5 lg:flex">
+            <div className="mb-2 hidden min-h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:flex">
               <div
                 ref={setDesktopHeaderHost}
                 className="flex h-10 w-full min-w-0 items-center"
@@ -265,7 +265,7 @@ export default function ClassManager() {
               />
             </div>
           ) : (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center">
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
               <HiAcademicCap className="h-8 w-8 text-muted-foreground/40" />
               <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
                 {emptyHint}

@@ -31,15 +31,12 @@ export default function CalendarDayCell({
   const isTodayDay = isToday(day);
   const dow = day.getDay();
 
-  const multiDayEvents = dayEvents.filter(ev => ev.startDate !== ev.endDate).slice(0, 2);
-  const singleDayEvents = dayEvents.filter(ev => ev.startDate === ev.endDate);
-
   return (
     <button
       key={dateStr}
       onClick={() => onSelect(day)}
       onDoubleClick={onDoubleClick}
-      className="relative flex flex-col items-center py-2 rounded-[1.25rem] transition-all duration-200 min-h-[64px] group"
+      className="relative flex flex-col items-start py-2 px-2 rounded-[1.25rem] transition-all duration-200 min-h-[100px] group border border-slate-200/40"
       style={{
         background: isSelected
           ? 'rgba(15,23,42,0.06)'
@@ -59,71 +56,59 @@ export default function CalendarDayCell({
         if (eventId && onDropEvent) onDropEvent(eventId, day);
       }}
     >
-      {/* Day number */}
-      <span
-        className="w-8 h-8 flex items-center justify-center rounded-full text-[12px] font-black transition-all duration-200 font-sukhumvit flex-shrink-0"
-        style={{
-          background: isTodayDay
-            ? 'linear-gradient(135deg, #7c3aed, #4f46e5)'
-            : isSelected
-              ? 'rgba(15,23,42,0.09)'
-              : 'transparent',
-          boxShadow: isTodayDay ? '0 2px 12px rgba(124,58,237,0.38), 0 0 0 3px rgba(124,58,237,0.10)' : 'none',
-          color: isTodayDay
-            ? '#fff'
-            : !inMonth
-              ? 'rgba(0,0,0,0.15)'
-              : dow === 0
-                ? '#ef4444'
-                : dow === 6
-                  ? '#3b82f6'
-                  : 'rgba(15,23,42,0.78)',
-        }}
-      >
-        {day.getDate()}
-      </span>
+      {/* Header: Date left, status right */}
+      <div className="w-full flex items-start justify-between mb-1">
+        <span
+          className="w-6 h-6 flex items-center justify-center rounded-full text-[10px] font-black font-sukhumvit flex-shrink-0"
+          style={{
+            background: isTodayDay
+              ? 'linear-gradient(135deg, #7c3aed, #4f46e5)'
+              : isSelected
+                ? 'rgba(15,23,42,0.09)'
+                : 'transparent',
+            boxShadow: isTodayDay ? '0 2px 8px rgba(124,58,237,0.3)' : 'none',
+            color: isTodayDay
+              ? '#fff'
+              : !inMonth
+                ? 'rgba(0,0,0,0.15)'
+                : dow === 0
+                  ? '#ef4444'
+                  : dow === 6
+                    ? '#3b82f6'
+                    : 'rgba(15,23,42,0.78)',
+          }}
+        >
+          {day.getDate()}
+        </span>
 
-      {/* Event indicators */}
-      <div className="w-full mt-1 px-1 space-y-0.5">
-        {/* Multi-day event strips */}
-        {multiDayEvents.map(ev => {
-          const isStart = dateStr === ev.startDate;
-          const isEnd = dateStr === ev.endDate;
-          const config = EVENT_TYPE_CONFIG[ev.type];
-          return (
-            <div
-              key={ev.id}
-              title={ev.title}
-              className="h-[3px] w-full overflow-hidden"
-              style={{
-                background: config.color,
-                opacity: inMonth ? 0.75 : 0.25,
-                borderRadius: `${isStart ? '4px' : '0'} ${isEnd ? '4px' : '0'} ${isEnd ? '4px' : '0'} ${isStart ? '4px' : '0'}`,
-              }}
-            />
-          );
-        })}
+        {/* Event type dot (first event) */}
+        {dayEvents.length > 0 && (
+          <span
+            className="w-2 h-2 rounded-full flex-shrink-0"
+            style={{
+              background: EVENT_TYPE_CONFIG[dayEvents[0].type].color,
+            }}
+          />
+        )}
+      </div>
 
-        {/* Single-day event dots */}
-        <div className="flex gap-0.5 flex-wrap justify-center pt-0.5">
-          {singleDayEvents.slice(0, 3).map(ev => (
-            <span
-              key={ev.id}
-              title={ev.title}
-              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-              style={{
-                background: EVENT_TYPE_CONFIG[ev.type].color,
-                opacity: inMonth ? 1 : 0.3,
-                boxShadow: `0 0 4px ${EVENT_TYPE_CONFIG[ev.type].color}60`,
-              }}
-            />
-          ))}
-          {singleDayEvents.length > 3 && (
-            <span className="text-[7px] text-slate-400 font-black leading-none mt-px">
-              +{singleDayEvents.length - 3}
-            </span>
-          )}
-        </div>
+      {/* Event list */}
+      <div className="w-full space-y-0.5 mt-auto text-left text-[9px] min-w-0">
+        {dayEvents.slice(0, 2).map(ev => (
+          <div
+            key={ev.id}
+            title={ev.title}
+            className="line-clamp-2 font-medium text-slate-700"
+            style={{ color: EVENT_TYPE_CONFIG[ev.type].color }}
+          >
+            {ev.title}
+          </div>
+        ))}
+        {dayEvents.length > 2 && (
+          <div className="text-[7px] text-slate-400 font-bold">
+            +{dayEvents.length - 2} อื่น
+          </div>
+        )}
       </div>
     </button>
   );

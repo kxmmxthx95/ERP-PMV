@@ -2,7 +2,7 @@
 import React, { memo, useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, Search, LogOut, Plus, ChevronLeft, Home, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Search, LogOut, Plus, ChevronLeft, Home } from 'lucide-react';
 import {
   HiOutlineHome,
   HiOutlineSquares2X2,
@@ -21,15 +21,8 @@ import { authService } from '@/features/auth/authService';
 import { colors } from '@/lib/designTokens';
 import { cn } from '@/lib/utils';
 import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
-import { resolvePortalPageTitle } from '@/lib/portalPageTitle';
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
+import { PORTAL_MENU_TITLES } from '@/lib/portalMenu';
+
 
 export { HEADER_ICON_BTN, HEADER_ICON_BTN_GHOST, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
 
@@ -70,8 +63,8 @@ const BOTTOM_TAB_CONFIG: Record<string, Array<{ label: string; icon: React.React
   staff: [
     { label: 'หน้าหลัก', icon: <HiOutlineHome size={20} />, path: '/portal' },
     { label: 'เมนู', icon: <HiOutlineSquares2X2 size={20} />, path: '/portal' },
-    { label: 'ลงเวลา', icon: <HiOutlineClock size={20} />, path: '/portal/staff-attendance' },
-    { label: 'การลา', icon: <HiOutlineDocumentText size={20} />, path: '/portal/leave' },
+    { label: 'บันทึกเวลาปฏิบัติงาน', icon: <HiOutlineClock size={20} />, path: '/portal/staff-attendance' },
+    { label: 'ระบบจัดการวันลา', icon: <HiOutlineDocumentText size={20} />, path: '/portal/leave' },
     { label: 'ออกระบบ', icon: <HiOutlineArrowLeftOnRectangle size={20} />, path: '#' },
   ],
   student: [
@@ -160,19 +153,39 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Memoize outlet context to prevent unnecessary child re-renders on PortalLayout updates
+  const outletContext = useMemo(() => ({ view, showSearch }), [view, showSearch]);
+
   const isHome = location.pathname === '/portal' || location.pathname === '/portal/';
   const isAiAgentsPage = location.pathname.startsWith('/portal/ai-agents');
   /** AI Agent shortcut — portal home (dashboard + menu) only */
   const showAiAgentButton = isHome;
-  const pageTitle = useMemo(
-    () => resolvePortalPageTitle(location.pathname),
-    [location.pathname],
-  );
 
-  const goToMenu = () => {
-    setView('menu');
-    navigate('/portal');
+  // Get current page title from route — derived from the HomePage menu grid (PORTAL_MENU_TITLES)
+  // so this label can never drift from what the user sees on the menu overview page.
+  const getPageTitle = () => {
+    const pathname = location.pathname;
+    const routes: Record<string, string> = {
+      ...PORTAL_MENU_TITLES,
+      // Routes not shown as a card on the menu grid — no canonical source to inherit from.
+      '/portal/logs': 'บันทึกกิจกรรม',
+      '/portal/lesson-plan': 'แผนการสอน',
+      '/portal/profile': 'ข้อมูลส่วนตัว',
+    };
+
+    // Check if pathname matches any route exactly
+    if (routes[pathname]) return routes[pathname];
+
+    // Check sub-routes (e.g., /portal/tuition/campaigns)
+    for (const [route, title] of Object.entries(routes)) {
+      if (pathname.startsWith(route + '/')) return title;
+    }
+
+    return null;
   };
+
+  const currentPageTitle = getPageTitle();
+
 
   useEffect(() => {
     if (!isHome && showProfilePopup) setShowProfilePopup(false);
@@ -186,8 +199,8 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
     if (!isExecutiveRole) return filtered;
     return filtered.filter((tab) => tab.label === 'หน้าหลัก' || tab.label === 'เมนู');
   }, [role, isExecutiveRole]);
-  
-  const displayName = userData?.firstName 
+
+  const displayName = userData?.firstName
     ? `${userData.prefix || ''}${userData.firstName} ${userData.lastName || ''}`.trim()
     : (user?.displayName || user?.email || 'ผู้ใช้งาน');
 
@@ -269,15 +282,14 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
           navigate(tab.path || '/portal');
         }
       }}
-      className={`flex-shrink-0 flex items-center justify-center w-8 h-8 lg:w-9 lg:h-9 rounded-full transition-all ${
-        (tab.label === 'เมนู' && view === 'menu')
+      className={`flex-shrink-0 flex items-center justify-center w-8 h-8 lg:w-9 lg:h-9 rounded-full transition-all ${(tab.label === 'เมนู' && view === 'menu')
         || (tab.label === 'หน้าหลัก' && view === 'dashboard' && isHome)
         || (!isHome && location.pathname.startsWith(tab.path) && tab.path !== '/portal')
-          ? 'text-slate-800 border border-slate-300 shadow-sm bg-white/40 backdrop-blur-sm'
-          : tab.label === 'ออกระบบ'
-            ? 'text-rose-500 border border-transparent bg-transparent hover:bg-rose-50'
-            : 'text-slate-500 border border-transparent bg-transparent'
-      }`}
+        ? 'text-slate-800 border border-slate-300 shadow-sm bg-white/40 backdrop-blur-sm'
+        : tab.label === 'ออกระบบ'
+          ? 'text-rose-500 border border-transparent bg-transparent hover:bg-rose-50'
+          : 'text-slate-500 border border-transparent bg-transparent'
+        }`}
       title={tab.label}
     >
       {React.isValidElement(tab.icon)
@@ -410,311 +422,295 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
           WebkitBackdropFilter: 'none',
         }}
       >
-        <div className="max-w-[1600px] mx-auto relative flex items-center justify-between px-4 lg:px-6 pb-2 lg:pb-2.5 pt-2">
+        <div className="max-w-[1600px] mx-auto relative flex min-h-[52px] items-center justify-between px-4 lg:px-6 pb-2 lg:pb-2.5 pt-2">
 
-        {/* LEFT: Avatar + Name/Role Capsule + Date/Time + Settings */}
-        <div className="flex items-center gap-3 flex-1 lg:flex-none">
+          {/* LEFT: Avatar + Name/Role Capsule + Date/Time + Settings */}
+          <div className="flex items-center gap-3 flex-1 lg:flex-none">
 
-          {/* Mobile: Header Tabs */}
-          <div className="flex lg:hidden items-center justify-between w-full">
-            {showProfilePopup ? (
-              <div className="flex items-center justify-between w-full min-h-10 py-1 text-white animate-fadeIn">
-                {/* Left side: Avatar + User Info (Clickable to close) */}
-                <button
-                  type="button"
-                  onClick={() => setShowProfilePopup(false)}
-                  className="flex items-center gap-2 cursor-pointer text-left focus:outline-none"
-                >
-                  <div
-                    className={cn(
-                      'w-8 h-8 lg:w-9 lg:h-9 rounded-full flex-shrink-0 overflow-hidden border-2 shadow-sm',
-                      isLineConnected ? 'border-[#06c755] ring-2 ring-[#06c755]/40' : 'border-slate-700',
-                    )}
-                  >
-                    {userData?.photoURL || user?.photoURL ? (
-                      <img
-                        src={userData?.photoURL || user?.photoURL}
-                        alt="Avatar"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div
-                        className={`w-full h-full bg-gradient-to-br ${cfg.gradient} flex items-center justify-center text-white font-bold text-xs`}
-                      >
-                        {initials}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex flex-col items-start gap-0.5">
-                    <p className="text-[12px] font-black text-white leading-tight truncate max-w-[135px]">
-                      {displayName}
-                    </p>
-                    <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-none">
-                      {cfg.label}
-                    </p>
-                  </div>
-                </button>
-
-                {/* Right side: ข้อมูลส่วนตัว and ออกระบบ icons */}
-                <div className="flex items-center gap-2">
-                  {/* ข้อมูลส่วนตัว button */}
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => {
-                      setShowProfilePopup(false);
-                      navigate('/portal/profile');
-                    }}
-                    className="flex h-8 w-8 lg:h-9 lg:w-9 rounded-full items-center justify-center border border-slate-200 bg-white text-slate-800 shadow-sm hover:bg-slate-100 transition-colors"
-                    title="ข้อมูลส่วนตัว"
-                  >
-                    <HiUser size={18} />
-                  </motion.button>
-
-                  {/* ออกระบบ button */}
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => {
-                      setShowProfilePopup(false);
-                      authService.logout();
-                    }}
-                    className="flex h-8 w-8 lg:h-9 lg:w-9 rounded-full items-center justify-center border border-slate-200 bg-white text-rose-500 shadow-sm hover:bg-rose-50 transition-colors"
-                    title="ออกจากระบบ"
-                  >
-                    <LogOut size={18} />
-                  </motion.button>
-                </div>
-              </div>
-            ) : isHome ? (
-              <>
-                {/* Left side: Avatar */}
-                {renderMobileAvatar(false)}
-
-                {/* Right side: Navigation Tabs */}
-                <div className="flex items-center gap-1 min-h-10">
-                  {mobileSecondaryNavTabs.map((tab, idx) => renderMobileHeaderTabButton(tab, idx))}
-                  {showAiAgentButton && renderAiAgentHeaderButton('sm')}
-                  {mobilePrimaryNavTabs.map((tab, idx) => renderMobileHeaderTabButton(tab, idx))}
-                </div>
-              </>
-            ) : (
-              <>
-                {/* Left side: Back Button */}
-                <div className="relative flex items-center justify-between w-full min-h-10">
-                  <div id="header-portal-mobile-back" className="flex-shrink-0 relative z-10">
-                    <motion.button
-                      id="portal-default-mobile-back"
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => {
-                        setView('menu');
-                        navigate('/portal');
-                      }}
-                      className="flex h-9 w-9 lg:h-9 lg:w-9 rounded-full items-center justify-center text-slate-700 transition-colors border border-slate-200 bg-white shadow-sm hover:bg-slate-50"
-                      title="กลับเมนู"
-                    >
-                      <ChevronLeft size={20} />
-                    </motion.button>
-                  </div>
-                  <div
-                    id="header-portal-center-mobile"
-                    className="absolute inset-x-0 top-0 bottom-0 flex items-center justify-center pointer-events-none"
-                  />
-                  <div className="flex items-center justify-end relative z-10 shrink-0 gap-1">
-                    <div id="header-portal-mobile-actions" className="flex items-center justify-end" />
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Desktop: Avatar + name — home (menu/dashboard) only */}
-          {isHome && (
-          <div ref={profilePopupRef} className="hidden lg:flex items-center gap-2 relative">
-            {/* Desktop: Avatar (clickable → Profile popup) */}
-            <button
-              type="button"
-              className={cn(
-                'w-11 h-11 rounded-full flex-shrink-0 cursor-pointer overflow-hidden border-2 border-white shadow-sm',
-                isLineConnected ? 'ring-2 ring-[#06c755]' : 'ring-1 ring-slate-200/50',
-              )}
-              onClick={openProfilePopup}
-              title={isLineConnected ? 'เชื่อม LINE แล้ว' : undefined}
-            >
-              {userData?.photoURL || user?.photoURL ? (
-                <img
-                  src={userData?.photoURL || user?.photoURL}
-                  alt="Avatar"
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div
-                  className={`w-full h-full bg-gradient-to-br ${cfg.gradient} flex items-center justify-center text-white font-bold text-sm`}
-                >
-                  {initials}
-                </div>
-              )}
-            </button>
-
-            {/* Desktop: Name + Role Capsule (clickable → Profile popup) */}
-            <button
-              type="button"
-              className="flex items-center rounded-full px-4 py-1.5 cursor-pointer"
-              style={GLASS}
-              onClick={openProfilePopup}
-            >
-              <div className="flex flex-col items-start gap-1">
-                <p className="text-[13px] font-black text-slate-800 leading-none">
-                  {displayName}
-                </p>
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-1.5 h-1.5 rounded-full bg-gradient-to-br ${cfg.gradient} shadow-sm`} />
-                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-none">
-                    {cfg.label}
-                  </p>
-                </div>
-              </div>
-            </button>
-
-            {showProfilePopup && (
-              <motion.div
-                initial={{ opacity: 0, y: -8, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -8, scale: 0.98 }}
-                className="absolute top-[52px] left-0 z-50 w-[320px] rounded-2xl border border-slate-200 bg-white shadow-2xl p-4"
-              >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={cn(
-                      'w-12 h-12 rounded-full overflow-hidden',
-                      isLineConnected ? 'ring-2 ring-[#06c755]' : 'ring-1 ring-slate-200',
-                    )}
-                  >
-                    {userData?.photoURL || user?.photoURL ? (
-                      <img
-                        src={userData?.photoURL || user?.photoURL}
-                        alt="Avatar"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className={`w-full h-full bg-gradient-to-br ${cfg.gradient} flex items-center justify-center text-white font-black`}>
-                        {initials}
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-black text-slate-800 truncate">{displayName}</p>
-                    <p className="text-[11px] font-bold text-slate-500 truncate">{cfg.label}</p>
-                  </div>
-                </div>
-
-                <div className="mt-3 rounded-xl bg-slate-50 border border-slate-100 px-3 py-2">
-                  <p className="text-[11px] text-slate-500 truncate">{user?.email || '-'}</p>
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowProfilePopup(false);
-                      navigate('/portal/profile');
-                    }}
-                    className="h-9 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <HiUser size={14} />
-                    ข้อมูลส่วนตัว
-                  </button>
+            {/* Mobile: Header Tabs */}
+            <div className="flex lg:hidden items-center justify-between w-full">
+              {showProfilePopup ? (
+                <div className="flex items-center justify-between w-full min-h-10 py-1 text-white animate-fadeIn">
+                  {/* Left side: Avatar + User Info (Clickable to close) */}
                   <button
                     type="button"
                     onClick={() => setShowProfilePopup(false)}
-                    className="h-9 rounded-xl border border-slate-200 text-slate-600 text-xs font-black hover:bg-slate-50 transition-colors"
+                    className="flex items-center gap-2 cursor-pointer text-left focus:outline-none"
                   >
-                    ปิด
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </div>
-          )}
-
-          {/* Desktop breadcrumb — feature pages only (top-left) */}
-          {!isHome && pageTitle && (
-            <Breadcrumb className="hidden lg:flex min-w-0 max-w-[min(560px,52vw)]">
-              <BreadcrumbList className="gap-1 sm:gap-1.5 text-[13px] font-sukhumvit">
-                <BreadcrumbItem>
-                  <BreadcrumbLink asChild>
-                    <button
-                      type="button"
-                      onClick={goToMenu}
-                      className="font-bold text-slate-500 hover:text-slate-800 transition-colors"
+                    <div
+                      className={cn(
+                        'w-8 h-8 lg:w-9 lg:h-9 rounded-full flex-shrink-0 overflow-hidden border-2 shadow-sm',
+                        isLineConnected ? 'border-[#06c755] ring-2 ring-[#06c755]/40' : 'border-slate-700',
+                      )}
                     >
-                      เมนู
-                    </button>
-                  </BreadcrumbLink>
-                </BreadcrumbItem>
-                <BreadcrumbSeparator className="[&>svg]:size-3.5 text-slate-300">
-                  <ChevronRight />
-                </BreadcrumbSeparator>
-                <BreadcrumbItem className="min-w-0">
-                  <div id="header-portal-breadcrumb-page" className="peer/breadcrumb-page min-w-0" />
-                  <BreadcrumbPage className="font-black text-slate-800 truncate peer-[:not(:empty)]/breadcrumb-page:hidden">
-                    {pageTitle}
-                  </BreadcrumbPage>
-                </BreadcrumbItem>
-                {/* Feature pages may portal extra crumbs (e.g. selected subject) */}
-                <div id="header-portal-breadcrumb-extra" className="contents" />
-              </BreadcrumbList>
-            </Breadcrumb>
-          )}
+                      {userData?.photoURL || user?.photoURL ? (
+                        <img
+                          src={userData?.photoURL || user?.photoURL}
+                          alt="Avatar"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div
+                          className={`w-full h-full bg-gradient-to-br ${cfg.gradient} flex items-center justify-center text-white font-bold text-xs`}
+                        >
+                          {initials}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-start gap-0.5">
+                      <p className="text-[12px] font-black text-white leading-tight truncate max-w-[135px]">
+                        {displayName}
+                      </p>
+                      <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-none">
+                        {cfg.label}
+                      </p>
+                    </div>
+                  </button>
 
-          {/* Time & Date Display (Dashboard only) — isolated tick, no Outlet re-render */}
-          {isHome && view === 'dashboard' && <PortalHeaderClock />}
+                  {/* Right side: ข้อมูลส่วนตัว and ออกระบบ icons */}
+                  <div className="flex items-center gap-2">
+                    {/* ข้อมูลส่วนตัว button */}
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => {
+                        setShowProfilePopup(false);
+                        navigate('/portal/profile');
+                      }}
+                      className="flex h-8 w-8 lg:h-9 lg:w-9 rounded-full items-center justify-center border border-slate-200 bg-white text-slate-800 shadow-sm hover:bg-slate-100 transition-colors"
+                      title="ข้อมูลส่วนตัว"
+                    >
+                      <HiUser size={18} />
+                    </motion.button>
 
+                    {/* ออกระบบ button */}
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => {
+                        setShowProfilePopup(false);
+                        authService.logout();
+                      }}
+                      className="flex h-8 w-8 lg:h-9 lg:w-9 rounded-full items-center justify-center border border-slate-200 bg-white text-rose-500 shadow-sm hover:bg-rose-50 transition-colors"
+                      title="ออกจากระบบ"
+                    >
+                      <LogOut size={18} />
+                    </motion.button>
+                  </div>
+                </div>
+              ) : isHome ? (
+                <>
+                  {/* Left side: Avatar */}
+                  {renderMobileAvatar(false)}
 
-
-          {/* Page Title (with separator) */}
-          {title && (
-            <div className="flex items-center gap-3 ml-2">
-              <div className="h-4 w-[1px] bg-slate-300" />
-              <p className="text-sm font-bold text-slate-800 tracking-tight">{title}</p>
+                  {/* Right side: Navigation Tabs */}
+                  <div className="flex items-center gap-1 min-h-10">
+                    {mobileSecondaryNavTabs.map((tab, idx) => renderMobileHeaderTabButton(tab, idx))}
+                    {showAiAgentButton && renderAiAgentHeaderButton('sm')}
+                    {mobilePrimaryNavTabs.map((tab, idx) => renderMobileHeaderTabButton(tab, idx))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Left side: Back Button */}
+                  <div className="relative flex items-center justify-between w-full min-h-10">
+                    <div id="header-portal-mobile-back" className="flex-shrink-0 relative z-10">
+                      <motion.button
+                        id="portal-default-mobile-back"
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => {
+                          setView('menu');
+                          navigate('/portal');
+                        }}
+                        className="flex h-9 w-9 lg:h-9 lg:w-9 rounded-full items-center justify-center text-slate-700 transition-colors hover:bg-slate-100"
+                        title="กลับเมนู"
+                      >
+                        <ChevronLeft size={20} />
+                      </motion.button>
+                    </div>
+                    <div
+                      id="header-portal-center-mobile"
+                      className="absolute inset-x-0 top-0 bottom-0 flex items-center justify-center pointer-events-none"
+                    />
+                    <div className="flex items-center justify-end relative z-10 shrink-0 gap-1">
+                      <div id="header-portal-mobile-actions" className="flex items-center justify-end" />
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* CENTER: Filters (desktop) */}
-        <div className="hidden lg:flex flex-1 justify-center px-4 gap-4 items-center">
-          <div id="header-portal-filters" className="flex items-center justify-center" />
-        </div>
-
-        {/* CENTER: Fixed viewport-centered portal (desktop) */}
-        <div
-          id="header-portal-center"
-          className="pointer-events-none absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 lg:flex items-center justify-center"
-        />
-
-        {/* RIGHT: Portal Actions + Home/Menu + Logout (logout after menu) */}
-        <div className="flex items-center gap-3">
-          <div className="hidden lg:flex items-center rounded-full p-1 gap-1 bg-transparent">
-            <div id="header-portal-right-actions" className="flex items-center gap-1" />
-            {showAiAgentButton && renderAiAgentHeaderButton()}
-          </div>
-
-          <div className={cn('hidden lg:flex shrink-0', HEADER_ICON_BTN_GROUP)}>
-            <div id="header-portal-home-actions" className={cn('flex', HEADER_ICON_BTN_GROUP)} />
-            {renderDesktopHomeMenuButtons()}
+            {/* Desktop: Avatar + name — home (menu/dashboard) only */}
             {isHome && (
-              <button
-                type="button"
-                onClick={() => authService.logout()}
-                className={cn(HEADER_ICON_BTN, 'text-rose-500')}
-                title="ออกจากระบบ"
-              >
-                <LogOut size={16} />
-              </button>
+              <div ref={profilePopupRef} className="hidden lg:flex items-center gap-2 relative">
+                {/* Desktop: Avatar (clickable → Profile popup) */}
+                <button
+                  type="button"
+                  className={cn(
+                    'w-11 h-11 rounded-full flex-shrink-0 cursor-pointer overflow-hidden border-2 border-white shadow-sm',
+                    isLineConnected ? 'ring-2 ring-[#06c755]' : 'ring-1 ring-slate-200/50',
+                  )}
+                  onClick={openProfilePopup}
+                  title={isLineConnected ? 'เชื่อม LINE แล้ว' : undefined}
+                >
+                  {userData?.photoURL || user?.photoURL ? (
+                    <img
+                      src={userData?.photoURL || user?.photoURL}
+                      alt="Avatar"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div
+                      className={`w-full h-full bg-gradient-to-br ${cfg.gradient} flex items-center justify-center text-white font-bold text-sm`}
+                    >
+                      {initials}
+                    </div>
+                  )}
+                </button>
+
+                {/* Desktop: Name + Role Capsule (clickable → Profile popup) */}
+                <button
+                  type="button"
+                  className="flex items-center rounded-full px-4 py-1.5 cursor-pointer"
+                  style={GLASS}
+                  onClick={openProfilePopup}
+                >
+                  <div className="flex flex-col items-start gap-1">
+                    <p className="text-[13px] font-black text-slate-800 leading-none">
+                      {displayName}
+                    </p>
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-1.5 h-1.5 rounded-full bg-gradient-to-br ${cfg.gradient} shadow-sm`} />
+                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-none">
+                        {cfg.label}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+
+                {showProfilePopup && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                    className="absolute top-[52px] left-0 z-50 w-[320px] rounded-2xl border border-slate-200 bg-white shadow-2xl p-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={cn(
+                          'w-12 h-12 rounded-full overflow-hidden',
+                          isLineConnected ? 'ring-2 ring-[#06c755]' : 'ring-1 ring-slate-200',
+                        )}
+                      >
+                        {userData?.photoURL || user?.photoURL ? (
+                          <img
+                            src={userData?.photoURL || user?.photoURL}
+                            alt="Avatar"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className={`w-full h-full bg-gradient-to-br ${cfg.gradient} flex items-center justify-center text-white font-black`}>
+                            {initials}
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-black text-slate-800 truncate">{displayName}</p>
+                        <p className="text-[11px] font-bold text-slate-500 truncate">{cfg.label}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 rounded-xl bg-slate-50 border border-slate-100 px-3 py-2">
+                      <p className="text-[11px] text-slate-500 truncate">{user?.email || '-'}</p>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowProfilePopup(false);
+                          navigate('/portal/profile');
+                        }}
+                        className="h-9 rounded-xl bg-slate-900 text-white text-xs font-black hover:bg-slate-800 transition-colors flex items-center justify-center gap-1.5"
+                      >
+                        <HiUser size={14} />
+                        ข้อมูลส่วนตัว
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowProfilePopup(false)}
+                        className="h-9 rounded-xl border border-slate-200 text-slate-600 text-xs font-black hover:bg-slate-50 transition-colors"
+                      >
+                        ปิด
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </div>
+            )}
+
+
+
+            {/* Time & Date Display (Dashboard only) — isolated tick, no Outlet re-render */}
+            {isHome && view === 'dashboard' && <PortalHeaderClock />}
+
+            {/* Page Title (when on menu page) */}
+            {!isHome && currentPageTitle && (
+              <div className="hidden lg:flex items-center gap-3 ml-2">
+                <div className="h-4 w-[1px] bg-slate-300" />
+                <p className="text-sm font-bold text-slate-800 tracking-tight">{currentPageTitle}</p>
+              </div>
+            )}
+
+            {/* Page Title (with separator) */}
+            {title && (
+              <div className="flex items-center gap-3 ml-2">
+                <div className="h-4 w-[1px] bg-slate-300" />
+                <p className="text-sm font-bold text-slate-800 tracking-tight">{title}</p>
+              </div>
             )}
           </div>
-        </div>
+
+          {/* CENTER: Filters (desktop) */}
+          <div className="hidden lg:flex flex-1 justify-center px-4 gap-4 items-center">
+            <div id="header-portal-filters" className="flex items-center justify-center" />
+          </div>
+
+          {/* LEFT: Portal for filters/secondary controls (desktop) */}
+          <div
+            id="header-portal-left"
+            className="pointer-events-none absolute left-56 top-1/2 z-10 hidden -translate-y-1/2 lg:flex items-center justify-center"
+          />
+
+          {/* CENTER: Fixed viewport-centered portal (desktop) */}
+          <div
+            id="header-portal-center"
+            className="pointer-events-none absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 lg:flex items-center justify-center"
+          />
+
+          {/* RIGHT: Portal Actions + Home/Menu + Logout (logout after menu) */}
+          <div className="flex items-center gap-3">
+            <div className="hidden lg:flex items-center rounded-full p-1 gap-1 bg-transparent">
+              <div id="header-portal-right-actions" className="flex items-center gap-1" />
+              {showAiAgentButton && renderAiAgentHeaderButton()}
+            </div>
+
+            <div className={cn('hidden lg:flex shrink-0', HEADER_ICON_BTN_GROUP)}>
+              <div id="header-portal-home-actions" className={cn('flex', HEADER_ICON_BTN_GROUP)} />
+              {renderDesktopHomeMenuButtons()}
+              {isHome && (
+                <button
+                  type="button"
+                  onClick={() => authService.logout()}
+                  className={cn(HEADER_ICON_BTN, 'text-rose-500')}
+                  title="ออกจากระบบ"
+                >
+                  <LogOut size={16} />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -766,7 +762,7 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
 
       {/* ── Page Content (child routes rendered here) ── */}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain scrollbar-hide">
+        <div id="portal-scroll-container" className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain scrollbar-hide">
           <div
             className={cn(
               'mx-auto flex min-h-full w-full max-w-[1600px] flex-col',
@@ -783,7 +779,7 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
                 isHome ? 'px-1.5 py-3 sm:px-2 sm:py-4' : 'min-h-full px-0.5 sm:px-1',
               )}
             >
-              <Outlet context={{ view, showSearch }} />
+              <Outlet context={outletContext} />
             </div>
           </div>
         </div>

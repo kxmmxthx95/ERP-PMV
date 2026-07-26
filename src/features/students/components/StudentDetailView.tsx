@@ -102,42 +102,72 @@ export default function StudentDetailView({ student, enrollments, onEdit, onDele
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 bg-[#f2f2f7]/80 backdrop-blur-md rounded-full p-1.5 border border-slate-200/40 w-fit">
+            {/* 1. Add/Import Button */}
             <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={onEdit}
-              className="flex items-center gap-2 px-6 py-2 bg-[#f2f2f7] hover:bg-[#e5e5ea] text-blue-600 rounded-full transition-all font-bold text-[13px]"
+              title="แก้ไขข้อมูล"
+              className="w-10 h-10 rounded-full flex items-center justify-center bg-white text-slate-700 hover:bg-slate-50 shadow-sm transition-all cursor-pointer"
             >
-              <Pencil size={15} strokeWidth={3} />
-              แก้ไขข้อมูล
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
             </motion.button>
+
+            {/* 2. Edit Button */}
             <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={onEdit}
+              title="แก้ไขข้อมูล"
+              className="w-10 h-10 rounded-full flex items-center justify-center bg-white text-slate-700 hover:bg-slate-50 shadow-sm transition-all cursor-pointer"
+            >
+              <Pencil size={16} />
+            </motion.button>
+
+            {/* 3. Toggle Status / Sync Button */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={() => onToggleStatus(student.id)}
-              className={`flex items-center gap-2 px-5 py-2 rounded-full transition-all font-bold text-[13px] ${isActive ? 'bg-[#f2f2f7] hover:bg-[#e5e5ea] text-blue-600' : 'bg-rose-50 hover:bg-rose-100 text-rose-600'}`}
+              title={isActive ? 'พักการเรียน' : 'เปิดสถานะ'}
+              className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm transition-all cursor-pointer ${
+                isActive ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'bg-white text-slate-400 hover:bg-slate-50'
+              }`}
             >
-              <div className={`w-9 h-5 rounded-full p-0.5 flex transition-colors ${isActive ? 'bg-blue-500 justify-end' : 'bg-rose-500 justify-start'}`}>
-                <motion.div
-                  layout
-                  className="w-4 h-4 bg-white rounded-full shadow-sm"
-                />
-              </div>
-              {isActive ? 'พักการเรียน' : 'เปิดสถานะ'}
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
             </motion.button>
+
+            {/* 4. Delete Button */}
             <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={() => {
                 if (confirm(`คุณต้องการลบรายชื่อ ${student.prefix}${student.firstName} ใช่หรือไม่?`)) {
                   onDelete(student.id);
                 }
               }}
-              className="flex items-center gap-2 px-6 py-2 bg-[#fff1f2] hover:bg-[#ffe4e6] text-rose-600 rounded-full transition-all font-bold text-[13px]"
+              title="ลบข้อมูล"
+              className="w-10 h-10 rounded-full flex items-center justify-center bg-white text-rose-500 hover:bg-rose-50 shadow-sm transition-all cursor-pointer"
             >
-              <Trash2 size={15} strokeWidth={3} />
-              ลบข้อมูล
+              <Trash2 size={16} />
+            </motion.button>
+
+            {/* 5. LINE OA Button */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => window.open('https://lin.ee/QKGIt0J', '_blank', 'noopener,noreferrer')}
+              title="เชื่อมต่อ LINE"
+              className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#06c755] hover:bg-[#05b34c] text-white shadow-sm transition-all cursor-pointer"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 5.58 2 10.02c0 2.22 1.09 4.22 2.87 5.61-.17.6-.62 2.45-.71 2.8-.1.43.14.42.3.31.13-.09 2.11-1.43 2.95-2.01.81.23 1.67.35 2.59.35 5.52 0 10-3.58 10-8.02S17.52 2 12 2zm-4.66 11.23H5.85c-.2 0-.37-.17-.37-.37V7.16c0-.2.17-.37.37-.37.2 0 .37.17.37.37v4.97h1.49c.2 0 .37.17.37.37s-.17.36-.37.36zm1.74-.37c0 .2-.17.37-.37.37s-.37-.17-.37-.37V7.16c0-.2.17-.37.37-.37s.37.17.37.37v4.96c0 .01 0 .01 0 0zm4.27 0c0 .1-.04.19-.11.26-.07.07-.16.11-.26.11h-1.63c-.09 0-.17-.03-.23-.09-.07-.07-.1-.15-.1-.24v-4.9c0-.1.04-.19.11-.26.07-.07.16-.11.26-.11h1.6c.1 0 .19.04.26.11.07.07.11.16.11.26.01.2 0 .2-.19.2h-1.41v1.65h1.36c.2 0 .37.17.37.37s-.17.37-.37.37h-1.36v1.65h1.41c.2 0 .37.17.37.37v.01zm3.89-2.19c.14.15.21.32.21.52v2.04c0 .2-.17.37-.37.37s-.37-.17-.37-.37v-2.01c0-.09-.03-.17-.09-.23a.35.35 0 00-.25-.09h-1.04v2.33c0 .2-.17.37-.37.37s-.37-.17-.37-.37V7.16c0-.2.17-.37.37-.37.2 0 .37.17.37.37v1.89h1.04c.2 0 .37.07.51.21l1.19 1.25.13-.15V7.16c0-.2.17-.37.37-.37s.37.17.37.37v2.04c0 .2-.07.38-.21.52l-1.34 1.41 1.4 1.48c.1.1.15.22.15.35 0 .29-.24.52-.53.52-.14 0-.27-.06-.37-.16l-1.44-1.52.01-.01z" />
+              </svg>
             </motion.button>
           </div>
         </div>

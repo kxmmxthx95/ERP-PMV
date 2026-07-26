@@ -31,15 +31,23 @@ import {
   widgetHolidayDateClass,
   widgetHolidayHeaderClass,
 } from '../components/WidgetHolidayContent';
+import {
+  DRAWER_HEADER_ICON_BTN,
+  DRAWER_HEADER_RIGHT_ACTIONS,
+} from '@/lib/drawerHeaderBtn';
+import { cn } from '@/lib/utils';
 
-const DRAWER_CONTENT_CLASS = [
-  'h-dvh flex flex-col p-0 rounded-none',
+const DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh max-h-dvh flex-col overflow-hidden bg-transparent p-0 before:hidden',
   'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
-  'data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none',
-  'sm:h-full sm:rounded-l-3xl',
+  'sm:h-full sm:max-h-full sm:p-2.5',
   'sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md',
-  'sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl',
-].join(' ');
+);
+
+const DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white',
+  'sm:rounded-4xl sm:border sm:border-slate-200/80 sm:shadow-2xl',
+);
 
 const STATUS_META: Record<
   DailyStaffStatus,
@@ -196,48 +204,52 @@ export default function DailyAttendanceSummaryWidget() {
 
       <Drawer open={drawerOpen} onOpenChange={setDrawerOpen} direction="right">
         <DrawerContent className={DRAWER_CONTENT_CLASS}>
-          <DrawerHeader className="px-4 pb-2">
-            <div className="relative flex items-center justify-center min-h-10">
-              <div className="min-w-0 text-center px-12">
-                <DrawerTitle className="text-base font-black text-slate-800">
-                  สรุปการเข้างานรายวัน
-                </DrawerTitle>
-                <DrawerDescription className="text-xs text-slate-500">{todayLabel}</DrawerDescription>
+          <div className={DRAWER_PANEL_CLASS}>
+            <DrawerHeader className="px-5 pb-3 pt-5 border-b border-slate-100 shrink-0">
+              <div className="relative flex items-center justify-center min-h-10">
+                <div className="min-w-0 text-center px-12">
+                  <DrawerTitle className="text-[15px] font-black text-slate-800 font-sukhumvit">
+                    สรุปการเข้างานรายวัน
+                  </DrawerTitle>
+                  <DrawerDescription className="text-xs text-slate-500 font-sarabun">{todayLabel}</DrawerDescription>
+                </div>
+                <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                  <button
+                    type="button"
+                    onClick={() => setDrawerOpen(false)}
+                    className={DRAWER_HEADER_ICON_BTN}
+                    aria-label="ปิด"
+                  >
+                    <HiXMark size={16} />
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="absolute right-0 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 active:scale-[0.98] transition"
-                aria-label="ปิด"
-              >
-                <HiXMark className="w-4 h-4" />
-              </button>
-            </div>
-          </DrawerHeader>
+            </DrawerHeader>
 
-          <div className="px-4 pb-4 overflow-y-auto flex-1 min-h-0">
-            {loading ? (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center text-xs font-semibold text-slate-500">
-                กำลังโหลด...
-              </div>
-            ) : todayStaff.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
-                <p className="text-sm font-bold text-slate-600">ยังไม่มีข้อมูลบุคลากรวันนี้</p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-4">
-                {groupedStaff.map(({ status, items }) => (
-                  <section key={status} className="flex flex-col gap-2.5">
-                    <p className="text-[11px] font-black text-slate-500 uppercase tracking-wide px-0.5">
-                      {SECTION_LABELS[status]} ({items.length})
-                    </p>
-                    {items.map(staff => (
-                      <StaffRow key={staff.userId} staff={staff} />
-                    ))}
-                  </section>
-                ))}
-              </div>
-            )}
+            <div className="px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 overflow-y-auto flex-1 min-h-0 scrollbar-hide">
+              {loading ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center text-xs font-semibold text-slate-500">
+                  กำลังโหลด...
+                </div>
+              ) : todayStaff.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
+                  <p className="text-sm font-bold text-slate-600">ยังไม่มีข้อมูลบุคลากรวันนี้</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {groupedStaff.map(({ status, items }) => (
+                    <section key={status} className="flex flex-col gap-2.5">
+                      <p className="text-[11px] font-black text-slate-500 uppercase tracking-wide px-0.5">
+                        {SECTION_LABELS[status]} ({items.length})
+                      </p>
+                      {items.map(staff => (
+                        <StaffRow key={staff.userId} staff={staff} />
+                      ))}
+                    </section>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </DrawerContent>
       </Drawer>

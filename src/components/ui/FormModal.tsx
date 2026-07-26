@@ -44,7 +44,6 @@ export default function FormModal({
   children,
   maxWidth = 'md',
   footerNote,
-  showCancel = true,
 }: FormModalProps) {
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -52,7 +51,7 @@ export default function FormModal({
         showCloseButton={false}
         className={cn(
           maxWMap[maxWidth],
-          "w-[92vw] rounded-[2rem] sm:rounded-[2.5rem] border-none p-0 shadow-2xl overflow-hidden"
+          "w-[92vw] rounded-2xl border-none p-0 shadow-2xl overflow-hidden"
         )}
         style={{
           background: 'rgba(255,255,255,0.7)',
@@ -120,21 +119,12 @@ export default function FormModal({
           </div>
 
           {/* ── Fixed Footer ── */}
-          <DialogFooter className="px-5 sm:px-6 py-4 sm:py-5 flex items-center justify-end gap-3 border-t border-slate-100/50 shrink-0 bg-transparent">
-            {showCancel && (
-              <button
-                onClick={onClose}
-                className="px-4 h-10 rounded-xl text-sm font-bold text-slate-500 hover:text-slate-700 transition-all"
-              >
-                ยกเลิก
-              </button>
-            )}
+          <DialogFooter className="px-5 sm:px-6 py-4 sm:py-5 flex items-center justify-end gap-3 border-t border-white/20 shrink-0 bg-transparent">
             <button
               onClick={onSubmit}
               disabled={submitDisabled}
               className={cn(
-                "h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shadow-lg shadow-slate-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:bg-slate-200",
-                showCancel ? "px-10" : "w-full",
+                "h-10 rounded-xl bg-primary text-primary-foreground flex items-center justify-center font-bold text-sm transition-all active:scale-95 disabled:opacity-50 w-full",
                 submitClassName
               )}
             >

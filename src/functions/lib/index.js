@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.migrateStaffAttendanceByDate = exports.updateAuthUserEmail = exports.setUserClaims = exports.deleteAuthUser = exports.setAnonymousUserRole = exports.finalizeExamRoundOnClose = exports.requestExamAttemptGrading = exports.wordGameLeaveRoom = exports.wordGameSubmitGuess = exports.wordGameStart = exports.wordGameJoinRoom = exports.wordGameCreateRoom = exports.examPdfBytes = exports.horoscopeDaily = exports.deviceFingerprintAttendance = exports.qbAnalystChat = exports.resetPasswordByNationalId = exports.forceLogoutAllUsers = exports.hardResetUser = exports.forceLogoutUser = exports.lineStaffAttendance = exports.completeLineLinkWithToken = exports.lineWebhookV2 = exports.lineWebhook = exports.processLineLinkRequest = exports.examRoomAutoClose = exports.reportDailyScheduled = exports.sendLineReport = void 0;
+exports.migrateStaffAttendanceByDate = exports.updateAuthUserEmail = exports.setUserClaims = exports.deleteAuthUser = exports.setAnonymousUserRole = exports.finalizeExamRoundOnClose = exports.requestExamAttemptGrading = exports.wordGameLeaveRoom = exports.wordGameSubmitGuess = exports.wordGameStart = exports.wordGameJoinRoom = exports.wordGameCreateRoom = exports.examPdfBytes = exports.horoscopeDaily = exports.deviceFingerprintAttendance = exports.qbAnalystChat = exports.resetPasswordByNationalId = exports.forceLogoutAllUsers = exports.hardResetUser = exports.forceLogoutUser = exports.lineStaffAttendance = exports.completeLineLinkWithToken = exports.lineWebhookV2 = exports.lineWebhook = exports.processLineLinkRequest = exports.examRoomAutoClose = exports.reportDailyScheduled = exports.notifyHomeroomOnStudentLeave = exports.sendLineReport = void 0;
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const firestore_1 = require("firebase-functions/v2/firestore");
@@ -11,6 +11,8 @@ admin.initializeApp();
 const db = (0, getAdminFirestore_1.getAdminFirestore)();
 var sendLineReport_1 = require("./sendLineReport");
 Object.defineProperty(exports, "sendLineReport", { enumerable: true, get: function () { return sendLineReport_1.sendLineReport; } });
+var notifyHomeroomOnStudentLeave_1 = require("./notifyHomeroomOnStudentLeave");
+Object.defineProperty(exports, "notifyHomeroomOnStudentLeave", { enumerable: true, get: function () { return notifyHomeroomOnStudentLeave_1.notifyHomeroomOnStudentLeave; } });
 var reportDailyScheduled_1 = require("./reportDailyScheduled");
 Object.defineProperty(exports, "reportDailyScheduled", { enumerable: true, get: function () { return reportDailyScheduled_1.reportDailyScheduled; } });
 var examRoomAutoClose_1 = require("./examRoomAutoClose");

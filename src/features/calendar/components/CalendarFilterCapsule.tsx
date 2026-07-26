@@ -1,6 +1,12 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Search, Plus, X, ChevronDown } from 'lucide-react';
+import { Search, Plus, X, ChevronDown, Check } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface CalendarFilterCapsuleProps {
   filterDept: string;
@@ -91,28 +97,34 @@ export default function CalendarFilterCapsule({
                 <ChevronDown size={12} className="absolute right-2.5 pointer-events-none text-slate-500" />
               </div>
 
-              {/* Desktop Pills */}
-              <div className="hidden md:flex items-center gap-1">
-                {allDepts.map((dept) => {
-                  const val = deptIdMap[dept.id] ?? dept.id;
-                  const isActive = filterDept === val;
-
-                  return (
+              {/* Desktop Filter Button */}
+              <div className="hidden md:flex items-center">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
                     <button
-                      key={dept.id}
-                      onClick={() => onDeptChange(val)}
-                      className={`px-3.5 rounded-full text-[11px] font-bold transition-all font-sukhumvit whitespace-nowrap ${
+                      className={`flex items-center gap-1.5 px-3.5 rounded-full text-[11px] font-bold transition-all font-sukhumvit whitespace-nowrap text-slate-600 hover:bg-black/5 ${
                         isPortal ? 'h-8' : 'py-1.5'
-                      } ${
-                        isActive
-                          ? `bg-slate-900 text-white shadow-md`
-                          : 'text-slate-500 hover:text-slate-800 hover:bg-black/5'
                       }`}
                     >
-                      {dept.label}
+                      <span>
+                        {allDepts.find((d) => (deptIdMap[d.id] ?? d.id) === filterDept)?.label ?? 'All'}
+                      </span>
+                      <ChevronDown size={12} className="text-slate-400" />
                     </button>
-                  );
-                })}
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {allDepts.map((dept) => {
+                      const val = deptIdMap[dept.id] ?? dept.id;
+                      const isActive = filterDept === val;
+                      return (
+                        <DropdownMenuItem key={dept.id} onClick={() => onDeptChange(val)}>
+                          {dept.label}
+                          {isActive && <Check size={14} className="ml-auto text-slate-900" />}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
 

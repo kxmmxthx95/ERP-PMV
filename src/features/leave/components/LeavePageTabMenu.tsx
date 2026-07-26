@@ -58,7 +58,7 @@ export default function LeavePageTabMenu({
             type="button"
             onClick={() => onTabChange(tab.key)}
             className={cn(
-              'whitespace-nowrap rounded-full px-5 py-1.5 text-[11px] font-black transition-all',
+              'whitespace-nowrap rounded-full px-5 py-1.5 text-[11px] font-black',
               isActive
                 ? 'bg-slate-900 text-white shadow-md'
                 : 'text-slate-500 hover:bg-black/5 hover:text-slate-800',
@@ -76,14 +76,14 @@ export default function LeavePageTabMenu({
       <button
         type="button"
         onClick={() => setMobileMenuOpen((open) => !open)}
-        className="flex min-w-0 items-center gap-1.5 text-black/80 transition-colors hover:text-black/60"
+        className="flex min-w-0 items-center gap-1.5 text-black/80 hover:text-black/60"
         aria-label="เลือกแท็บจัดการคำขอลา"
         aria-expanded={mobileMenuOpen}
       >
         <span className="truncate font-sukhumvit text-[12px] font-black">{activeTab?.label}</span>
         <HiChevronDown
           className={cn(
-            'h-3.5 w-3.5 shrink-0 text-black/45 transition-transform',
+            'h-3.5 w-3.5 shrink-0 text-black/45',
             mobileMenuOpen && 'rotate-180',
           )}
         />
@@ -112,7 +112,7 @@ export default function LeavePageTabMenu({
                     setMobileMenuOpen(false);
                   }}
                   className={cn(
-                    'flex w-full items-center rounded-xl px-3 py-2.5 text-left font-sukhumvit text-[13px] font-bold transition-colors',
+                    'flex w-full items-center rounded-xl px-3 py-2.5 text-left font-sukhumvit text-[13px] font-bold',
                     isActive ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50',
                   )}
                 >

@@ -31,7 +31,7 @@ export default function CalendarDayGrid({
   };
 
   return (
-    <>
+    <div className="flex flex-col h-full">
       {/* Day-of-week headers */}
       <div className="grid grid-cols-7 px-5 pt-4 pb-2">
         {DAY_NAMES.map((d, i) => (
@@ -48,7 +48,7 @@ export default function CalendarDayGrid({
       </div>
 
       {/* Day cells */}
-      <div className="grid grid-cols-7 gap-0.5 px-4 pb-5">
+      <div className="grid grid-cols-7 gap-1 px-5 pb-5 flex-1 auto-rows-fr">
         {days.map(day => {
           const dateStr = toDateStr(day);
           const dayEvents = getEventsForDate(dateStr);
@@ -67,6 +67,6 @@ export default function CalendarDayGrid({
           );
         })}
       </div>
-    </>
+    </div>
   );
 }

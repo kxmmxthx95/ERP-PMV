@@ -83,11 +83,6 @@ export default function AdminProgressView({ syllabi, onSelect, progressCtx }: Pr
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: gi * 0.06 }}
         >
-          <div className="mb-4 flex items-center gap-3">
-            <h3 className="text-xs font-black uppercase tracking-widest text-black">{grade}</h3>
-            <div className="h-px flex-1 bg-slate-200" />
-            <span className="text-[10px] font-bold text-black">{items.length} วิชา</span>
-          </div>
 
           <div className="grid w-full grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 xl:grid-cols-4">
             {[...items]

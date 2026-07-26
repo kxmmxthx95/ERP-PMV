@@ -1,4 +1,3 @@
-import { AnimatePresence, motion } from 'framer-motion';
 import {
   DepartmentPickerCoverflow,
   DEPT_CARD_GRADIENT,
@@ -45,73 +44,53 @@ export function ClassSelectionFlow({
 
   return (
     <div className="flex min-h-[calc(100dvh-8.5rem)] flex-1 flex-col items-center justify-center px-3 py-2 md:px-6">
-      <AnimatePresence mode="wait">
-        {step === 'dept' && (
-          <motion.div
-            key="dept"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="flex w-full flex-col items-center justify-center"
-          >
-            <DepartmentPickerCoverflow onSelect={onSelectDept} />
-          </motion.div>
-        )}
+      {step === 'dept' && (
+        <div className="flex w-full flex-col items-center justify-center">
+          <DepartmentPickerCoverflow onSelect={onSelectDept} />
+        </div>
+      )}
 
-        {step === 'grade' && (
-          <motion.div
-            key="grade"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="flex min-h-0 flex-1 w-full flex-col items-center justify-center"
-          >
-            {gradeOptions.length === 0 ? (
-              <p className="py-12 text-center text-sm font-bold text-slate-400">
-                ไม่พบระดับชั้นในแผนกนี้
-              </p>
-            ) : (
-              <PickerCoverflow
-                ariaLabel="ระดับชั้น"
-                onSelect={onSelectLevel}
-                items={gradeOptions.map((level) => ({
-                  id: level,
-                  label: level,
-                  subtitle: gradeLevelSubtitle(level),
-                  gradient: cardGradient,
-                }))}
-              />
-            )}
-          </motion.div>
-        )}
+      {step === 'grade' && (
+        <div className="flex min-h-0 flex-1 w-full flex-col items-center justify-center">
+          {gradeOptions.length === 0 ? (
+            <p className="py-12 text-center text-sm font-bold text-slate-400">
+              ไม่พบระดับชั้นในแผนกนี้
+            </p>
+          ) : (
+            <PickerCoverflow
+              ariaLabel="ระดับชั้น"
+              onSelect={onSelectLevel}
+              items={gradeOptions.map((level) => ({
+                id: level,
+                label: level,
+                subtitle: gradeLevelSubtitle(level),
+                gradient: cardGradient,
+              }))}
+            />
+          )}
+        </div>
+      )}
 
-        {step === 'room' && (
-          <motion.div
-            key="room"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="flex min-h-0 flex-1 w-full flex-col items-center justify-center"
-          >
-            {roomOptions.length === 0 ? (
-              <p className="py-12 text-center text-sm font-bold text-slate-400">
-                ไม่พบห้องเรียนในระดับชั้นนี้
-              </p>
-            ) : (
-              <PickerCoverflow
-                ariaLabel="ห้องเรียน"
-                onSelect={onSelectRoom}
-                items={roomOptions.map((room) => ({
-                  id: room,
-                  label: selectedLevel ? `${selectedLevel}/${room}` : room,
-                  subtitle: 'Classroom',
-                  gradient: cardGradient,
-                }))}
-              />
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {step === 'room' && (
+        <div className="flex min-h-0 flex-1 w-full flex-col items-center justify-center">
+          {roomOptions.length === 0 ? (
+            <p className="py-12 text-center text-sm font-bold text-slate-400">
+              ไม่พบห้องเรียนในระดับชั้นนี้
+            </p>
+          ) : (
+            <PickerCoverflow
+              ariaLabel="ห้องเรียน"
+              onSelect={onSelectRoom}
+              items={roomOptions.map((room) => ({
+                id: room,
+                label: selectedLevel ? `${selectedLevel}/${room}` : room,
+                subtitle: 'Classroom',
+                gradient: cardGradient,
+              }))}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -3,10 +3,12 @@ import { useSearchParams } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
+  HiArrowLeft,
   HiChevronRight,
   HiOutlineCalendarDays,
   HiOutlineCog6Tooth,
 } from 'react-icons/hi2';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
@@ -51,7 +53,9 @@ import {
 } from './utils/teachingPlanCalendar';
 import type { MicroSyllabus, WeeklyTopic } from '@/types/microSyllabus';
 import type { ClassRoom } from '@/types/class';
-import type { SubjectCategory } from '@/types/curriculum';
+import { GRADE_LEVEL_ORDER } from '@/types/class';
+import type { Department, SubjectCategory } from '@/types/curriculum';
+import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 
 // bundle-dynamic: heavy calendar / admin browser only when needed
 const WeeklyTopicGrid = lazy(() => import('./components/WeeklyTopicGrid'));
@@ -591,6 +595,39 @@ export default function MicroSyllabusPage() {
   const [breadcrumbExtraEl, setBreadcrumbExtraEl] = useState<HTMLElement | null>(null);
   const [breadcrumbPageEl, setBreadcrumbPageEl] = useState<HTMLElement | null>(null);
 
+  // ── Sidebar browse state (teacher view: แผนก -> ชั้น -> ห้อง) ──────────────
+  const [filterDepartment, setFilterDepartment] = useState('');
+  const [filterGradeLevel, setFilterGradeLevel] = useState('');
+  const [selectedClassId, setSelectedClassId] = useState('');
+
+  const availableGrades = useMemo(() => {
+    if (!filterDepartment) return [];
+    const grades = new Set<string>();
+    yearClasses
+      .filter((c) => c.departmentId === filterDepartment)
+      .forEach((c) => { if (c.gradeLevel) grades.add(c.gradeLevel); });
+    return Array.from(grades).sort(
+      (a, b) => (GRADE_LEVEL_ORDER[a] ?? 99) - (GRADE_LEVEL_ORDER[b] ?? 99),
+    );
+  }, [yearClasses, filterDepartment]);
+
+  const classOptions = useMemo(() => {
+    if (!filterDepartment || !filterGradeLevel) return [];
+    return yearClasses
+      .filter((c) => c.departmentId === filterDepartment && c.gradeLevel === filterGradeLevel)
+      .slice()
+      .sort((a, b) =>
+        (a.roomNumber || a.className).localeCompare(b.roomNumber || b.className, undefined, {
+          numeric: true,
+        }),
+      );
+  }, [yearClasses, filterDepartment, filterGradeLevel]);
+
+  const selectedClassRoom = useMemo(
+    () => classesById.get(selectedClassId) ?? null,
+    [classesById, selectedClassId],
+  );
+
   useEffect(() => {
     setHeaderRightEl(document.getElementById('header-portal-right-actions'));
     setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
@@ -606,6 +643,13 @@ export default function MicroSyllabusPage() {
   const breadcrumbSubjectLabel = selectedAssignment
     ? `${selectedAssignment.subjectName} · ${selectedAssignment.className}`
     : null;
+
+  // ห้องที่เลือกจาก sidebar -> วิชาที่ครูสอนในห้องนั้น (การ์ดโฟลเดอร์ฝั่งขวา)
+  const roomAssignedSubjects = useMemo(
+    () => (selectedClassId ? assignedSubjects.filter((a) => a.classId === selectedClassId) : []),
+    [assignedSubjects, selectedClassId],
+  );
+  const hasRoomSelection = !!selectedClassId;
 
   const selectedSyllabus = useMemo(() => {
     if (!selectedAssignment) return null;
@@ -675,6 +719,21 @@ export default function MicroSyllabusPage() {
     setCreatingKey(null);
   };
 
+  const handleSidebarSelectDept = (dept: Department) => {
+    setFilterDepartment(dept);
+    setFilterGradeLevel('');
+    setSelectedClassId('');
+  };
+
+  const handleSidebarSelectGrade = (level: string) => {
+    setFilterGradeLevel(level);
+    setSelectedClassId('');
+  };
+
+  const handleSidebarSelectClass = (classId: string) => {
+    setSelectedClassId(classId);
+  };
+
   // Deep link from "งานประจำวันครู" widget: /portal/micro-syllabus?classId=&subjectId=
   useEffect(() => {
     if (deepLinkHandledRef.current) return;
@@ -685,9 +744,15 @@ export default function MicroSyllabusPage() {
     const match = assignedSubjects.find((a) => a.classId === classId && a.subjectId === subjectId);
     if (!match) return;
     deepLinkHandledRef.current = true;
+    const cls = classesById.get(classId);
+    if (cls) {
+      setFilterDepartment(cls.departmentId);
+      setFilterGradeLevel(cls.gradeLevel);
+      setSelectedClassId(classId);
+    }
     void handleSelectAssignment(match);
     setSearchParams({}, { replace: true });
-  }, [assignedSubjects, searchParams, setSearchParams]);
+  }, [assignedSubjects, searchParams, setSearchParams, classesById]);
 
   const handleSaveTopics = async (topics: WeeklyTopic[]) => {
     if (!selectedSyllabus) return;
@@ -723,6 +788,12 @@ export default function MicroSyllabusPage() {
       (item) => `${item.subjectId}|${item.classId}` === key,
     );
     if (!assignment || key === selectedKey) return;
+    const cls = classesById.get(assignment.classId);
+    if (cls) {
+      setFilterDepartment(cls.departmentId);
+      setFilterGradeLevel(cls.gradeLevel);
+      setSelectedClassId(assignment.classId);
+    }
     void handleSelectAssignment(assignment);
   };
 
@@ -914,63 +985,138 @@ export default function MicroSyllabusPage() {
           </div>
         </motion.div>
       ) : (
-        <AnimatePresence mode="wait">
-          {selectedSyllabus ? (
-            <motion.div
-              key={selectedSyllabus.id}
-              initial={{ opacity: 0, x: 12 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 12 }}
-              className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-3"
-            >
-              <Suspense fallback={<TeachingPlanCalendarSkeleton />}>
-                <WeeklyTopicGrid
-                  topics={selectedSyllabus.topics}
-                  lessonOptions={selectedLessonOptions}
-                  semesterStart={selectedSemesterRange.start}
-                  semesterEnd={selectedSemesterRange.end}
-                  onSave={handleSaveTopics}
-                  planContext={{
-                    subjectId: selectedSyllabus.subjectId,
-                    subjectName: selectedSyllabus.subjectName,
-                    classId: selectedSyllabus.classId,
-                    className: selectedSyllabus.className,
-                    gradeLevel: selectedSyllabus.gradeLevel,
-                  }}
-                />
-              </Suspense>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="subject-cards"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              className="grid w-full grid-cols-2 gap-x-3 gap-y-5 overflow-y-auto overscroll-y-contain scrollbar-hide sm:grid-cols-3 xl:grid-cols-4"
-            >
-              {assignedSubjects.map(a => {
-                const key = `${a.subjectId}|${a.classId}`;
-                return (
-                  <AssignedSubjectCard
-                    key={key}
-                    assignment={a}
-                    active={false}
-                    creating={creatingKey === key}
-                    colorId={folderColors[key] ?? DEFAULT_COLOR_ID}
-                    onColorChange={(id) => {
-                      setFolderColors((prev) => {
-                        const next = { ...prev, [key]: id };
-                        saveFolderCardColors(next);
-                        return next;
-                      });
-                    }}
-                    onClick={() => handleSelectAssignment(a)}
-                  />
-                );
-              })}
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+          <div
+            className={cn(
+              'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full lg:w-[280px] xl:w-[300px]',
+              hasRoomSelection ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+            )}
+          >
+            <GradeBookClassSidebar
+              selectedDept={filterDepartment}
+              selectedGrade={filterGradeLevel}
+              selectedClassId={selectedClassId}
+              gradeOptions={availableGrades}
+              classOptions={classOptions}
+              onSelectDept={handleSidebarSelectDept}
+              onSelectGrade={handleSidebarSelectGrade}
+              onSelectClass={handleSidebarSelectClass}
+            />
+          </div>
+
+          <div
+            className={cn(
+              'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden',
+              !hasRoomSelection && 'hidden lg:flex',
+            )}
+          >
+            {selectedSyllabus && (
+              <div className="relative mb-3 flex min-h-[3.25rem] shrink-0 items-center justify-center border-b border-border px-0 pb-3 pt-2 sm:pt-2.5">
+                <div className="absolute left-0">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="size-9 shrink-0 rounded-xl p-0 flex items-center justify-center"
+                    onClick={handleBackToSubjectList}
+                    title="กลับไปโฟลเดอร์วิชา"
+                    aria-label="กลับไปโฟลเดอร์วิชา"
+                  >
+                    <HiArrowLeft className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="max-w-[70%] truncate font-sukhumvit text-[13px] font-black text-foreground text-center">
+                  {selectedSyllabus.subjectName}
+                  {selectedSyllabus.className ? ` · ${selectedSyllabus.className}` : ''}
+                </p>
+              </div>
+            )}
+            <AnimatePresence mode="wait">
+              {selectedSyllabus ? (
+                <motion.div
+                  key={selectedSyllabus.id}
+                  initial={{ opacity: 0, x: 12 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 12 }}
+                  className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-3"
+                >
+                  <Suspense fallback={<TeachingPlanCalendarSkeleton />}>
+                    <WeeklyTopicGrid
+                      topics={selectedSyllabus.topics}
+                      lessonOptions={selectedLessonOptions}
+                      semesterStart={selectedSemesterRange.start}
+                      semesterEnd={selectedSemesterRange.end}
+                      onSave={handleSaveTopics}
+                      planContext={{
+                        subjectId: selectedSyllabus.subjectId,
+                        subjectName: selectedSyllabus.subjectName,
+                        classId: selectedSyllabus.classId,
+                        className: selectedSyllabus.className,
+                        gradeLevel: selectedSyllabus.gradeLevel,
+                      }}
+                    />
+                  </Suspense>
+                </motion.div>
+              ) : hasRoomSelection ? (
+                roomAssignedSubjects.length > 0 ? (
+                  <motion.div
+                    key={`room-${selectedClassId}`}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    className="grid w-full grid-cols-2 gap-x-3 gap-y-5 overflow-y-auto overscroll-y-contain scrollbar-hide sm:grid-cols-3 xl:grid-cols-4"
+                  >
+                    {roomAssignedSubjects.map(a => {
+                      const key = `${a.subjectId}|${a.classId}`;
+                      return (
+                        <AssignedSubjectCard
+                          key={key}
+                          assignment={a}
+                          active={false}
+                          creating={creatingKey === key}
+                          colorId={folderColors[key] ?? DEFAULT_COLOR_ID}
+                          onColorChange={(id) => {
+                            setFolderColors((prev) => {
+                              const next = { ...prev, [key]: id };
+                              saveFolderCardColors(next);
+                              return next;
+                            });
+                          }}
+                          onClick={() => handleSelectAssignment(a)}
+                        />
+                      );
+                    })}
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key={`room-empty-${selectedClassId}`}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center"
+                  >
+                    <HiOutlineCalendarDays className="h-8 w-8 text-muted-foreground/40" />
+                    <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
+                      ห้อง {selectedClassRoom?.className ?? ''} ยังไม่มีวิชาที่ได้รับมอบหมาย
+                    </p>
+                  </motion.div>
+                )
+              ) : (
+                <motion.div
+                  key="pick-room-hint"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center"
+                >
+                  <HiOutlineCalendarDays className="h-8 w-8 text-muted-foreground/40" />
+                  <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
+                    เลือกห้องเรียนจากแถบด้านซ้ายเพื่อดูแผนการสอน
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
       )}
       </div>
     </div>

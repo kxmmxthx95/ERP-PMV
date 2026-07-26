@@ -83,10 +83,14 @@ export function useApproverLeaveRequests(approverId: string) {
     requestId: string,
     status: LeaveStatus,
     approverNote?: string,
+    approverId?: string,
+    approverName?: string,
   ) => {
     await updateDoc(doc(db, COL, requestId), {
       status,
       approverNote: approverNote ?? null,
+      approverId: approverId ?? null,
+      approverName: approverName ?? null,
       updatedAt: serverTimestamp(),
     });
     if (status === 'approved') {
@@ -108,10 +112,14 @@ export function useStudentLeaveRequests(sinceDate: string) {
     requestId: string,
     status: LeaveStatus,
     approverNote?: string,
+    approverId?: string,
+    approverName?: string,
   ) => {
     await updateDoc(doc(db, COL, requestId), {
       status,
       approverNote: approverNote ?? null,
+      approverId: approverId ?? null,
+      approverName: approverName ?? null,
       updatedAt: serverTimestamp(),
     });
     if (status === 'approved') {
@@ -133,10 +141,14 @@ export function useLeaveRequestsSince(sinceDate: string) {
     requestId: string,
     status: LeaveStatus,
     approverNote?: string,
+    approverId?: string,
+    approverName?: string,
   ) => {
     await updateDoc(doc(db, COL, requestId), {
       status,
       approverNote: approverNote ?? null,
+      approverId: approverId ?? null,
+      approverName: approverName ?? null,
       updatedAt: serverTimestamp(),
     });
     if (status === 'approved') {

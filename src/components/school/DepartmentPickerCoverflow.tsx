@@ -100,17 +100,11 @@ export function PickerCoverflow({
                 'border border-white/25 shadow-[0_20px_50px_-20px_rgba(15,23,42,0.45)]',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/30',
               )}
-              initial={false}
-              animate={{
-                x: `calc(-50% + ${offset * 280}px)`,
-                y: '-50%',
-                scale: isActive ? 1 : 0.92,
-                rotate: 0,
+              style={{
+                background: item.gradient,
+                transform: `translate(calc(-50% + ${offset * 280}px), -50%) scale(${isActive ? 1 : 0.92})`,
                 zIndex: isActive ? 30 : 20 - Math.abs(offset),
-                opacity: 1,
               }}
-              transition={{ type: 'spring', stiffness: 280, damping: 30 }}
-              style={{ background: item.gradient }}
               aria-label={item.subtitle ? `${item.label} · ${item.subtitle}` : item.label}
               aria-current={isActive ? 'true' : undefined}
             >

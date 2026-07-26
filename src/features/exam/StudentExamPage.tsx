@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShieldAlert, CheckCircle, ChevronLeft, ChevronRight,
-  Send, Lock, AlertTriangle, Eye, EyeOff,
+  Send, AlertTriangle, Eye, EyeOff,
   Maximize2, LayoutGrid, Info, HelpCircle, ClipboardList, FileText
 } from 'lucide-react';
 
@@ -15,6 +15,7 @@ import { PdfAnswerSheet, PdfPagePagination, PdfPageViewer } from '@/features/exa
 import ExamQuestionContent from '@/features/questionBank/components/ExamQuestionContent';
 import EssayAnswerPanel from '@/features/exam/components/EssayAnswerPanel';
 import { isExamAnswerFilled } from '@/lib/exam/examAnswerFormat';
+import { resolveExamRoomIconSrc } from '@/lib/exam/examRoomIcons';
 import {
   canSubmitExamManually,
   formatExamSubmitWait,
@@ -28,6 +29,7 @@ import {
   resolveAttemptScoreDisplay,
 } from '@/lib/exam/examRoomScoring';
 import type { ExamAttempt, ExamRoom } from '@/types/exam';
+import { SUBJECT_GROUP_CONFIG, type SubjectGroupId } from '@/types/curriculum';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -102,51 +104,62 @@ function JoinScreen({
 
   const gradeLabel = resolveJoinGradeLabel(roomPreview);
   const roomTitle = roomPreview?.title || 'ห้องสอบออนไลน์';
-  const subjectLabel = roomPreview?.subjectName?.trim() || '';
+  const groupCfg = roomPreview?.subjectGroupId
+    ? SUBJECT_GROUP_CONFIG[roomPreview.subjectGroupId as SubjectGroupId]
+    : undefined;
+  const groupLabel = groupCfg?.name ?? '';
+  const subSubjectLabel = roomPreview?.subSubjectGroup?.trim() || '';
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sarabun">
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 relative overflow-hidden font-sukhumvit">
       <ExamBackground />
 
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative z-10 w-full max-w-[360px] rounded-2xl flex flex-col gap-4 overflow-hidden bg-white border border-slate-200 shadow-xl"
+        className="relative z-10 w-full max-w-[360px] flex flex-col gap-4"
       >
         <div className="px-4 pt-4">
           <button
-            onClick={() => navigate('/portal')}
+            onClick={() => navigate('/portal/exams')}
             className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all"
-            aria-label="กลับหน้าหลัก"
+            aria-label="กลับหน้ารวมห้องสอบ"
           >
             <ChevronLeft size={18} />
           </button>
         </div>
 
         <div className="flex flex-col items-center text-center gap-2 px-5 -mt-1">
-          <div
-            className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center border border-blue-100"
-            style={{ background: 'linear-gradient(135deg, #2563eb, #06b6d4)' }}
-          >
-            <Lock size={18} className="text-white" />
-          </div>
+          <img
+            src={resolveExamRoomIconSrc(roomPreview ?? {})}
+            alt=""
+            className="shrink-0 h-48 w-48 object-contain drop-shadow-sm"
+          />
           <div className="min-w-0">
-            <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wider leading-none mb-1">
-              เข้าห้องสอบ
-            </p>
             <h1 className="text-[17px] font-black text-slate-900 font-sukhumvit leading-snug line-clamp-2">
               {roomTitle}
             </h1>
-            {(gradeLabel || subjectLabel) && (
-              <div className="flex flex-wrap items-center justify-center gap-1.5 mt-1.5">
+            {(gradeLabel || groupLabel || subSubjectLabel) && (
+              <div className="flex flex-col items-center gap-1 mt-1.5">
                 {gradeLabel && (
                   <span className="px-2 py-0.5 rounded-md bg-blue-50 border border-blue-100 text-[11px] font-black text-blue-700 font-sukhumvit">
                     {gradeLabel}
                   </span>
                 )}
-                {subjectLabel && (
-                  <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[11px] font-bold text-slate-600 truncate max-w-[160px]">
-                    {subjectLabel}
+                {groupLabel && (
+                  <span
+                    className="px-2 py-0.5 rounded-md border text-[11px] font-bold truncate max-w-[220px]"
+                    style={{ color: groupCfg?.color, background: groupCfg?.bg, borderColor: groupCfg?.border }}
+                  >
+                    {groupLabel}
+                  </span>
+                )}
+                {subSubjectLabel && (
+                  <span
+                    className="px-2 py-0.5 rounded-md border text-[11px] font-bold truncate max-w-[220px]"
+                    style={{ color: groupCfg?.color, background: groupCfg?.bg, borderColor: groupCfg?.border }}
+                  >
+                    {subSubjectLabel}
                   </span>
                 )}
               </div>
@@ -156,9 +169,6 @@ function JoinScreen({
 
         <div className="flex flex-col gap-3 px-5 pb-5">
           <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider ml-1">
-              รหัสผ่านเข้าสอบ
-            </label>
             <div className="relative">
               <Input
                 value={password}

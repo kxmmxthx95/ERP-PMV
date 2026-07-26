@@ -1,11 +1,24 @@
 import { useState, useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
 import { MapPin, Clock, Save, LocateFixed, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useAttendanceConfig, type AttendanceConfig } from '@/hooks/useAttendanceConfig';
-import { WIDGET_GLASS } from '@/features/home/widgetStyles';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Slider } from '@/components/ui/slider';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function pad(n: number) { return String(n).padStart(2, '0'); }
+
+function toTimeValue(hour: number, minute: number): string {
+  return `${pad(hour)}:${pad(minute)}`;
+}
+
+function parseTimeValue(value: string): { hour: number; minute: number } | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  return { hour: Number(match[1]), minute: Number(match[2]) };
+}
 
 declare const L: any; // Leaflet global
 
@@ -165,6 +178,58 @@ function MapLogic({ lat, lng, radius, activeLayer, onChange }: {
   return null;
 }
 
+// ── Section shell ─────────────────────────────────────────────────────────────
+function SettingsSection({ title, icon: Icon, children }: { title: string; icon?: typeof MapPin; children: React.ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
+      <p className="flex items-center gap-2 text-[11px] font-black uppercase tracking-wider text-slate-500">
+        {Icon && <Icon size={14} className="text-blue-600" />}
+        {title}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function TimeRangeFields({
+  startLabel,
+  endLabel,
+  startValue,
+  endValue,
+  onStartChange,
+  onEndChange,
+}: {
+  startLabel: string;
+  endLabel: string;
+  startValue: string;
+  endValue: string;
+  onStartChange: (value: string) => void;
+  onEndChange: (value: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="space-y-1.5">
+        <Label className="text-[10px] font-black uppercase tracking-wider text-slate-600">{startLabel}</Label>
+        <Input
+          type="time"
+          value={startValue}
+          onChange={(e) => onStartChange(e.target.value)}
+          className="h-11 w-full rounded-xl border-slate-200 bg-slate-50/70 text-sm font-bold text-slate-800"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label className="text-[10px] font-black uppercase tracking-wider text-slate-600">{endLabel}</Label>
+        <Input
+          type="time"
+          value={endValue}
+          onChange={(e) => onEndChange(e.target.value)}
+          className="h-11 w-full rounded-xl border-slate-200 bg-slate-50/70 text-sm font-bold text-slate-800"
+        />
+      </div>
+    </div>
+  );
+}
+
 // ── Main settings panel ───────────────────────────────────────────────────────
 export default function AttendanceSettingsPanel() {
   const { config, loading, saveConfig } = useAttendanceConfig();
@@ -180,6 +245,12 @@ export default function AttendanceSettingsPanel() {
 
   const set = <K extends keyof AttendanceConfig>(key: K, val: AttendanceConfig[K]) =>
     setDraft(d => ({ ...d, [key]: val }));
+
+  const setTime = (hourKey: keyof AttendanceConfig, minuteKey: keyof AttendanceConfig) => (value: string) => {
+    const parsed = parseTimeValue(value);
+    if (!parsed) return;
+    setDraft(d => ({ ...d, [hourKey]: parsed.hour, [minuteKey]: parsed.minute }));
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -237,11 +308,9 @@ export default function AttendanceSettingsPanel() {
   );
 
   return (
-    <div
-      className="h-[calc(100vh-180px)] grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-hidden"
-    >
-      {/* ── Left Column: Map Area ── */}
-      <div className="relative rounded-3xl overflow-hidden border border-slate-200 bg-slate-50 h-full group">
+    <div className="space-y-6">
+      {/* ── Map ── */}
+      <div className="relative h-72 rounded-2xl overflow-hidden border border-slate-200 bg-slate-50 group">
         <div id="leaflet-map" className="absolute inset-0 z-0" />
 
         <MapLogic
@@ -261,252 +330,130 @@ export default function AttendanceSettingsPanel() {
         </div>
 
         {/* Layer Switcher */}
-        <div className="absolute bottom-6 left-6 flex flex-col gap-1.5 z-[400]">
+        <div className="absolute bottom-4 left-4 flex gap-1.5 z-[400]">
           {(Object.entries(MAP_LAYERS) as [MapLayerKey, typeof MAP_LAYERS[MapLayerKey]][]).map(([key, cfg]) => (
             <button
               key={key}
+              type="button"
               onClick={() => setActiveLayer(key)}
-              className="px-3 py-1.5 rounded-xl text-[11px] font-bold shadow-lg border transition-all"
-              style={{
-                background: activeLayer === key ? '#2563eb' : 'rgba(255,255,255,0.92)',
-                color: activeLayer === key ? '#fff' : '#475569',
-                borderColor: activeLayer === key ? '#2563eb' : 'rgba(255,255,255,0.6)',
-                backdropFilter: 'blur(8px)',
-              }}
+              className={cn(
+                'px-3 py-1.5 rounded-xl text-[11px] font-bold shadow-lg border transition-all backdrop-blur-md',
+                activeLayer === key
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white/90 text-slate-600 border-white/60',
+              )}
             >
               {cfg.label}
             </button>
           ))}
         </div>
-
-        {/* Re-center button */}
-        <button
-          onClick={() => { if ((window as any).L) {} }}
-          className="absolute bottom-6 right-6 p-3 rounded-2xl bg-white shadow-2xl border border-slate-100 text-blue-600 hover:bg-blue-50 transition-all z-[400] opacity-0 group-hover:opacity-100"
-          title="จัดกึ่งกลางหมุด"
-        >
-          <LocateFixed size={20} />
-        </button>
       </div>
 
-      {/* ── Right Column: Settings Area ── */}
-      <div style={WIDGET_GLASS} className="rounded-3xl p-6 flex flex-col justify-between h-full overflow-y-auto no-scrollbar">
-        <div className="space-y-6">
-          {/* Section: Coordinates */}
-          <div className="space-y-3">
-            <div className="flex justify-between items-end">
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">พิกัดโรงเรียน</p>
-              <button
-                onClick={locateMe}
-                disabled={locating}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 text-[11px] font-black hover:bg-blue-100 transition-all disabled:opacity-50"
-              >
-                {locating ? <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" /> : <LocateFixed size={12} />}
-                ดึงตำแหน่งปัจจุบัน
-              </button>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ละติจูด</label>
-                <input
-                  type="number"
-                  step="0.000001"
-                  value={draft.lat}
-                  onChange={e => set('lat', parseFloat(e.target.value) || draft.lat)}
-                  className="w-full h-10 rounded-xl bg-slate-50 border-none px-4 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-blue-100 transition-all"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ลองติจูด</label>
-                <input
-                  type="number"
-                  step="0.000001"
-                  value={draft.lng}
-                  onChange={e => set('lng', parseFloat(e.target.value) || draft.lng)}
-                  className="w-full h-10 rounded-xl bg-slate-50 border-none px-4 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-blue-100 transition-all"
-                />
-              </div>
-            </div>
-            {locErr && <p className="text-[10px] text-rose-500 font-bold ml-1 flex items-center gap-1"><AlertCircle size={10}/> {locErr}</p>}
-          </div>
-
-          {/* Section: Geofence */}
-          <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">รัศมีพื้นที่ (เมตร)</p>
-              <span className="text-xs font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">{draft.radiusMeters} ม.</span>
-            </div>
-            <input
-              type="range"
-              min={50} max={500} step={25}
-              value={draft.radiusMeters}
-              onChange={e => set('radiusMeters', parseInt(e.target.value))}
-              className="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-            <div className="flex justify-between text-[10px] font-bold text-slate-300">
-              <span>50 ม.</span><span>500 ม.</span>
-            </div>
-          </div>
-
-          {/* Section: Shift Time */}
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-              {/* Start Time */}
-              <div className="space-y-4">
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                  <Clock size={12} /> เวลาเริ่มงาน (สายหลังเวลานี้)
-                </p>
-
-                <div className="flex items-center justify-center gap-4 py-2">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => set('shiftStartHour', Math.max(0, draft.shiftStartHour - 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
-                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
-                        {pad(draft.shiftStartHour)}
-                      </div>
-                      <button onClick={() => set('shiftStartHour', Math.min(23, draft.shiftStartHour + 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
-                    </div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">ชั่วโมง</span>
-                  </div>
-                  <span className="text-2xl font-black text-slate-200 mt-[-18px]">:</span>
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => set('shiftStartMinute', Math.max(0, draft.shiftStartMinute - 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
-                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
-                        {pad(draft.shiftStartMinute)}
-                      </div>
-                      <button onClick={() => set('shiftStartMinute', Math.min(55, draft.shiftStartMinute + 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
-                    </div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">นาที</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* End Time */}
-              <div className="space-y-4">
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                  <Clock size={12} /> เวลาออกงาน (เช็คเอาต์ปกติ)
-                </p>
-
-                <div className="flex items-center justify-center gap-4 py-2">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => set('shiftEndHour', Math.max(0, draft.shiftEndHour - 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
-                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
-                        {pad(draft.shiftEndHour)}
-                      </div>
-                      <button onClick={() => set('shiftEndHour', Math.min(23, draft.shiftEndHour + 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
-                    </div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">ชั่วโมง</span>
-                  </div>
-                  <span className="text-2xl font-black text-slate-200 mt-[-18px]">:</span>
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => set('shiftEndMinute', Math.max(0, draft.shiftEndMinute - 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
-                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
-                        {pad(draft.shiftEndMinute)}
-                      </div>
-                      <button onClick={() => set('shiftEndMinute', Math.min(55, draft.shiftEndMinute + 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
-                    </div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">นาที</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section: Duty Time (ครูเวร) */}
-          <div className="space-y-6 pt-6 border-t border-slate-100">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-              {/* Duty Start Time */}
-              <div className="space-y-4">
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                  <Clock size={12} /> เวลาเริ่มเวรครู
-                </p>
-
-                <div className="flex items-center justify-center gap-4 py-2">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => set('dutyStartHour', Math.max(0, draft.dutyStartHour - 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
-                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
-                        {pad(draft.dutyStartHour)}
-                      </div>
-                      <button onClick={() => set('dutyStartHour', Math.min(23, draft.dutyStartHour + 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
-                    </div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">ชั่วโมง</span>
-                  </div>
-                  <span className="text-2xl font-black text-slate-200 mt-[-18px]">:</span>
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => set('dutyStartMinute', Math.max(0, draft.dutyStartMinute - 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
-                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
-                        {pad(draft.dutyStartMinute)}
-                      </div>
-                      <button onClick={() => set('dutyStartMinute', Math.min(55, draft.dutyStartMinute + 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
-                    </div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">นาที</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Duty End Time */}
-              <div className="space-y-4">
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                  <Clock size={12} /> เวลาสิ้นสุดเวรครู
-                </p>
-
-                <div className="flex items-center justify-center gap-4 py-2">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => set('dutyEndHour', Math.max(0, draft.dutyEndHour - 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
-                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
-                        {pad(draft.dutyEndHour)}
-                      </div>
-                      <button onClick={() => set('dutyEndHour', Math.min(23, draft.dutyEndHour + 1))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
-                    </div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">ชั่วโมง</span>
-                  </div>
-                  <span className="text-2xl font-black text-slate-200 mt-[-18px]">:</span>
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => set('dutyEndMinute', Math.max(0, draft.dutyEndMinute - 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">−</button>
-                      <div className="w-14 h-11 flex items-center justify-center bg-slate-50 rounded-2xl font-mono text-xl font-black text-slate-800 border border-slate-100">
-                        {pad(draft.dutyEndMinute)}
-                      </div>
-                      <button onClick={() => set('dutyEndMinute', Math.min(55, draft.dutyEndMinute + 5))} className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center justify-center font-bold">+</button>
-                    </div>
-                    <span className="text-[9px] font-bold text-slate-300 uppercase">นาที</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer: Summary & Save */}
-        <div className="space-y-4 mt-6">
-
-          <motion.button
-            whileTap={{ scale: 0.98 }}
-            onClick={handleSave}
-            disabled={saving}
-            className={`w-full py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-3 transition-all ${
-              saved
-                ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-200'
-                : 'bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-xl shadow-blue-200'
-            } disabled:opacity-60`}
+      {/* ── Coordinates ── */}
+      <SettingsSection title="พิกัดโรงเรียน" icon={MapPin}>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={locateMe}
+            disabled={locating}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 text-[11px] font-black hover:bg-blue-100 transition-all disabled:opacity-50"
           >
-            {saving ? (
-              <div className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : saved ? (
-              <><CheckCircle2 size={18} /> บันทึกเรียบร้อย</>
-            ) : (
-              <><Save size={18} /> บันทึกการตั้งค่าทั้งหมด</>
-            )}
-          </motion.button>
+            {locating ? <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" /> : <LocateFixed size={12} />}
+            ดึงตำแหน่งปัจจุบัน
+          </button>
         </div>
-      </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-black uppercase tracking-wider text-slate-600">ละติจูด</Label>
+            <Input
+              type="number"
+              step="0.000001"
+              value={draft.lat}
+              onChange={e => set('lat', parseFloat(e.target.value) || draft.lat)}
+              className="h-11 w-full rounded-xl border-slate-200 bg-slate-50/70 text-sm font-bold text-slate-700"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-black uppercase tracking-wider text-slate-600">ลองติจูด</Label>
+            <Input
+              type="number"
+              step="0.000001"
+              value={draft.lng}
+              onChange={e => set('lng', parseFloat(e.target.value) || draft.lng)}
+              className="h-11 w-full rounded-xl border-slate-200 bg-slate-50/70 text-sm font-bold text-slate-700"
+            />
+          </div>
+        </div>
+        {locErr && (
+          <p className="text-[11px] text-rose-500 font-bold flex items-center gap-1">
+            <AlertCircle size={12} /> {locErr}
+          </p>
+        )}
+      </SettingsSection>
+
+      {/* ── Geofence ── */}
+      <SettingsSection title="รัศมีพื้นที่ (เมตร)">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold text-slate-500">รัศมีที่อนุญาตให้เช็คอิน</span>
+          <span className="text-xs font-black text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg">{draft.radiusMeters} ม.</span>
+        </div>
+        <Slider
+          min={50}
+          max={500}
+          step={25}
+          value={[draft.radiusMeters]}
+          onValueChange={([v]) => set('radiusMeters', v)}
+        />
+        <div className="flex justify-between text-[10px] font-bold text-slate-400">
+          <span>50 ม.</span><span>500 ม.</span>
+        </div>
+      </SettingsSection>
+
+      {/* ── Shift Time ── */}
+      <SettingsSection title="เวลาทำงาน" icon={Clock}>
+        <TimeRangeFields
+          startLabel="เวลาเริ่มงาน"
+          endLabel="เวลาออกงาน"
+          startValue={toTimeValue(draft.shiftStartHour, draft.shiftStartMinute)}
+          endValue={toTimeValue(draft.shiftEndHour, draft.shiftEndMinute)}
+          onStartChange={setTime('shiftStartHour', 'shiftStartMinute')}
+          onEndChange={setTime('shiftEndHour', 'shiftEndMinute')}
+        />
+      </SettingsSection>
+
+      {/* ── Duty Time (ครูเวร) ── */}
+      <SettingsSection title="เวลาเวรครู" icon={Clock}>
+        <TimeRangeFields
+          startLabel="เวลาเริ่มเวรครู"
+          endLabel="เวลาสิ้นสุดเวรครู"
+          startValue={toTimeValue(draft.dutyStartHour, draft.dutyStartMinute)}
+          endValue={toTimeValue(draft.dutyEndHour, draft.dutyEndMinute)}
+          onStartChange={setTime('dutyStartHour', 'dutyStartMinute')}
+          onEndChange={setTime('dutyEndHour', 'dutyEndMinute')}
+        />
+      </SettingsSection>
+
+      {/* ── Save ── */}
+      <Button
+        type="button"
+        onClick={handleSave}
+        disabled={saving}
+        className={cn(
+          'w-full py-6 rounded-2xl font-black text-sm flex items-center justify-center gap-3 transition-all disabled:opacity-60 border-none',
+          saved
+            ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+            : 'bg-primary text-primary-foreground hover:bg-primary/90',
+        )}
+      >
+        {saving ? (
+          <div className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+        ) : saved ? (
+          <><CheckCircle2 size={18} /> บันทึกเรียบร้อย</>
+        ) : (
+          <><Save size={18} /> บันทึก</>
+        )}
+      </Button>
     </div>
   );
 }

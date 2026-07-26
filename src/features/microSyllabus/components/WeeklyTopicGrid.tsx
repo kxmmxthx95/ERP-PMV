@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
 import {
   addMonths,
   endOfMonth,
@@ -39,7 +40,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
 import type { CreateRoomPrefill } from '@/features/exam/components/CreateRoomModal';
 import TeachingReflectionModal from './TeachingReflectionModal';
 import { useAuth } from '@/hooks/useAuth';
@@ -53,6 +53,7 @@ import { useThaiHolidays } from '@/features/calendar/hooks/useThaiHolidays';
 import { formatEventDateRange } from '@/features/calendar/utils';
 import { EVENT_TYPE_CONFIG } from '@/types/calendar';
 import type { CalendarEvent } from '@/types/calendar';
+import { glassCard } from '@/features/calendar/constants';
 import { cn } from '@/lib/utils';
 import { getLocalDateString } from '@/lib/dateUtils';
 import { Switch } from '@/components/ui/switch';
@@ -683,84 +684,113 @@ export default function WeeklyTopicGrid({
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-1.5 pt-0">
-          <button
-            type="button"
-            disabled={!canGoPrevMonth}
-            onClick={() => setCurrentMonth((m) => clampToSemesterMonth(subMonths(m, 1)))}
-            className={cn(
-              'flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-white hover:text-slate-800',
-              !canGoPrevMonth && 'pointer-events-none opacity-30',
-            )}
-            aria-label="เดือนก่อนหน้า"
-          >
-            <HiChevronLeft size={18} />
-          </button>
-
-          <div className="flex min-w-0 items-center justify-center gap-2">
-            <p className="text-sm font-black text-slate-800 font-sukhumvit">
-              {format(currentMonth, 'MMMM', { locale: th })} {currentMonth.getFullYear() + 543}
-            </p>
-            <Button
+      <div
+        className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl"
+        style={glassCard}
+      >
+        <div
+          className="relative flex shrink-0 items-center justify-center px-6 py-4"
+          style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}
+        >
+          <div className="flex items-center gap-2">
+            <motion.button
               type="button"
-              variant="default"
-              size="xs"
-              disabled={isViewingTodayMonth}
-              className="rounded-xl bg-blue-600 font-bold text-white hover:bg-blue-600/90"
-              onClick={() => setCurrentMonth(clampToSemesterMonth(todayMonth))}
-              aria-label="กลับวันปัจจุบัน"
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.92 }}
+              disabled={!canGoPrevMonth}
+              onClick={() => setCurrentMonth((m) => clampToSemesterMonth(subMonths(m, 1)))}
+              className={cn(
+                'flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:text-slate-600',
+                !canGoPrevMonth && 'pointer-events-none opacity-30',
+              )}
+              style={{ background: 'rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.05)' }}
+              aria-label="เดือนก่อนหน้า"
             >
-              วันนี้
-            </Button>
-          </div>
+              <HiChevronLeft size={15} />
+            </motion.button>
 
-          <div className="flex items-center gap-1">
-            {!readOnly && (
-              <button
-                type="button"
-                onClick={() => setStampMode(!stampMode)}
-                title={stampMode ? 'ออกจากโหมด stamp' : 'เลือกวันที่ไม่มีการสอน'}
-                className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-xl transition-colors font-black text-sm',
-                  stampMode
-                    ? 'bg-amber-200 text-amber-800 hover:bg-amber-300'
-                    : 'text-slate-500 hover:bg-white hover:text-slate-800',
-                )}
+            <div className="flex min-h-[46px] min-w-0 flex-col items-center justify-center">
+              <motion.div
+                key={currentMonth.toISOString()}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+                className="text-center"
               >
-                ⊗
-              </button>
-            )}
-            <button
+                <h2 className="text-base font-black tracking-tight text-slate-800 font-sukhumvit">
+                  {format(currentMonth, 'MMMM', { locale: th })} {currentMonth.getFullYear() + 543}
+                </h2>
+              </motion.div>
+              {!isViewingTodayMonth && (
+                <motion.button
+                  type="button"
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setCurrentMonth(clampToSemesterMonth(todayMonth))}
+                  className="mt-1 rounded-full border border-blue-100/50 bg-blue-50 px-2.5 py-0.5 text-[9px] font-black text-blue-600 transition-all hover:bg-blue-100 hover:text-blue-700 font-sukhumvit"
+                  aria-label="กลับวันปัจจุบัน"
+                >
+                  กลับสู่วันนี้
+                </motion.button>
+              )}
+            </div>
+
+            <motion.button
               type="button"
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.92 }}
               disabled={!canGoNextMonth}
               onClick={() => setCurrentMonth((m) => clampToSemesterMonth(addMonths(m, 1)))}
               className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-white hover:text-slate-800',
+                'flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:text-slate-600',
                 !canGoNextMonth && 'pointer-events-none opacity-30',
               )}
+              style={{ background: 'rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.05)' }}
               aria-label="เดือนถัดไป"
             >
-              <HiChevronRight size={18} />
-            </button>
+              <HiChevronRight size={15} />
+            </motion.button>
           </div>
+
+          {!readOnly && (
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.92 }}
+              onClick={() => setStampMode(!stampMode)}
+              title={stampMode ? 'ออกจากโหมด stamp' : 'เลือกวันที่ไม่มีการสอน'}
+              className={cn(
+                'absolute right-6 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-sm font-black transition-colors',
+                stampMode ? 'text-amber-700' : 'text-slate-400 hover:text-slate-600',
+              )}
+              style={{
+                background: stampMode ? 'rgba(217,119,6,0.12)' : 'rgba(0,0,0,0.04)',
+                border: stampMode ? '1px solid rgba(217,119,6,0.18)' : '1px solid rgba(0,0,0,0.05)',
+              }}
+            >
+              ⊗
+            </motion.button>
+          )}
         </div>
 
-        <div className="grid shrink-0 grid-cols-7 px-1 pb-1 pt-0">
+        <div className="flex flex-col lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        <div className="grid shrink-0 grid-cols-7 px-5 pt-4 pb-2">
           {DAY_NAMES.map((label, index) => (
             <div
               key={label}
-              className={cn(
-                'pb-2 text-center text-[10px] font-black uppercase tracking-wide font-sukhumvit',
-                index === 0 ? 'text-rose-400' : index === 6 ? 'text-blue-400' : 'text-slate-400',
-              )}
+              className="text-center text-[10px] font-black pb-2 font-sukhumvit uppercase tracking-widest"
+              style={{
+                color: index === 0 ? 'rgba(239,68,68,0.65)' : index === 6 ? 'rgba(59,130,246,0.65)' : 'rgba(15,23,42,0.22)',
+              }}
             >
               {label}
             </div>
           ))}
         </div>
 
-        <div className="grid shrink-0 grid-cols-7 gap-1 px-1 pb-2 max-lg:auto-rows-[minmax(52px,auto)] lg:min-h-0 lg:flex-1 lg:auto-rows-fr">
+        <div className="grid grid-cols-7 gap-1 px-5 pb-5 max-lg:auto-rows-[minmax(52px,auto)] lg:flex-1 lg:auto-rows-fr">
           {days.map((day) => {
             const dateIso = toIsoDate(day);
             const inMonth = isSameMonth(day, currentMonth);
@@ -820,7 +850,7 @@ export default function WeeklyTopicGrid({
                         : undefined
                 }
                 className={cn(
-                  'relative flex h-full min-h-[52px] flex-col overflow-hidden rounded-xl border border-slate-300 p-1.5 text-left transition-all lg:min-h-[80px]',
+                  'relative flex h-full min-h-[100px] flex-col overflow-hidden rounded-[1.25rem] border border-slate-200/40 p-2 text-left transition-all duration-200 lg:min-h-[100px]',
                   !statusDot && 'bg-white',
                   !inMonth && 'opacity-35',
                   inMonth && !inSemester && 'cursor-not-allowed opacity-35',
@@ -831,18 +861,24 @@ export default function WeeklyTopicGrid({
                   (canOpenDrawer || (stampMode && hasScheduledClass)) && 'cursor-pointer lg:hover:bg-slate-50',
                 )}
               >
-                <div className="flex items-start justify-between gap-1">
+                <div className="flex items-start justify-between gap-1 w-full">
                   <span
-                    className={cn(
-                      'inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[11px] font-black tabular-nums',
-                      isTodayDay && inSemester && !isHolidayDay && 'bg-blue-600 text-white shadow-sm',
-                      isHolidayDay && 'text-rose-500',
-                      infoEvent?.type === 'exam' && 'text-amber-600',
-                      infoEvent?.type === 'activity' && 'text-blue-600',
-                      !isTodayDay && !isHolidayDay && dow === 0 && 'text-rose-500',
-                      !isTodayDay && !isHolidayDay && dow === 6 && 'text-blue-500',
-                      !isTodayDay && !isHolidayDay && dow > 0 && dow < 6 && 'text-slate-700',
-                    )}
+                    className="w-6 h-6 flex items-center justify-center rounded-full text-[10px] font-black font-sukhumvit flex-shrink-0"
+                    style={{
+                      background: isTodayDay && inSemester && !isHolidayDay
+                        ? 'linear-gradient(135deg, #7c3aed, #4f46e5)'
+                        : 'transparent',
+                      boxShadow: isTodayDay && inSemester && !isHolidayDay ? '0 2px 8px rgba(124,58,237,0.3)' : 'none',
+                      color: isTodayDay && inSemester && !isHolidayDay
+                        ? '#fff'
+                        : isHolidayDay
+                          ? '#ef4444'
+                          : dow === 0
+                            ? '#ef4444'
+                            : dow === 6
+                              ? '#3b82f6'
+                              : 'rgba(15,23,42,0.78)',
+                    }}
                   >
                     {day.getDate()}
                   </span>
@@ -897,6 +933,7 @@ export default function WeeklyTopicGrid({
               </button>
             );
           })}
+        </div>
         </div>
       </div>
 

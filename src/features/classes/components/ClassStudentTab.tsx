@@ -74,8 +74,8 @@ export default function ClassStudentTab({ classRoom, cfg }: Props) {
       {/* ── Action bar ── */}
       <div className="flex items-center gap-2 flex-shrink-0">
 
-        {/* Search capsule */}
-        <div className="flex items-center h-9 gap-2 px-3 rounded-full bg-white/80 border border-black/[0.07] shadow-sm flex-1 max-w-xs">
+        {/* Search input (tab shape) */}
+        <div className="flex items-center h-9 gap-2 px-3 rounded-xl bg-white/80 border border-black/[0.07] shadow-sm flex-1 max-w-xs">
           <HiMagnifyingGlass className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           <input
             value={search}
@@ -90,7 +90,7 @@ export default function ClassStudentTab({ classRoom, cfg }: Props) {
         {/* Add student button */}
         <button
           onClick={() => setAddOpen(true)}
-          className="flex items-center gap-1.5 h-9 px-4 rounded-full bg-slate-900 text-white text-[11px] font-black shadow-sm hover:bg-slate-700 active:scale-95 transition-all whitespace-nowrap"
+          className="flex items-center gap-1.5 h-9 px-4 rounded-2xl bg-slate-900 text-white text-[11px] font-black shadow-sm hover:bg-slate-700 active:scale-95 transition-all whitespace-nowrap"
         >
           <HiUserPlus className="w-3.5 h-3.5" />
           จัดรายชื่อนักเรียน

@@ -103,7 +103,12 @@ export default defineConfig(({ mode }) => {
   const storageBucket = env.VITE_FIREBASE_STORAGE_BUCKET ?? ""
 
   return {
-    plugins: [react(), tailwindcss(), horoscopeDevProxy(), examPdfDevProxy(storageBucket)],
+    plugins: [
+      react(),
+      tailwindcss(),
+      horoscopeDevProxy(),
+      examPdfDevProxy(storageBucket),
+    ],
     server: {
       port: 3000,
       strictPort: false, // เปลี่ยนเป็น false เพื่อให้รันพอร์ตอื่นอัตโนมัติถ้า 3000 ไม่ว่าง

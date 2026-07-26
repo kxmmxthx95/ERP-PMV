@@ -179,7 +179,7 @@ export function MorningRollCallMonthCalendar({
 
   return (
     <div className={cn('flex h-full min-h-0 w-full flex-col max-lg:overflow-y-auto', className)}>
-      <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-1.5 pt-0">
+      <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-1.5 pt-4">
         <button
           type="button"
           disabled={!canGoPrev}
@@ -238,7 +238,8 @@ export function MorningRollCallMonthCalendar({
         ))}
       </div>
 
-      <div className="grid shrink-0 grid-cols-7 gap-1 px-1 pb-2 max-lg:auto-rows-[minmax(52px,auto)] lg:min-h-0 lg:flex-1 lg:auto-rows-fr">
+      <div className="min-h-0 flex-1 overflow-hidden lg:overflow-visible">
+      <div className="grid h-full grid-cols-7 gap-1 px-1 pb-2 max-lg:auto-rows-[minmax(52px,auto)] lg:auto-rows-fr">
         {days.map((day) => {
           const inMonth = isSameMonth(day, month);
           const dateStr = toDateStr(day);
@@ -334,6 +335,7 @@ export function MorningRollCallMonthCalendar({
             </button>
           );
         })}
+      </div>
       </div>
 
       {monthNoAttendanceEvents.length > 0 && (

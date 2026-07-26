@@ -12,6 +12,7 @@ import {
   HiMagnifyingGlass,
   HiOutlineBookOpen,
   HiOutlineFunnel,
+  HiOutlineUserGroup,
   HiXMark,
 } from 'react-icons/hi2';
 import {
@@ -33,6 +34,7 @@ import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSi
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
 import { SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
+import { buildTeacherIdentityKeys } from '@/lib/teachers/teacherIdentity';
 import { resolveQuestionSetCreatorName } from '@/features/questionBank/utils/questionSetCreatorName';
 import QuestionSetBuilder from './components/QuestionSetBuilder';
 import QuestionSetImportModal from './components/QuestionSetImportModal';
@@ -92,6 +94,8 @@ export default function QuestionBankManager() {
 
   const [filterDepartment, setFilterDepartment] = useState('');
   const [filterGradeLevel, setFilterGradeLevel] = useState('');
+  const [browseMode, setBrowseMode] = useState<'grade' | 'teacher'>('grade');
+  const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
   const [headerCenterMobilePortalEl, setHeaderCenterMobilePortalEl] = useState<HTMLElement | null>(null);
@@ -225,6 +229,7 @@ export default function QuestionBankManager() {
   const clearFilters = () => {
     setFilterDepartment('');
     setFilterGradeLevel('');
+    setSelectedTeacherId(null);
     setSearch('');
     resetBrowseNav();
   };
@@ -233,6 +238,7 @@ export default function QuestionBankManager() {
     search !== ''
     || filterDepartment !== ''
     || filterGradeLevel !== ''
+    || selectedTeacherId !== null
     || browseStep.level !== 'groups';
 
   const isSearchActive = Boolean(search.trim());
@@ -245,8 +251,45 @@ export default function QuestionBankManager() {
       department: filters.department,
       gradeLevel: filters.gradeLevel,
     }).filter((set) => set.setKind !== 'exercise');
+    const published = isStudentView ? filtered.filter((set) => set.isPublished) : filtered;
+    if (browseMode !== 'teacher' || !selectedTeacherId) return published;
+    const teacher = teachers.find((t) => t.id === selectedTeacherId);
+    const keys = buildTeacherIdentityKeys(teacher?.userId ?? '', teacher ?? null);
+    return published.filter((set) => keys.has(String(set.createdBy ?? '').trim()));
+  }, [filterQuestionSets, filters.department, filters.gradeLevel, isStudentView, browseMode, selectedTeacherId, teachers]);
+
+  const departmentSets = useMemo(() => {
+    if (!filterDepartment) return [];
+    const filtered = filterQuestionSets({
+      search: '',
+      subjectGroup: 'all',
+      subSubjectGroup: 'all',
+      department: filterDepartment as Department,
+      gradeLevel: 'all',
+    }).filter((set) => set.setKind !== 'exercise');
     return isStudentView ? filtered.filter((set) => set.isPublished) : filtered;
-  }, [filterQuestionSets, filters.department, filters.gradeLevel, isStudentView]);
+  }, [filterQuestionSets, filterDepartment, isStudentView]);
+
+  const teacherEntries = useMemo(() => {
+    if (!filterDepartment || browseMode !== 'teacher') return [];
+    return teachers
+      .filter((t) => t.department === filterDepartment)
+      .map((t) => {
+        const keys = buildTeacherIdentityKeys(t.userId ?? '', t);
+        return {
+          id: t.id,
+          name: t.name,
+          photoURL: t.photoURL,
+          count: departmentSets.filter((s) => keys.has(String(s.createdBy ?? '').trim())).length,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  }, [teachers, departmentSets, filterDepartment, browseMode]);
+
+  const selectedTeacherEntry = useMemo(
+    () => teacherEntries.find((t) => t.id === selectedTeacherId) ?? null,
+    [teacherEntries, selectedTeacherId],
+  );
 
   const visibleSets = useMemo(() => {
     const filtered = filterQuestionSets(filters).filter((set) => set.setKind !== 'exercise');
@@ -266,11 +309,24 @@ export default function QuestionBankManager() {
   const handleSelectDept = (dept: Department) => {
     setFilterDepartment(dept);
     setFilterGradeLevel('');
+    setSelectedTeacherId(null);
+    resetBrowseNav();
+  };
+
+  const handleBrowseMode = (mode: 'grade' | 'teacher') => {
+    setBrowseMode(mode);
+    setFilterGradeLevel('');
+    setSelectedTeacherId(null);
     resetBrowseNav();
   };
 
   const handleSelectGrade = (grade: string) => {
     setFilterGradeLevel(grade);
+    resetBrowseNav();
+  };
+
+  const handleSelectTeacher = (teacherId: string) => {
+    setSelectedTeacherId(teacherId);
     resetBrowseNav();
   };
 
@@ -386,16 +442,105 @@ export default function QuestionBankManager() {
   const selectedSubjectGroup =
     browseStep.level === 'groups' ? '' : browseStep.subjectGroup;
 
+  const canShowSubjectGroups = browseMode === 'grade' ? Boolean(filterGradeLevel) : Boolean(selectedTeacherId);
+
   const emptyHint = !filterDepartment
     ? 'เลือกแผนกจากแถบด้านซ้าย'
-    : !filterGradeLevel
-      ? 'เลือกระดับชั้นเพื่อดูกลุ่มสาระ'
-      : 'เลือกกลุ่มสาระเพื่อดูชุดข้อสอบ';
+    : browseMode === 'grade'
+      ? (!filterGradeLevel ? 'เลือกระดับชั้นเพื่อดูกลุ่มสาระ' : 'เลือกกลุ่มสาระเพื่อดูชุดข้อสอบ')
+      : (!selectedTeacherId ? 'เลือกครูเพื่อดูกลุ่มสาระ' : 'เลือกกลุ่มสาระเพื่อดูชุดข้อสอบ');
 
-  const subjectGroupNav = filterGradeLevel ? (
+  const modeToggle = filterDepartment ? (
+    <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-border bg-muted/40 p-1">
+      {(
+        [
+          { id: 'grade' as const, label: 'รายชั้น' },
+          { id: 'teacher' as const, label: 'รายครู' },
+        ] as const
+      ).map((opt) => {
+        const active = browseMode === opt.id;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => handleBrowseMode(opt.id)}
+            className={cn(
+              'rounded-xl px-2 py-2 text-[11px] font-black font-sukhumvit transition-all',
+              active
+                ? 'bg-foreground text-background shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  ) : null;
+
+  const teacherList = browseMode === 'teacher' && filterDepartment ? (
     <section className="pb-1">
       <p className="mb-2 px-0.5 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
-        กลุ่มสาระ
+        รายชื่อครู
+      </p>
+      {teacherEntries.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-border px-3 py-6 text-center text-[12px] font-bold text-muted-foreground">
+          ไม่พบครูในแผนกนี้
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {teacherEntries.map((entry) => {
+            const active = selectedTeacherId === entry.id;
+            const initial = entry.name.charAt(0) || '?';
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => handleSelectTeacher(entry.id)}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all',
+                  active
+                    ? 'border-foreground bg-foreground text-background shadow-sm'
+                    : 'border-border bg-card text-foreground hover:bg-muted/50',
+                )}
+              >
+                <span
+                  className={cn(
+                    'flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg text-[13px] font-black',
+                    active ? 'bg-background/15' : 'bg-muted',
+                  )}
+                >
+                  {entry.photoURL ? (
+                    <img src={entry.photoURL} alt={entry.name} className="h-full w-full object-cover" />
+                  ) : (
+                    initial
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-black font-sukhumvit">{entry.name}</span>
+                  <span
+                    className={cn(
+                      'block text-[10px] font-bold',
+                      active ? 'text-background/75' : 'text-muted-foreground',
+                    )}
+                  >
+                    {entry.count.toLocaleString('th-TH')} ชุด
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  ) : null;
+
+  const subjectGroupNav = canShowSubjectGroups ? (
+    <section className="pb-1">
+      <p className="mb-2 px-0.5 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+        {browseMode === 'teacher' && selectedTeacherEntry
+          ? `กลุ่มสาระ · ${selectedTeacherEntry.name}`
+          : 'กลุ่มสาระ'}
       </p>
       <div className="flex flex-col gap-2">
         {SUBJECT_GROUP_ENTRIES.map(([id, cfg]) => {
@@ -407,36 +552,36 @@ export default function QuestionBankManager() {
               type="button"
               onClick={() => handleSelectGroup(id)}
               className={cn(
-                'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all',
-                active ? 'text-white shadow-sm' : 'hover:opacity-90',
+                'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all shadow-sm',
               )}
-              style={
-                active
-                  ? { background: cfg.color, borderColor: cfg.color }
-                  : { background: cfg.bg, borderColor: cfg.border, color: cfg.color }
-              }
+              style={{
+                backgroundColor: active ? cfg.color : cfg.bg,
+                borderColor: active ? cfg.color : cfg.border,
+              }}
             >
               <span
                 className={cn(
-                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
-                  active ? 'bg-white/20' : 'bg-white/70',
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg shadow-sm',
+                  active ? 'bg-white/20' : 'bg-white',
                 )}
+                style={{ color: active ? '#ffffff' : cfg.color }}
               >
                 <SubjectIcon
                   subjectGroup={id}
                   size={18}
-                  className={active ? 'text-white drop-shadow-sm' : 'text-current'}
+                  className="text-current drop-shadow-sm"
                 />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-black font-sukhumvit">
+                <span
+                  className="block truncate text-[13px] font-black font-sukhumvit"
+                  style={{ color: active ? '#ffffff' : cfg.color }}
+                >
                   {cfg.name}
                 </span>
                 <span
-                  className={cn(
-                    'block text-[10px] font-bold',
-                    active ? 'text-white/80' : 'opacity-70',
-                  )}
+                  className="block text-[10px] font-bold"
+                  style={{ color: active ? 'rgba(255,255,255,0.75)' : cfg.color, opacity: active ? 1 : 0.75 }}
                 >
                   {count.toLocaleString('th-TH')} ชุด
                 </span>
@@ -449,8 +594,39 @@ export default function QuestionBankManager() {
   ) : null;
 
   const collapsedBrowseRail = filterDepartment ? (
-    <div className="flex max-h-[min(50vh,24rem)] w-full flex-col items-center gap-2 overflow-y-auto overscroll-y-contain scrollbar-hide border-t border-border px-1.5 py-2">
-      {gradeOptions.map((grade) => {
+    <div className="flex w-full flex-col items-center gap-2 border-t border-border px-1.5 py-2">
+      {!isStudentView && (
+        <div className="flex w-full flex-col items-center gap-1.5 pb-1">
+          {(
+            [
+              { id: 'grade' as const, label: 'รายชั้น', Icon: HiAcademicCap },
+              { id: 'teacher' as const, label: 'รายครู', Icon: HiOutlineUserGroup },
+            ] as const
+          ).map((opt) => {
+            const active = browseMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => handleBrowseMode(opt.id)}
+                title={opt.label}
+                aria-label={opt.label}
+                aria-pressed={active}
+                className={cn(
+                  'flex size-11 items-center justify-center rounded-xl border transition-all',
+                  active
+                    ? 'border-foreground bg-foreground text-background shadow-sm'
+                    : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted',
+                )}
+              >
+                <opt.Icon className="h-4 w-4" />
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {browseMode === 'grade' ? gradeOptions.map((grade) => {
         const active = filterGradeLevel === grade;
         return (
           <button
@@ -471,9 +647,34 @@ export default function QuestionBankManager() {
             <span className="text-[9px] font-black font-sukhumvit leading-none">{grade}</span>
           </button>
         );
+      }) : teacherEntries.map((entry) => {
+        const active = selectedTeacherId === entry.id;
+        const initial = entry.name.charAt(0) || '?';
+        return (
+          <button
+            key={entry.id}
+            type="button"
+            onClick={() => handleSelectTeacher(entry.id)}
+            title={entry.name}
+            aria-label={entry.name}
+            aria-pressed={active}
+            className={cn(
+              'flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl text-[13px] font-black transition-all',
+              active
+                ? 'border-2 border-foreground bg-foreground text-background'
+                : 'border border-border bg-muted/40 text-foreground hover:opacity-90',
+            )}
+          >
+            {entry.photoURL ? (
+              <img src={entry.photoURL} alt="" className="h-full w-full object-cover" />
+            ) : (
+              initial
+            )}
+          </button>
+        );
       })}
 
-      {filterGradeLevel
+      {canShowSubjectGroups
         ? SUBJECT_GROUP_ENTRIES.map(([id, cfg]) => {
             const active = selectedSubjectGroup === id;
             return (
@@ -679,6 +880,8 @@ export default function QuestionBankManager() {
             onSelectGrade={handleSelectGrade}
             onSelectClass={() => {}}
             showRooms={false}
+            showGradeRoomNav={browseMode === 'grade'}
+            afterDept={!isStudentView ? modeToggle : null}
             collapsed={sidebarCollapsed}
             collapsedExtra={collapsedBrowseRail}
             headerAction={(
@@ -712,7 +915,7 @@ export default function QuestionBankManager() {
               </div>
             )}
           >
-            {subjectGroupNav}
+            {browseMode === 'teacher' && !selectedTeacherId ? teacherList : subjectGroupNav}
           </GradeBookClassSidebar>
         </div>
 

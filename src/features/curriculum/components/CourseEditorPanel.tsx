@@ -1,10 +1,11 @@
-import { useState, useMemo, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import {
   HiPlus, HiPencil, HiTrash, HiBookOpen, HiAcademicCap,
   HiEllipsisHorizontal, HiTableCells, HiChevronDown, HiLockClosed, HiLockOpen, HiMagnifyingGlass, HiArrowPath, HiXMark,
   HiOutlineLanguage, HiOutlineCalculator, HiOutlineBeaker, HiOutlineGlobeAsiaAustralia, HiOutlineHeart, HiOutlinePaintBrush,
-  HiOutlineBriefcase, HiOutlineChatBubbleLeftRight, HiOutlineSparkles, HiOutlineBookOpen
+  HiOutlineBriefcase, HiOutlineChatBubbleLeftRight, HiOutlineSparkles, HiOutlineBookOpen,
+  HiOutlineFunnel
 } from 'react-icons/hi2';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -13,6 +14,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerFooter,
+  DrawerClose,
+} from '@/components/ui/drawer';
+import { cn } from '@/lib/utils';
+import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
 import {
   SUBJECT_GROUP_CONFIG,
   type CurriculumVersion, type CurriculumCourse, type SubjectGroupId,
@@ -54,35 +65,7 @@ const CATEGORY_STYLE = {
   activity: { bg: 'bg-emerald-50', text: 'text-emerald-600', dot: 'bg-emerald-400', label: 'กิจกรรม' },
 } as const;
 
-const slideVariants = {
-  enter: (direction: number) => ({
-    x: direction > 0 ? 40 : -40,
-    opacity: 0,
-    scale: 0.99,
-  }),
-  center: {
-    x: 0,
-    opacity: 1,
-    scale: 1,
-    transition: {
-      x: { type: 'spring' as const, stiffness: 350, damping: 32 },
-      opacity: { duration: 0.25 },
-      scale: { duration: 0.25 },
-      staggerChildren: 0.02,
-      delayChildren: 0.05,
-    },
-  },
-  exit: (direction: number) => ({
-    x: direction > 0 ? -40 : 40,
-    opacity: 0,
-    scale: 0.99,
-    transition: {
-      x: { type: 'spring' as const, stiffness: 350, damping: 32 },
-      opacity: { duration: 0.2 },
-      scale: { duration: 0.2 },
-    },
-  }),
-};
+
 
 const cardAnim = {
   enter: { opacity: 0, y: 8 },
@@ -99,6 +82,7 @@ export default function CourseEditorPanel({
   onEditCourse,
   onDeleteCourse,
   onEditVersion,
+  onDeleteVersion,
   onImportCSV,
   onToggleEditMode,
   externalSearch,
@@ -112,33 +96,9 @@ export default function CourseEditorPanel({
   externalSemester,
   onExternalSemesterChange,
 }: CourseEditorPanelProps) {
-  const [currentPage, setCurrentPage] = useState(1);
   const [localSearch, setLocalSearch] = useState(externalSearch || '');
   const [isSearchActive, setIsSearchActive] = useState(!!(externalSearch || (externalSearch === undefined && localSearch)));
-  const itemsPerPage = 20;
-
-  const [direction, setDirection] = useState(1);
-  const [prevRank, setPrevRank] = useState(0);
-
-  const currentRank = useMemo(() => {
-    let semScore = 0;
-    if (externalSemester === 1) semScore = 1;
-    else if (externalSemester === 2) semScore = 2;
-
-    let catScore = 0;
-    if (externalCategory === 'basic') catScore = 1;
-    else if (externalCategory === 'additional') catScore = 2;
-    else if (externalCategory === 'activity') catScore = 3;
-
-    return semScore * 10000 + catScore * 1000 + currentPage;
-  }, [externalSemester, externalCategory, currentPage]);
-
-  useEffect(() => {
-    if (currentRank !== prevRank) {
-      setDirection(currentRank > prevRank ? 1 : -1);
-      setPrevRank(currentRank);
-    }
-  }, [currentRank, prevRank]);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
 
   const effectiveSearch = externalSearch !== undefined ? externalSearch : localSearch;
 
@@ -157,25 +117,14 @@ export default function CourseEditorPanel({
         if (c.semester !== Number(externalSemester)) return false;
       }
       return true;
-    }).sort((a, b) => (a.courseCode || '').localeCompare(b.courseCode || '', 'th'));
+    }).sort((a, b) => {
+      const categoryOrder: Record<string, number> = { basic: 1, additional: 2, activity: 3 };
+      const orderA = categoryOrder[a.category || ''] || 99;
+      const orderB = categoryOrder[b.category || ''] || 99;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.courseCode || '').localeCompare(b.courseCode || '', 'th');
+    });
   }, [courses, effectiveSearch, externalDept, externalGrade, externalCategory, externalGroup, externalSemester]);
-
-  const totalPages = Math.ceil(filteredCourses.length / itemsPerPage);
-  const paginated = filteredCourses.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-
-
-
-
-
-  const handlePageChange = (page: number) => {
-    setCurrentPage(page);
-    const container = document.querySelector('.overflow-y-auto');
-    if (container) container.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [effectiveSearch, externalDept, externalGrade, externalCategory, externalGroup, externalSemester]);
 
   // Credit summary by semester
   const creditSummary = useMemo(() => {
@@ -225,28 +174,131 @@ export default function CourseEditorPanel({
             </div>
           </div>
 
-          {/* Filters Capsule */}
-          <motion.div
-            layout
-            className={`order-3 xl:order-2 w-full xl:w-auto flex items-center gap-1 h-8 border p-0.5 rounded-full backdrop-blur-sm shadow-sm pointer-events-auto overflow-x-auto scrollbar-hide transition-all duration-305 ${
-              isSearchActive
-                ? 'bg-blue-50/90 border-blue-100'
-                : 'bg-white/60 border-slate-200/80'
-            }`}
-          >
-            <AnimatePresence mode="wait">
-              {isSearchActive ? (
-                <motion.div
-                  key="search-active"
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="flex items-center gap-1.5 px-2 w-[180px] sm:w-[240px] h-full"
+
+
+          {/* Filters Right-Side Drawer */}
+          <Drawer open={isFilterOpen} onOpenChange={setIsFilterOpen} direction="right">
+            <DrawerContent className="h-dvh max-h-none sm:p-2 sm:data-[vaul-drawer-direction=right]:max-w-md sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl font-sukhumvit">
+              <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white sm:rounded-4xl sm:border sm:border-border sm:shadow-xl p-4">
+                <DrawerHeader className="shrink-0 px-0 pb-4 pt-2 border-b border-slate-100">
+                  <div className="relative flex min-h-10 items-center justify-between">
+                    <DrawerTitle className="text-base font-black text-slate-800">
+                      ตัวกรองรายวิชา
+                    </DrawerTitle>
+                    <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                      <DrawerClose asChild>
+                        <button
+                          type="button"
+                          className={DRAWER_HEADER_ICON_BTN}
+                          aria-label="ปิด"
+                          title="ปิด"
+                        >
+                          <HiXMark className="h-4 w-4" />
+                        </button>
+                      </DrawerClose>
+                    </div>
+                  </div>
+                </DrawerHeader>
+
+                <div className="min-h-0 flex-1 overflow-y-auto py-6 space-y-6">
+                  {/* Semester Filter */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-600 pl-1">เทอม</label>
+                    <div className="relative">
+                      <select
+                        value={externalSemester || 1}
+                        onChange={(e) => onExternalSemesterChange?.(Number(e.target.value))}
+                        className="w-full h-10 rounded-xl border-none bg-slate-50/70 px-3 text-xs font-bold appearance-none text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="1">เทอม 1</option>
+                        <option value="2">เทอม 2</option>
+                      </select>
+                      <HiChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
+                    </div>
+                  </div>
+
+                  {/* Subject Group Filter */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-600 pl-1">กลุ่มสาระ</label>
+                    <div className="relative">
+                      <select
+                        value={externalGroup || 'all'}
+                        onChange={(e) => onExternalGroupChange?.(e.target.value)}
+                        className="w-full h-10 rounded-xl border-none bg-slate-50/70 px-3 text-xs font-bold appearance-none text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="all">ทุกกลุ่มสาระ</option>
+                        {Object.entries(SUBJECT_GROUP_CONFIG).map(([id, group]) => (
+                          <option key={id} value={id}>{group.name}</option>
+                        ))}
+                      </select>
+                      <HiChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
+                    </div>
+                  </div>
+
+                  {/* Category Filter */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-600 pl-1">หมวดวิชา</label>
+                    <div className="relative">
+                      <select
+                        value={externalCategory || 'all'}
+                        onChange={(e) => onExternalCategoryChange?.(e.target.value as any)}
+                        className="w-full h-10 rounded-xl border-none bg-slate-50/70 px-3 text-xs font-bold appearance-none text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="all">ทุกหมวด</option>
+                        <option value="basic">พื้นฐาน</option>
+                        <option value="additional">เพิ่มเติม</option>
+                        <option value="activity">กิจกรรม</option>
+                      </select>
+                      <HiChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
+                    </div>
+                  </div>
+                </div>
+
+                {(externalSemester !== 1 || externalGroup !== 'all' || externalCategory !== 'all') && (
+                  <DrawerFooter className="px-0 pt-4 border-t border-slate-100 gap-2 shrink-0">
+                    <button
+                      onClick={() => {
+                        onExternalCategoryChange?.('all');
+                        onExternalSemesterChange?.(1);
+                        onExternalGroupChange?.('all');
+                      }}
+                      className="flex h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-rose-100 bg-rose-50 text-xs font-bold text-rose-600 hover:bg-rose-100 transition-colors cursor-pointer"
+                    >
+                      <HiArrowPath size={14} />
+                      ล้างตัวกรองทั้งหมด
+                    </button>
+                  </DrawerFooter>
+                )}
+              </div>
+            </DrawerContent>
+          </Drawer>
+
+          {/* Action buttons unified Dock Group */}
+          {!readOnly && (
+            <div className="flex items-center border border-slate-200/80 bg-white p-1 rounded-full shadow-xs shrink-0 order-2 xl:order-3 gap-1 h-10">
+              {onToggleEditMode && (
+                <button
+                  type="button"
+                  onClick={() => onToggleEditMode(!version.allowEdit)}
+                  className={cn(
+                    "flex items-center justify-center h-8 w-8 text-xs font-black transition-all rounded-full cursor-pointer",
+                    version.allowEdit
+                      ? "text-emerald-500 hover:bg-emerald-50"
+                      : "text-amber-500 hover:bg-amber-50"
+                  )}
+                  title={version.allowEdit ? 'ล็อกหลักสูตร' : 'เปิดการแก้ไข'}
                 >
+                  {version.allowEdit ? <HiLockOpen size={16} /> : <HiLockClosed size={16} />}
+                </button>
+              )}
+
+              {/* Search button / input */}
+              {isSearchActive ? (
+                <div className="flex items-center gap-1.5 px-2 bg-blue-50/95 border border-blue-100/50 rounded-full h-8 w-[150px] sm:w-[180px] transition-all">
                   <HiMagnifyingGlass size={13} className="text-slate-400 flex-shrink-0" />
                   <input
                     type="text"
-                    placeholder="ค้นหาวิชา หรือรหัสวิชา..."
+                    placeholder="ค้นหา..."
                     value={effectiveSearch}
                     autoFocus
                     onChange={(e) => {
@@ -266,304 +318,219 @@ export default function CourseEditorPanel({
                   >
                     <HiXMark size={12} />
                   </button>
-                </motion.div>
+                </div>
               ) : (
-                <motion.div
-                  key="filters-active"
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="flex items-center gap-1 min-w-0"
+                <button
+                  type="button"
+                  onClick={() => setIsSearchActive(true)}
+                  className="flex items-center justify-center h-8 w-8 text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-all rounded-full cursor-pointer"
+                  title="ค้นหา"
                 >
+                  <HiMagnifyingGlass size={16} />
+                </button>
+              )}
+
+              {/* Filter button */}
+              <button
+                type="button"
+                onClick={() => setIsFilterOpen(true)}
+                className={cn(
+                  "flex items-center justify-center h-8 w-8 transition-all rounded-full cursor-pointer relative",
+                  (externalSemester !== 'all' || externalGroup !== 'all' || externalCategory !== 'all')
+                    ? "bg-blue-50 text-blue-600"
+                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                )}
+                title="ตัวกรอง"
+              >
+                <HiOutlineFunnel size={16} />
+                {(externalSemester !== 'all' || externalGroup !== 'all' || externalCategory !== 'all') && (
+                  <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden />
+                )}
+              </button>
+
+              {version.allowEdit && (
+                <>
+                  {onImportCSV && (
+                    <button
+                      type="button"
+                      onClick={onImportCSV}
+                      className="flex items-center justify-center h-8 w-8 text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-all rounded-full cursor-pointer"
+                      title="นำเข้า"
+                    >
+                      <HiTableCells size={16} />
+                    </button>
+                  )}
+
                   <button
-                    onClick={() => {
-                      onExternalCategoryChange?.('all');
-                      onExternalSemesterChange?.('all');
-                      onExternalGroupChange?.('all');
-                    }}
-                    className="flex items-center justify-center w-7 h-7 rounded-full hover:bg-rose-50 text-rose-500 hover:text-rose-600 transition-all border-r border-slate-200/80 pr-0.5 shrink-0"
-                    title="ล้างตัวกรอง"
+                    type="button"
+                    onClick={() => onEditVersion(version)}
+                    className="flex items-center justify-center h-8 w-8 text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-all rounded-full cursor-pointer"
+                    title="แก้ไขหลักสูตร"
                   >
-                    <HiArrowPath size={13} />
+                    <HiPencil size={16} />
                   </button>
 
-                  <div className="flex items-center gap-1 min-w-0">
-                    <div className="relative shrink-0">
-                      <select
-                        value={externalSemester || 'all'}
-                        onChange={(e) => onExternalSemesterChange?.(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-                        className="appearance-none pl-3 pr-6 py-1 bg-transparent hover:bg-slate-50 text-slate-700 transition-all font-black text-[10px] outline-none cursor-pointer rounded-full"
-                      >
-                        <option value="all">ทุกเทอม</option>
-                        <option value="1">เทอม 1</option>
-                        <option value="2">เทอม 2</option>
-                      </select>
-                      <HiChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={10} />
-                    </div>
+                  {onDeleteVersion && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteVersion(version)}
+                      className="flex items-center justify-center h-8 w-8 text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-all rounded-full cursor-pointer"
+                      title="ลบหลักสูตร"
+                    >
+                      <HiTrash size={16} />
+                    </button>
+                  )}
 
-                    <div className="w-px h-3.5 bg-slate-200 shrink-0" />
-
-                    <div className="relative shrink-0 max-w-[120px]">
-                      <select
-                        value={externalGroup || 'all'}
-                        onChange={(e) => onExternalGroupChange?.(e.target.value)}
-                        className="appearance-none pl-3 pr-6 py-1 bg-transparent hover:bg-slate-50 text-slate-700 transition-all font-black text-[10px] outline-none cursor-pointer rounded-full truncate"
-                      >
-                        <option value="all">ทุกกลุ่มสาระ</option>
-                        {Object.entries(SUBJECT_GROUP_CONFIG).map(([id, group]) => (
-                          <option key={id} value={id}>{group.name}</option>
-                        ))}
-                      </select>
-                      <HiChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={10} />
-                    </div>
-
-                    <div className="w-px h-3.5 bg-slate-200 shrink-0" />
-
-                    <div className="relative shrink-0">
-                      <select
-                        value={externalCategory || 'all'}
-                        onChange={(e) => onExternalCategoryChange?.(e.target.value as any)}
-                        className="appearance-none pl-3 pr-6 py-1 bg-transparent hover:bg-slate-50 text-slate-700 transition-all font-black text-[10px] outline-none cursor-pointer rounded-full"
-                      >
-                        <option value="all">ทุกหมวด</option>
-                        <option value="basic">พื้นฐาน</option>
-                        <option value="additional">เพิ่มเติม</option>
-                        <option value="activity">กิจกรรม</option>
-                      </select>
-                      <HiChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={10} />
-                    </div>
-                  </div>
-
-                  <div className="w-px h-3.5 bg-slate-200 shrink-0 mx-0.5" />
-
-                  {/* Search Toggle Button */}
                   <button
-                    onClick={() => setIsSearchActive(true)}
-                    className="flex items-center justify-center w-7 h-7 rounded-full hover:bg-slate-100 text-slate-600 hover:text-slate-800 transition-all shrink-0 cursor-pointer"
-                    title="ค้นหา"
+                    type="button"
+                    onClick={onAddCourse}
+                    className="flex items-center justify-center h-8 w-8 text-xs font-black transition-all rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-xs cursor-pointer"
+                    title="เพิ่มวิชา"
                   >
-                    <HiMagnifyingGlass size={13} />
+                    <HiPlus size={16} className="stroke-[2px]" />
                   </button>
-                </motion.div>
+                </>
               )}
-            </AnimatePresence>
-          </motion.div>
-
-          {/* Action buttons — hidden for read-only roles */}
-          {!readOnly && (
-            <div className="flex items-center gap-2 shrink-0 order-2 xl:order-3">
-              {onToggleEditMode && (
-                <motion.button
-                  whileTap={{ scale: 0.96 }}
-                  onClick={() => onToggleEditMode(!version.allowEdit)}
-                  className={`flex items-center justify-center gap-1.5 h-8 w-8 md:w-auto md:px-3 rounded-full text-[11px] font-black transition-all ${
-                    version.allowEdit
-                      ? 'bg-amber-50 text-amber-600 hover:bg-amber-100'
-                      : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
-                  }`}
-                  title={version.allowEdit ? 'ล็อก' : 'ปลดล็อก'}
-                >
-                  {version.allowEdit ? <HiLockClosed size={14} /> : <HiLockOpen size={14} />}
-                  <span className="hidden md:inline">{version.allowEdit ? 'ล็อก' : 'ปลดล็อก'}</span>
-                </motion.button>
-              )}
-              {onImportCSV && (
-                <motion.button
-                  whileTap={{ scale: 0.96 }}
-                  onClick={onImportCSV}
-                  className="flex items-center justify-center gap-1.5 h-8 w-8 md:w-auto md:px-3 rounded-full bg-white border border-slate-200 text-slate-600 text-[11px] font-black hover:bg-slate-50 transition-all shadow-sm"
-                  title="นำเข้า"
-                >
-                  <HiTableCells size={14} />
-                  <span className="hidden md:inline">นำเข้า</span>
-                </motion.button>
-              )}
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={() => onEditVersion(version)}
-                className="flex items-center justify-center gap-1.5 h-8 w-8 md:w-auto md:px-3 rounded-full bg-white border border-slate-200 text-slate-600 text-[11px] font-black hover:bg-slate-50 transition-all shadow-sm"
-                title="แก้ไข"
-              >
-                <HiPencil size={14} />
-                <span className="hidden md:inline">แก้ไข</span>
-              </motion.button>
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={onAddCourse}
-                disabled={!version.allowEdit}
-                className={`flex items-center justify-center gap-1.5 h-8 w-8 md:w-auto md:px-4 rounded-full text-[11px] font-black transition-all shadow-sm ${
-                  version.allowEdit
-                    ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-500/20'
-                    : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                }`}
-                title="เพิ่มวิชา"
-              >
-                <HiPlus size={15} className="stroke-[2px]" />
-                <span className="hidden md:inline">เพิ่มวิชา</span>
-              </motion.button>
             </div>
           )}
         </div>
 
-        {/* ── Credit Summary Cards ── */}
-        <div className="flex lg:grid lg:grid-cols-2 overflow-x-auto lg:overflow-visible snap-x snap-mandatory scrollbar-hide gap-3 mb-1 md:mb-4">
-          {([1, 2] as const).map(sem => (
-            <div
-              key={sem}
-              className="w-full lg:w-auto shrink-0 snap-center rounded-[1.25rem] border border-slate-100 bg-white/80 hover:bg-white shadow-sm transition-colors p-4"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 bg-blue-600 text-white rounded-md flex items-center justify-center text-[10px] font-black">
-                    {sem}
-                  </div>
-                  <span className="text-[11px] font-black text-slate-600 uppercase tracking-wider">ภาคเรียน {sem}</span>
-                </div>
-                <span className="text-[12px] font-black text-slate-900">
-                  {creditSummary[sem].total.toFixed(1)}
-                  <span className="text-[9px] font-bold text-slate-400 ml-0.5">นก.</span>
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                {(['basic', 'additional', 'activity'] as const).map(cat => {
-                  const catStyle = CATEGORY_STYLE[cat];
-                  const val = creditSummary[sem][cat];
-                  return (
-                    <div key={cat} className={`rounded-xl px-2.5 py-2 ${catStyle.bg}`}>
-                      <div className={`flex items-center gap-1 mb-1`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${catStyle.dot}`} />
-                        <span className={`text-[9px] font-bold uppercase tracking-tight ${catStyle.text}`}>
-                          {catStyle.label}
-                        </span>
-                      </div>
-                      <span className="text-[14px] font-black text-slate-800">{val.toFixed(1)}</span>
-                      <span className="text-[8px] font-bold text-slate-400 ml-0.5">นก.</span>
+        {/* ── Credit Summary Card (Single with inline switcher) ── */}
+        <div className="mb-1 md:mb-4">
+          {(() => {
+            const currentSemester = (externalSemester === 2 ? 2 : 1) as 1 | 2;
+            return (
+              <div className="rounded-[1.25rem] border border-slate-100 bg-white p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="inline-flex rounded-xl bg-slate-50 p-0.5 border border-slate-200/40">
+                      <button
+                        type="button"
+                        onClick={() => onExternalSemesterChange?.(1)}
+                        className={cn(
+                          "px-3 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer",
+                          currentSemester === 1
+                            ? "bg-white text-blue-600 shadow-sm border border-slate-200/10"
+                            : "text-slate-500 hover:text-slate-800"
+                        )}
+                      >
+                        ภาคเรียน 1
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onExternalSemesterChange?.(2)}
+                        className={cn(
+                          "px-3 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer",
+                          currentSemester === 2
+                            ? "bg-white text-blue-600 shadow-sm border border-slate-200/10"
+                            : "text-slate-500 hover:text-slate-800"
+                        )}
+                      >
+                        ภาคเรียน 2
+                      </button>
                     </div>
-                  );
-                })}
+                  </div>
+                  <span className="text-[14px] font-black text-slate-900">
+                    {creditSummary[currentSemester].total.toFixed(1)}
+                    <span className="text-[9px] font-bold text-slate-400 ml-0.5">นก.</span>
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  {(['basic', 'additional', 'activity'] as const).map(cat => {
+                    const catStyle = CATEGORY_STYLE[cat];
+                    const val = creditSummary[currentSemester][cat];
+                    return (
+                      <div key={cat} className={`rounded-xl px-2.5 py-2 ${catStyle.bg}`}>
+                        <div className={`flex items-center gap-1 mb-1`}>
+                          <div className={`w-1.5 h-1.5 rounded-full ${catStyle.dot}`} />
+                          <span className={`text-[9px] font-bold uppercase tracking-tight ${catStyle.text}`}>
+                            {catStyle.label}
+                          </span>
+                        </div>
+                        <span className="text-[14px] font-black text-slate-800">{val.toFixed(1)}</span>
+                        <span className="text-[8px] font-bold text-slate-400 ml-0.5">นก.</span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              </div>
-            ))}
+            );
+          })()}
         </div>
       </div>
       {/* ── Course List ── */}
       <div className="flex-1 min-h-0 relative overflow-hidden flex flex-col">
-        {/* Clean, permanent table header bar */}
-        <div className="hidden md:grid grid-cols-[1fr_6rem_12rem_5rem_5rem_4rem] items-center gap-3 px-5 py-2.5 text-[10px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 rounded-xl mb-1.5 shrink-0">
-          <div className="px-4">รายวิชา</div>
-          <div className="text-center">ชั้นเรียน</div>
-          <div className="px-3">กลุ่มสาระ</div>
-          <div className="text-center">คาบ</div>
-          <div className="text-center">หน่วยกิต</div>
-          <div className="text-center">การจัดการ</div>
-        </div>
         <div className="flex-1 overflow-y-auto scrollbar-hide">
-          <AnimatePresence mode="wait" custom={direction}>
-              <motion.div
-                key={`${externalSemester}-${externalCategory}-${externalGroup}-${currentPage}`}
-                custom={direction}
-                variants={slideVariants}
-                initial="enter"
-                animate="center"
-                exit="exit"
-                className="flex flex-col gap-1.5 pb-4 w-full"
-                drag="x"
-                dragConstraints={{ left: 0, right: 0 }}
-                dragElastic={0.8}
-                onDragEnd={(_, { offset }) => {
-                  const swipe = offset.x;
-                  if (swipe < -50 && currentPage < totalPages) {
-                    handlePageChange(currentPage + 1);
-                  } else if (swipe > 50 && currentPage > 1) {
-                    handlePageChange(currentPage - 1);
-                  }
-                }}
-              >
-              {courses.length === 0 && !isLoading ? (
-                <motion.div
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex flex-col items-center justify-center py-24 gap-5"
-                >
-                  <div className="w-20 h-20 rounded-3xl bg-slate-50 flex items-center justify-center">
-                    <HiBookOpen size={36} className="text-slate-200" />
-                  </div>
-                  <div className="text-center">
-                    <p className="text-[13px] font-black text-slate-400">ยังไม่มีรายวิชาในหลักสูตรนี้</p>
-                    <p className="text-[11px] text-slate-300 mt-1">กดปุ่ม "เพิ่มวิชา" เพื่อเริ่มสร้างหลักสูตร</p>
-                  </div>
-                  {version.allowEdit && (
-                    <motion.button
-                      whileHover={{ scale: 1.03 }}
-                      whileTap={{ scale: 0.97 }}
-                      onClick={onAddCourse}
-                      className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-full text-[12px] font-black shadow-lg hover:bg-blue-700 transition-all"
-                    >
-                      <HiPlus size={14} className="stroke-[2px]" />
-                      เพิ่มรายวิชาแรก
-                    </motion.button>
-                  )}
-                </motion.div>
-              ) : isLoading ? (
-                [...Array(8)].map((_, i) => (
-                  <div key={i} className="flex items-center p-4 gap-4 rounded-2xl bg-white/60">
-                    <Skeleton className="w-10 h-10 rounded-xl bg-slate-100" />
-                    <div className="flex-1 space-y-2">
-                      <Skeleton className="h-3.5 w-1/3 bg-slate-100" />
-                      <Skeleton className="h-2.5 w-1/4 bg-slate-50" />
-                    </div>
-                    <Skeleton className="h-6 w-16 rounded-full bg-slate-100" />
-                  </div>
-                ))
-              ) : paginated.length === 0 ? (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="py-20 flex flex-col items-center justify-center gap-3"
-                >
-                  <HiBookOpen size={28} className="text-slate-200" />
-                  <p className="text-[12px] font-bold text-slate-300">ไม่พบรายวิชาที่ตรงกับเงื่อนไข</p>
-                </motion.div>
-              ) : (
-                <>
-                  {paginated.map((course, index) => (
-                    <motion.div key={course.id} variants={cardAnim}>
-                      <CourseCard
-                        course={course}
-                        index={(currentPage - 1) * itemsPerPage + index + 1}
-                        canEdit={!readOnly && version.allowEdit}
-                        onEdit={() => onEditCourse(course)}
-                        onDelete={() => onDeleteCourse(course)}
-                      />
-                    </motion.div>
-                  ))}
-
-                </>
-              )}
-            </motion.div>
-          </AnimatePresence>
-        </div>
-
-        {/* ── Pagination ── */}
-        {!isLoading && totalPages > 1 && (
-          <div className="py-4 flex justify-center items-center gap-2 flex-shrink-0 border-t border-slate-100">
-            {[...Array(totalPages)].map((_, i) => (
-              <button
-                key={i}
-                onClick={() => handlePageChange(i + 1)}
-                className="group relative p-1 transition-all"
-              >
-                <div
-                  className={`h-1.5 rounded-full transition-all duration-500 ${
-                    currentPage === i + 1
-                      ? 'w-8 bg-blue-600 shadow-sm'
-                      : 'w-1.5 bg-slate-200 group-hover:bg-slate-300'
-                  }`}
-                />
-              </button>
-            ))}
+          {/* Sticky Table Header */}
+          <div className="sticky top-0 z-10 hidden md:grid grid-cols-[1fr_6rem_6rem_12rem_5rem_5rem_4rem] items-center gap-3 px-5 py-3 text-[11px] font-black text-slate-700 bg-slate-50/90 backdrop-blur-md border-b border-slate-100/80 mb-2 shrink-0">
+            <div className="pl-[60px]">รายวิชา</div>
+            <div className="text-center">ภาคเรียน</div>
+            <div className="text-center">ชั้นเรียน</div>
+            <div className="px-3">กลุ่มสาระ</div>
+            <div className="text-center">คาบ</div>
+            <div className="text-center">หน่วยกิต</div>
+            <div className="text-center">การจัดการ</div>
           </div>
-        )}
+          <div className="flex flex-col gap-1.5 pb-4 w-full">
+            {courses.length === 0 && !isLoading ? (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex flex-col items-center justify-center py-24 gap-5"
+              >
+                <div className="w-20 h-20 rounded-3xl bg-slate-50 flex items-center justify-center">
+                  <HiBookOpen size={36} className="text-slate-200" />
+                </div>
+                <div className="text-center">
+                  <p className="text-[13px] font-black text-slate-400">ยังไม่มีรายวิชาในหลักสูตรนี้</p>
+                  <p className="text-[11px] text-slate-300 mt-1">กดปุ่ม "เพิ่มวิชา" เพื่อเริ่มสร้างหลักสูตร</p>
+                </div>
+                {version.allowEdit && (
+                  <motion.button
+                    whileHover={{ scale: 1.03 }}
+                    whileTap={{ scale: 0.97 }}
+                    onClick={onAddCourse}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-full text-[12px] font-black shadow-lg hover:bg-blue-700 transition-all"
+                  >
+                    <HiPlus size={14} className="stroke-[2px]" />
+                    เพิ่มรายวิชาแรก
+                  </motion.button>
+                )}
+              </motion.div>
+            ) : isLoading ? (
+              [...Array(8)].map((_, i) => (
+                <div key={i} className="flex items-center p-4 gap-4 rounded-2xl bg-white/60">
+                  <Skeleton className="w-10 h-10 rounded-xl bg-slate-100" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-3.5 w-1/3 bg-slate-100" />
+                    <Skeleton className="h-2.5 w-1/4 bg-slate-50" />
+                  </div>
+                  <Skeleton className="h-6 w-16 rounded-full bg-slate-100" />
+                </div>
+              ))
+            ) : filteredCourses.length === 0 ? (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="py-20 flex flex-col items-center justify-center gap-3"
+              >
+                <HiBookOpen size={28} className="text-slate-200" />
+                <p className="text-[12px] font-bold text-slate-300">ไม่พบรายวิชาที่ตรงกับเงื่อนไข</p>
+              </motion.div>
+            ) : (
+              filteredCourses.map((course) => (
+                <motion.div key={course.id} variants={cardAnim} initial="enter" animate="center" exit="exit">
+                  <CourseCard
+                    course={course}
+                    canEdit={!readOnly && version.allowEdit}
+                    onEdit={() => onEditCourse(course)}
+                    onDelete={() => onDeleteCourse(course)}
+                  />
+                </motion.div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -607,6 +574,7 @@ function getGroupLabelThai(group?: string): string {
   if (g.includes('career') || g.includes('งาน')) return 'การงานอาชีพ';
   if (g.includes('foreign') || g.includes('lang') || g.includes('ต่างประเทศ') || g.includes('ภาษา')) return 'ภาษาต่างประเทศ';
   if (g.includes('activity') || g.includes('กิจกรรม')) return 'กิจกรรมพัฒนาผู้เรียน';
+  if (g.includes('other') || g.includes('อื่นๆ')) return 'อื่นๆ';
   return group || 'อื่นๆ';
 }
 
@@ -628,13 +596,11 @@ function SubjectIcon({ subjectGroup, className, size = 18 }: { subjectGroup?: st
 
 function CourseCard({
   course,
-  index,
   canEdit,
   onEdit,
   onDelete,
 }: {
   course: CurriculumCourse;
-  index: number;
   canEdit: boolean;
   onEdit: () => void;
   onDelete: () => void;
@@ -650,9 +616,9 @@ function CourseCard({
     <motion.div
       onHoverStart={() => setHovered(true)}
       onHoverEnd={() => setHovered(false)}
-      className={`group relative flex flex-col md:grid md:grid-cols-[1fr_6rem_12rem_5rem_5rem_4rem] items-start md:items-center gap-3 md:gap-3 p-4 md:px-5 md:py-2.5 border border-slate-100 md:border-0 md:border-b md:border-black/[0.04] rounded-[1.5rem] md:rounded-none hover:bg-slate-100/70 transition-all cursor-pointer text-left shadow-sm md:shadow-none bg-white md:bg-transparent ${
-        index % 2 === 0 ? 'md:bg-white' : 'md:bg-slate-50/60'
-      }`}
+      className={cn(
+        "group relative flex flex-col md:grid md:grid-cols-[1fr_6rem_6rem_12rem_5rem_5rem_4rem] items-start md:items-center gap-3 p-4 md:px-5 md:py-3 border border-slate-100 md:border-0 md:border-b md:border-slate-100/70 rounded-2xl md:rounded-none transition-all cursor-pointer text-left bg-white hover:bg-slate-50/70"
+      )}
     >
       {/* 1. รายวิชา */}
       <div className="flex items-start md:items-center gap-4 min-w-0 w-full pr-8 md:pr-0">
@@ -666,9 +632,8 @@ function CourseCard({
         </div>
         <div className="flex flex-col min-w-0">
           <div className="flex items-center gap-2 mb-0.5 min-w-0 flex-wrap">
-            <h4 className={`text-[13px] font-black tracking-tight truncate max-w-[200px] sm:max-w-xs transition-colors ${
-              hovered ? 'text-slate-900' : 'text-slate-800'
-            }`}>
+            <h4 className={`text-[13px] font-black tracking-tight truncate max-w-[200px] sm:max-w-xs transition-colors ${hovered ? 'text-slate-900' : 'text-slate-800'
+              }`}>
               {course.courseName}
             </h4>
             <span className={`inline-flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full shrink-0 ${catStyle.bg} ${catStyle.text}`}>
@@ -686,56 +651,67 @@ function CourseCard({
 
       {/* Wrapper for items 2-5 to be flex on mobile, contents on desktop */}
       <div className="flex flex-wrap items-center gap-2 mt-1 md:mt-0 w-full md:contents">
-        {/* 2. ชั้นเรียน */}
+        {/* 2. ภาคเรียน */}
         <div className="flex justify-center shrink-0">
-          <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full bg-slate-100/80 border border-slate-200/40 text-[10px] font-black transition-colors ${
-            hovered ? 'text-slate-900 bg-slate-200/80' : 'text-slate-600'
-          }`}>
+          <span className={cn(
+            "inline-flex items-center justify-center px-2.5 py-0.5 rounded-full border text-[10px] font-black transition-colors",
+            course.semester === 2
+              ? hovered
+                ? "bg-indigo-100/50 border-indigo-200/30 text-indigo-900"
+                : "bg-indigo-50/50 border-indigo-100/20 text-indigo-600"
+              : hovered
+                ? "bg-blue-100/50 border-blue-200/30 text-blue-900"
+                : "bg-blue-50/50 border-blue-100/20 text-blue-600"
+          )}>
+            เทอม {course.semester || '–'}
+          </span>
+        </div>
+
+        {/* 3. ชั้นเรียน */}
+        <div className="flex justify-center shrink-0">
+          <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full bg-slate-100/80 border border-slate-200/40 text-[10px] font-black transition-colors ${hovered ? 'text-slate-900 bg-slate-200/80' : 'text-slate-600'
+            }`}>
             {course.gradeLevel || '–'}
           </span>
         </div>
 
         {/* 3. กลุ่มสาระ */}
         <div className="px-0 md:px-3 min-w-0 shrink-0">
-          <p className={`text-[10px] md:text-[12px] font-bold font-sarabun truncate transition-colors px-2.5 py-0.5 rounded-full bg-slate-50 md:bg-transparent md:px-0 md:py-0 border border-slate-200/40 md:border-0 ${
-            hovered ? 'text-slate-900' : 'text-slate-600'
-          }`}>
+          <p className={`text-[10px] md:text-[12px] font-bold font-sarabun truncate transition-colors px-2.5 py-0.5 rounded-full bg-slate-50 md:bg-transparent md:px-0 md:py-0 border border-slate-200/40 md:border-0 ${hovered ? 'text-slate-900' : 'text-slate-600'
+            }`}>
             {groupLabel}
           </p>
         </div>
 
         {/* 4. คาบ */}
-        <div className="text-center shrink-0 flex items-center gap-1 bg-slate-50 md:bg-transparent px-2.5 py-0.5 md:px-0 md:py-0 rounded-full border border-slate-200/40 md:border-0">
+        <div className="text-center shrink-0 flex items-center md:justify-center md:w-full gap-1 bg-slate-50 md:bg-transparent px-2.5 py-0.5 md:px-0 md:py-0 rounded-full border border-slate-200/40 md:border-0">
           <span className="md:hidden text-[10px] text-slate-500 font-bold">คาบ:</span>
-          <p className={`text-[11px] md:text-[13px] font-black font-sarabun transition-colors ${
-            hovered ? 'text-slate-900' : 'text-slate-700'
-          }`}>
+          <p className={`text-[11px] md:text-[13px] font-black font-sarabun transition-colors ${hovered ? 'text-slate-900' : 'text-slate-700'
+            }`}>
             {course.periodsPerWeek || 0}
           </p>
         </div>
 
         {/* 5. หน่วยกิต */}
-        <div className="text-center shrink-0 flex items-center gap-1 bg-blue-50 md:bg-transparent px-2.5 py-0.5 md:px-0 md:py-0 rounded-full border border-blue-100/50 md:border-0">
+        <div className="text-center shrink-0 flex items-center md:justify-center md:w-full gap-1 bg-blue-50 md:bg-transparent px-2.5 py-0.5 md:px-0 md:py-0 rounded-full border border-blue-100/50 md:border-0">
           <span className="md:hidden text-[10px] text-blue-600 font-bold">นก.:</span>
-          <p className={`text-[11px] md:text-[13px] font-black font-sarabun transition-colors ${
-            hovered ? 'text-blue-900 md:text-slate-950' : 'text-blue-700 md:text-slate-800'
-          }`}>
+          <p className={`text-[11px] md:text-[13px] font-black font-sarabun transition-colors ${hovered ? 'text-blue-900 md:text-slate-950' : 'text-blue-700 md:text-slate-800'
+            }`}>
             {Number(course.credit || 0).toFixed(1)}
           </p>
         </div>
       </div>
 
       {/* 6. การจัดการ */}
-      <div className="absolute top-3 right-3 md:relative md:top-0 md:right-0 flex justify-center" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute top-3 right-3 md:relative md:top-0 md:right-0 flex justify-center">
         {canEdit ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className={`p-2 rounded-full transition-colors focus:outline-none ${
-                  hovered
+                className={`p-2 rounded-full transition-colors focus:outline-none ${hovered
                     ? 'text-slate-500 hover:bg-white hover:text-slate-700'
                     : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
-                }`}
+                  }`}
               >
                 <HiEllipsisHorizontal size={15} />
               </button>

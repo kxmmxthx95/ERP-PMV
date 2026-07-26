@@ -1,13 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    ArrowRight, CheckSquare, GraduationCap, LogOut,
-    UserCheck, AlertCircle, Loader2, Search, MoreHorizontal,
-    CheckCircle2, X, ChevronDown
+    ArrowRight, CheckSquare, LogOut,
+    UserCheck, AlertCircle, Loader2, Search,
+    CheckCircle2, X, Settings
 } from 'lucide-react';
 import { collection, doc, writeBatch, getDocs, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { cn } from '@/lib/utils';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
+import StudentAvatar from '@/features/students/components/StudentAvatar';
+
+const TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden';
+const TABLE_HEADER_CELL = 'text-[12px] font-black text-slate-700 font-sukhumvit whitespace-nowrap';
 
 type MobileTransitionView = 'source' | 'target';
 
@@ -31,25 +38,23 @@ function CapsuleSelect({
     compact?: boolean;
 }) {
     return (
-        <div className={cn(
-            'relative flex items-center rounded-full border border-black/[0.05] bg-white/40 px-2 backdrop-blur-md shadow-sm transition-all',
-            compact ? 'h-7' : 'h-9 px-3',
-            disabled ? 'opacity-60' : 'hover:bg-white/60',
-            className,
-        )}>
-            <select
-                value={value}
-                disabled={disabled}
-                onChange={e => onChange(e.target.value)}
-                className="appearance-none h-full w-full pr-5 bg-transparent text-[10px] font-black text-black/70 outline-none cursor-pointer disabled:cursor-not-allowed"
+        <Select value={value} onValueChange={onChange} disabled={disabled}>
+            <SelectTrigger
+                className={cn(
+                    'w-full rounded-full border border-black/[0.05] bg-white/40 px-3 text-[10px] font-black text-black/70 backdrop-blur-md shadow-sm transition-all',
+                    compact ? 'h-7' : 'h-9',
+                    !disabled && 'hover:bg-white/60',
+                    className,
+                )}
             >
-                {placeholder && <option value="" className="text-slate-900">{placeholder}</option>}
+                <SelectValue placeholder={placeholder} />
+            </SelectTrigger>
+            <SelectContent>
                 {options.map(o => (
-                    <option key={o.value} value={o.value} className="text-slate-900">{o.label}</option>
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                 ))}
-            </select>
-            <ChevronDown size={11} className={`absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ${disabled ? 'opacity-30' : 'text-black/35'}`} />
-        </div>
+            </SelectContent>
+        </Select>
     );
 }
 
@@ -67,6 +72,7 @@ interface Student {
     currentStatus?: 'active' | 'graduated' | 'left';
     status?: string;
     academicYear?: string;
+    photoURL?: string;
 }
 
 function isLeftStudent(student: Student): boolean {
@@ -80,6 +86,7 @@ interface Classroom {
     roomNumber?: string;
     academicYear: string;
     academicYearId?: string;
+    departmentId?: string;
     studentIds?: string[];
     track?: string;
 }
@@ -88,22 +95,28 @@ type TransitionAction = 'promote' | 'graduate' | 'leave';
 
 const YEARS = ['2565', '2566', '2567', '2568', '2569', '2570'];
 
-export default function StudentTransitionTab() {
-    // --- Source State ---
-    const [sourceYear, setSourceYear] = useState<string>('2568');
-    const [sourceDept, setSourceDept] = useState<string>('');
-    const [sourceLevel, setSourceLevel] = useState<string>('');
-    const [sourceClassroomId, setSourceClassroomId] = useState<string>('');
+interface StudentTransitionTabProps {
+    sourceYear: string;
+    sourceLevel: string;
+    sourceClassroomId: string;
+    transitionAction: TransitionAction;
+    onTransitionActionChange: (action: TransitionAction) => void;
+}
 
+export default function StudentTransitionTab({
+    sourceYear,
+    sourceLevel,
+    sourceClassroomId,
+    transitionAction,
+    onTransitionActionChange,
+}: StudentTransitionTabProps) {
     // --- Target State ---
-    const [transitionAction, setTransitionAction] = useState<TransitionAction>('promote');
     const [targetYear, setTargetYear] = useState<string>('2569');
     const [targetDept, setTargetDept] = useState<string>('');
     const [targetLevel, setTargetLevel] = useState<string>('');
     const [targetClassroomId, setTargetClassroomId] = useState<string>('');
 
     // --- Data State ---
-    const [sourceClassrooms, setSourceClassrooms] = useState<Classroom[]>([]);
     const [targetClassrooms, setTargetClassrooms] = useState<Classroom[]>([]);
     const [sourceStudents, setSourceStudents] = useState<Student[]>([]);
     const [stagedStudents, setStagedStudents] = useState<Student[]>([]);
@@ -152,36 +165,31 @@ export default function StudentTransitionTab() {
         }
     };
 
-    // --- Fetch Source Classrooms & Students ---
+    // --- Fetch Source Students (เฉพาะห้องที่เลือก) ---
     useEffect(() => {
-        const fetchSourceData = async () => {
+        const fetchSourceStudents = async () => {
+            if (!sourceClassroomId) {
+                setSourceStudents([]);
+                setSelectedSourceIds(new Set());
+                return;
+            }
             setLoading(true);
             try {
-                const clSnapshot = await getDocs(collection(db, 'classes'));
-                const clData = clSnapshot.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() } as Classroom))
-                    .filter(c => (String(c.academicYear) === sourceYear || String(c.academicYearId) === sourceYear) && c.gradeLevel === sourceLevel);
-                setSourceClassrooms(clData);
-
-                if (sourceClassroomId) {
-                    const stSnapshot = await getDocs(collection(db, 'students'));
-                    let stData = stSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student));
-                    stData = stData.filter(s => s.classroomId === sourceClassroomId && (s.currentStatus === 'active' || !s.currentStatus));
-                    stData = stData.filter(s => !stagedStudents.find(st => st.id === s.id));
-                    setSourceStudents(stData);
-                } else {
-                    setSourceStudents([]);
-                }
+                const stSnapshot = await getDocs(collection(db, 'students'));
+                let stData = stSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student));
+                stData = stData.filter(s => s.classroomId === sourceClassroomId && (s.currentStatus === 'active' || !s.currentStatus));
+                stData = stData.filter(s => !stagedStudents.find(st => st.id === s.id));
+                setSourceStudents(stData);
                 setSelectedSourceIds(new Set());
             } catch (error) {
-                console.error('Error fetching source data:', error);
+                console.error('Error fetching source students:', error);
             } finally {
                 setLoading(false);
             }
         };
-        fetchSourceData();
+        fetchSourceStudents();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sourceYear, sourceLevel, sourceClassroomId]);
+    }, [sourceClassroomId]);
 
     useEffect(() => {
         if (transitionAction !== 'leave') {
@@ -383,17 +391,13 @@ export default function StudentTransitionTab() {
     // --- Student Card (List Style — matches ClassroomAssignmentTab) ---
     const StudentCard = ({
         student, isSelected, onToggle, colorScheme = 'blue',
-        isFirstInSelection = false, isLastInSelection = false
     }: {
         student: Student;
         isSelected: boolean;
         onToggle: () => void;
         colorScheme?: 'blue' | 'emerald';
-        isFirstInSelection?: boolean;
-        isLastInSelection?: boolean;
     }) => {
-        const selectedBg = colorScheme === 'emerald' ? 'bg-emerald-600' : 'bg-blue-600';
-        const selectedBorder = colorScheme === 'emerald' ? 'border-emerald-400/30' : 'border-blue-400/30';
+        const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
 
         return (
             <motion.div
@@ -402,160 +406,148 @@ export default function StudentTransitionTab() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={onToggle}
-                className={`group relative flex items-center transition-all cursor-pointer ${isSelected
-                    ? `${selectedBg} text-white z-10 px-4 py-2 ${isFirstInSelection ? 'rounded-t-xl mt-1' : ''} ${isLastInSelection ? 'rounded-b-xl mb-1' : `border-b ${selectedBorder}`}`
-                    : 'px-4 py-2 border-b border-slate-100/60 hover:bg-slate-50/50'
-                    }`}
+                className={cn(
+                    "grid items-center gap-3 px-4 py-3 cursor-pointer border-b border-slate-100 last:border-b-0 transition-colors",
+                    isSelected
+                        ? colorScheme === 'emerald'
+                            ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-950"
+                            : "bg-blue-50 hover:bg-blue-100 text-blue-950"
+                        : "hover:bg-muted/40 text-slate-700"
+                )}
+                style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 2rem' }}
             >
-                <div className="flex-1 grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 min-w-0 lg:grid-cols-[40px_1.5fr_1fr_40px] lg:gap-4">
-                    {/* Avatar */}
-                    <div className={`w-8 h-8 rounded-lg overflow-hidden bg-slate-100 shrink-0 transition-transform duration-300 ${isSelected ? 'scale-90' : 'group-hover:scale-105'}`}>
-                        <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${student.id}&backgroundColor=f8fafc`} alt="avatar" className="w-full h-full object-cover" />
-                    </div>
-                    {/* Name */}
-                    <div className="min-w-0">
-                        <span className={`text-[12px] font-bold truncate tracking-tight block ${isSelected ? 'text-white' : 'text-slate-900'}`}>
-                            {student.prefix}{student.firstName} {student.lastName}
-                        </span>
-                    </div>
-                    {/* Code */}
-                    <div className="min-w-0">
-                        <span className={`text-[10px] font-medium truncate tracking-tight uppercase ${isSelected ? 'text-blue-100/80' : 'text-slate-400'}`}>
-                            {student.studentCode || 'N/A'}
-                        </span>
-                    </div>
-                    {/* Status — desktop only */}
-                    <div className={`hidden justify-end transition-colors lg:flex ${isSelected ? 'text-white' : 'text-slate-300 group-hover:text-slate-500'}`}>
-                        <MoreHorizontal size={14} />
-                    </div>
+                {/* Code */}
+                <span className={cn(
+                    "truncate text-[13px] font-black font-sukhumvit tabular-nums",
+                    isSelected ? (colorScheme === 'emerald' ? 'text-emerald-700' : 'text-blue-700') : 'text-slate-500'
+                )}>
+                    {student.studentCode || '—'}
+                </span>
+
+                {/* Name & Avatar */}
+                <div className="flex min-w-0 items-center gap-3">
+                    <StudentAvatar
+                        photoURL={student.photoURL}
+                        studentId={student.id}
+                        name={fullName}
+                        className="h-9 w-9 shrink-0 rounded-full"
+                    />
+                    <span className="truncate text-[13px] font-bold font-sukhumvit">
+                        {fullName}
+                    </span>
+                </div>
+
+                {/* Check / Remove Indicator */}
+                <div className="flex justify-center shrink-0">
+                    {colorScheme === 'emerald' ? (
+                        <button
+                            type="button"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onToggle();
+                            }}
+                            className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                            title="ถอดออกจากคิว"
+                        >
+                            <X size={14} />
+                        </button>
+                    ) : (
+                        isSelected && (
+                            <CheckCircle2 size={13} className="text-blue-600" />
+                        )
+                    )}
                 </div>
             </motion.div>
         );
     };
 
     const ProcessedStudentRow = ({ student }: { student: Student }) => (
-        <div className="flex items-center gap-3 border-b border-slate-100/70 px-4 py-2.5">
-            <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg bg-slate-100">
-                <img
-                    src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${student.id}&backgroundColor=f8fafc`}
-                    alt="avatar"
-                    className="h-full w-full object-cover"
-                />
-            </div>
-            <div className="min-w-0 flex-1">
-                <p className="truncate text-[12px] font-bold text-slate-800">
-                    {student.prefix}{student.firstName} {student.lastName}
-                </p>
-                <p className="truncate text-[10px] font-semibold text-slate-400">
-                    {student.studentCode || 'N/A'} · {student.gradeLevel || 'ไม่ระบุชั้น'}
-                </p>
-            </div>
-            <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-black text-amber-700">
-                ย้ายออก
+        <div
+            className="grid items-center gap-3 px-4 py-2.5 border-b border-slate-100 last:border-b-0 text-slate-700 hover:bg-muted/40 transition-colors"
+            style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 4.5rem' }}
+        >
+            <span className="truncate text-[13px] font-black font-sukhumvit text-slate-500 tabular-nums">
+                {student.studentCode || '—'}
             </span>
+            <div className="flex min-w-0 items-center gap-3">
+                <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                    <img
+                        src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${student.id}&backgroundColor=f8fafc`}
+                        alt="avatar"
+                        className="h-full w-full object-cover"
+                    />
+                </div>
+                <span className="truncate text-[13px] font-bold font-sukhumvit text-slate-800">
+                    {student.prefix ?? ''}{student.firstName} {student.lastName}
+                </span>
+            </div>
+            <div className="flex justify-center shrink-0">
+                <span className="whitespace-nowrap rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-black text-amber-700">
+                    ย้ายออก
+                </span>
+            </div>
         </div>
     );
 
 
     return (
-        <div className="relative flex flex-1 min-w-0 h-full flex-col overflow-hidden font-sukhumvit">
+        <div className="relative flex flex-1 min-w-0 h-full flex-col overflow-hidden font-sukhumvit pt-3">
+
+            {/* ── Tab bar: เลื่อนชั้น | จบการศึกษา | ย้ายออก ── */}
+            <div className="mb-4 shrink-0 border-b border-slate-200/80 px-2">
+                <div className="flex items-center gap-6">
+                    {([
+                        { id: 'promote', label: 'เลื่อนชั้น' },
+                        { id: 'graduate', label: 'จบการศึกษา' },
+                        { id: 'leave', label: 'ย้ายออก' },
+                    ] as { id: TransitionAction; label: string }[]).map(action => {
+                        const isActive = transitionAction === action.id;
+                        return (
+                            <button
+                                key={action.id}
+                                type="button"
+                                onClick={() => onTransitionActionChange(action.id)}
+                                className={cn(
+                                    'relative pb-2.5 text-[12px] font-bold transition-all cursor-pointer',
+                                    isActive
+                                        ? 'text-blue-600 font-black after:absolute after:bottom-0 after:left-0 after:h-0.5 after:w-full after:bg-blue-600 after:rounded-full'
+                                        : 'text-slate-400 hover:text-slate-700',
+                                )}
+                            >
+                                {action.label}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
 
             <div className={cn(
                 'relative z-10 flex min-h-0 flex-1 gap-3 lg:gap-4',
                 isMdOrBelow && 'pb-[4.5rem]',
             )}>
                 <>
-                    {/* LEFT PANEL — Source Students */}
+                    {/* Source Students */}
                     <div className={cn(
-                        'min-w-0 flex-col rounded-[1.5rem] border border-white/30 bg-white/30 p-3 shadow-sm lg:rounded-[2rem] lg:p-4',
+                        'min-w-0 flex-col px-2',
                         showSourcePanel ? 'flex flex-1' : 'hidden',
                         'lg:flex lg:max-w-[calc(50%-8px)] lg:flex-1',
                     )}>
 
-                        {/* Title Section */}
-                        <div className="mb-2 shrink-0">
-                            <div className="flex items-center justify-between">
-                                <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                                    <span className="w-1.5 h-3 bg-blue-600 rounded-full" />
-                                    ต้นทาง (Source)
-                                </h3>
-                                {isMdOrBelow && stagedStudents.length > 0 && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setMobileView('target')}
-                                        className="rounded-full bg-emerald-50 px-2.5 py-1 text-[9px] font-black text-emerald-700"
-                                    >
-                                        คิว {stagedStudents.length} คน →
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Search bar */}
-                        <div className="flex items-center gap-2 mb-3 shrink-0">
-                            <div className="relative flex-1 min-w-0">
-                                <Search className="absolute left-4.5 left-[14px] top-1/2 -translate-y-1/2 text-slate-400" size={13} />
-                                <input
-                                    type="text"
-                                    placeholder="ค้นหา..."
-                                    value={searchQuery}
-                                    onChange={e => setSearchQuery(e.target.value)}
-                                    className="h-8 w-full rounded-full border border-slate-200 bg-white/70 pl-9 pr-4 text-[11px] font-bold shadow-sm outline-none backdrop-blur-md transition-all placeholder:text-slate-400 focus:border-blue-300 focus:ring-2 focus:ring-blue-100 lg:h-9 lg:focus:ring-4"
-                                />
-                            </div>
-                        </div>
-
-                        {/* Filters Section */}
-                        <div className="mb-3 shrink-0 lg:mb-4">
-                            <div className="grid grid-cols-2 gap-1.5 lg:flex lg:flex-wrap lg:items-center lg:gap-2">
-                                <CapsuleSelect
-                                    compact
-                                    value={sourceYear}
-                                    onChange={e => { setSourceYear(e); setSourceClassroomId(''); }}
-                                    options={YEARS.map(y => ({ value: y, label: `ปี ${y}` }))}
-                                    className="min-w-0"
-                                />
-                                <CapsuleSelect
-                                    compact
-                                    value={sourceDept}
-                                    onChange={e => { setSourceDept(e); setSourceLevel(''); setSourceClassroomId(''); }}
-                                    options={[
-                                        { value: 'early', label: 'ปฐมวัย' },
-                                        { value: 'primary', label: 'ประถมฯ' },
-                                        { value: 'secondary', label: 'มัธยมฯ' },
-                                    ]}
-                                    placeholder="แผนก"
-                                    className="min-w-0"
-                                />
-                                <CapsuleSelect
-                                    compact
-                                    value={sourceLevel}
-                                    onChange={e => { setSourceLevel(e); setSourceClassroomId(''); }}
-                                    options={sourceDept ? GRADE_ORDER[sourceDept].map(g => ({ value: g, label: g })) : []}
-                                    placeholder="ชั้น"
-                                    disabled={!sourceDept}
-                                    className="min-w-0"
-                                />
-                                <CapsuleSelect
-                                    compact
-                                    value={sourceClassroomId}
-                                    onChange={e => setSourceClassroomId(e)}
-                                    options={sourceClassrooms.map(c => ({ value: c.id, label: c.className }))}
-                                    placeholder="ห้อง"
-                                    disabled={!sourceLevel}
-                                    className="min-w-0"
-                                />
-                                <div className="col-span-2 flex justify-end lg:col-span-1 lg:ml-auto">
-                                    <div className="flex items-center rounded-full border border-white bg-white/80 p-0.5 shadow-lg shadow-black/5 backdrop-blur-xl">
-                                        <motion.button
-                                            whileTap={{ scale: 0.95 }}
-                                            onClick={() => toggleAll(true)}
-                                            className="flex h-7 w-7 items-center justify-center rounded-full text-slate-700 transition-colors lg:h-7"
-                                            title="เลือกทั้งหมด"
-                                        >
-                                            <CheckSquare size={13} />
-                                        </motion.button>
-                                    </div>
+                        {/* Title and Search Section (Same Line) */}
+                        <div className="flex h-9 items-center justify-between gap-3 mb-3 shrink-0">
+                            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5 shrink-0">
+                                ต้นทาง (Source)
+                            </h3>
+                            <div className="flex items-center gap-2 flex-1 max-w-md justify-end min-w-0">
+                                <div className="relative flex-1 min-w-0 max-w-xs">
+                                    <Search className="absolute left-[14px] top-1/2 -translate-y-1/2 text-slate-400" size={13} />
+                                    <input
+                                        type="text"
+                                        placeholder="ค้นหา..."
+                                        value={searchQuery}
+                                        onChange={e => setSearchQuery(e.target.value)}
+                                        className="h-8 w-full rounded-full border border-slate-200 bg-white/70 pl-9 pr-4 text-[11px] font-bold outline-none backdrop-blur-md transition-all placeholder:text-slate-400 focus:border-blue-300 focus:ring-2 focus:ring-blue-100 lg:h-9 lg:focus:ring-4"
+                                    />
                                 </div>
                             </div>
                         </div>
@@ -575,33 +567,47 @@ export default function StudentTransitionTab() {
                                     <span className="text-sm font-bold">เลือกห้องเรียนต้นทางก่อน</span>
                                 </div>
                             ) : (
-                                <div className="flex flex-col pb-24">
-                                    <AnimatePresence>
-                                        {filteredSourceStudents
-                                            .sort((a, b) => (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true }) || a.firstName.localeCompare(b.firstName))
-                                            .map((student, index, arr) => {
-                                                const isSelected = selectedSourceIds.has(student.id);
-                                                const prevSelected = index > 0 && selectedSourceIds.has(arr[index - 1].id);
-                                                const nextSelected = index < arr.length - 1 && selectedSourceIds.has(arr[index + 1].id);
-                                                return (
-                                                    <StudentCard
-                                                        key={student.id}
-                                                        student={student}
-                                                        isSelected={isSelected}
-                                                        onToggle={() => stageStudent(student.id)}
-                                                        colorScheme="blue"
-                                                        isFirstInSelection={isSelected && !prevSelected}
-                                                        isLastInSelection={isSelected && !nextSelected}
-                                                    />
-                                                );
-                                            })}
-                                        {filteredSourceStudents.length === 0 && (
-                                            <div className="h-32 flex flex-col items-center justify-center text-slate-400 opacity-50 border-2 border-dashed border-slate-300 rounded-2xl">
-                                                <CheckCircle2 size={22} className="mb-2" />
-                                                <span className="text-xs font-bold">ไม่มีนักเรียน</span>
+                                <div className={cn("flex flex-col flex-1 min-h-0 mb-4", TABLE_SHELL)}>
+                                    <div className="border-b border-border bg-slate-100/90 shrink-0">
+                                        <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 2rem' }}>
+                                            <span className={TABLE_HEADER_CELL}>รหัส</span>
+                                            <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                                            <div className="flex justify-center shrink-0">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleAll(true)}
+                                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
+                                                    title="เลือกทั้งหมด"
+                                                >
+                                                    <CheckSquare size={13} />
+                                                </button>
                                             </div>
-                                        )}
-                                    </AnimatePresence>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col flex-1 overflow-y-auto">
+                                        <AnimatePresence>
+                                            {filteredSourceStudents
+                                                .sort((a, b) => (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true }) || a.firstName.localeCompare(b.firstName))
+                                                .map((student) => {
+                                                    const isSelected = selectedSourceIds.has(student.id);
+                                                    return (
+                                                        <StudentCard
+                                                            key={student.id}
+                                                            student={student}
+                                                            isSelected={isSelected}
+                                                            onToggle={() => stageStudent(student.id)}
+                                                            colorScheme="blue"
+                                                        />
+                                                    );
+                                                })}
+                                            {filteredSourceStudents.length === 0 && (
+                                                <div className="h-32 flex flex-col items-center justify-center text-slate-400 opacity-50 rounded-2xl m-3">
+                                                    <CheckCircle2 size={22} className="mb-2" />
+                                                    <span className="text-xs font-bold">ไม่มีนักเรียน</span>
+                                                </div>
+                                            )}
+                                        </AnimatePresence>
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -609,125 +615,82 @@ export default function StudentTransitionTab() {
 
                     {/* RIGHT PANEL — Staged Students */}
                     <div className={cn(
-                        'min-w-0 flex-col rounded-[1.5rem] border border-white/30 bg-white/30 p-3 shadow-sm lg:rounded-[2rem] lg:p-4',
+                        'min-w-0 flex-col px-2',
                         showTargetPanel ? 'flex flex-1' : 'hidden',
                         'lg:flex lg:max-w-[calc(50%-8px)] lg:flex-1',
                     )}>
 
-                        {/* Title and Filters Section */}
-                        <div className="mb-3 shrink-0 space-y-2.5 lg:mb-4 lg:space-y-3">
-                            <div className="flex items-center justify-between">
-                                <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                                    <span className="w-1.5 h-3 bg-emerald-600 rounded-full" />
-                                    ปลายทาง (Target / Action)
-                                </h3>
-                            </div>
+                        {/* Title and Filters Section (Same Line) */}
+                        <div className="flex h-9 items-center justify-between gap-3 mb-3 shrink-0">
+                            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5 shrink-0">
+                                ปลายทาง (Target)
+                            </h3>
 
-                            {/* Row 1: Action Selector */}
-                            <div className="flex w-full items-center gap-2">
-                                <div className="flex h-8 w-full items-center gap-0.5 rounded-full border border-black/[0.05] bg-white/40 p-0.5 backdrop-blur-md shadow-sm lg:h-9 lg:gap-1">
-                                    {([
-                                        { id: 'promote', label: 'เลื่อนชั้น', short: 'เลื่อน', icon: UserCheck },
-                                        { id: 'graduate', label: 'จบการศึกษา', short: 'จบ', icon: GraduationCap },
-                                        { id: 'leave', label: 'ย้ายออก', short: 'ออก', icon: LogOut },
-                                    ] as { id: TransitionAction; label: string; short: string; icon: React.ElementType }[]).map(action => {
-                                        const Icon = action.icon;
-                                        const isActive = transitionAction === action.id;
-                                        return (
+                            {/* Filters and Select All */}
+                            <div className="flex items-center gap-2 flex-1 max-w-md justify-end min-w-0">
+                                {transitionAction === 'promote' ? (
+                                    <Popover>
+                                        <PopoverTrigger asChild>
                                             <button
-                                                key={action.id}
                                                 type="button"
-                                                onClick={() => setTransitionAction(action.id)}
-                                                className={cn(
-                                                    'flex h-full flex-1 items-center justify-center gap-1 rounded-full px-1 text-[9px] font-black transition-all lg:gap-1.5 lg:px-3 lg:text-[10px]',
-                                                    isActive ? 'bg-emerald-600 text-white shadow-md' : 'text-black/55 hover:bg-black/[0.04] hover:text-black/70',
-                                                )}
+                                                className={HEADER_ICON_BTN}
+                                                title="ตั้งค่าปลายทาง"
                                             >
-                                                <Icon size={12} className="shrink-0 lg:hidden" />
-                                                <Icon size={13} className="hidden shrink-0 lg:block" />
-                                                <span className="lg:hidden">{action.short}</span>
-                                                <span className="hidden lg:inline">{action.label}</span>
+                                                <Settings size={16} className="text-slate-800" />
                                             </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-
-                            {/* Row 2: Filters and Select All */}
-                            <div className="flex w-full items-center gap-1.5 lg:gap-2">
-                                <AnimatePresence mode="popLayout">
-                                    {transitionAction === 'promote' ? (
-                                        <motion.div
-                                            key="promote-filters"
-                                            initial={{ opacity: 0, scale: 0.95 }}
-                                            animate={{ opacity: 1, scale: 1 }}
-                                            exit={{ opacity: 0, scale: 0.95 }}
-                                            className="grid min-w-0 flex-1 grid-cols-2 gap-1.5 lg:flex lg:flex-wrap lg:items-center lg:gap-2"
-                                        >
-                                            <CapsuleSelect
-                                                compact
-                                                value={targetYear}
-                                                onChange={e => setTargetYear(e)}
-                                                options={YEARS.map(y => ({ value: y, label: `ปี ${y}` }))}
-                                                className="min-w-0"
-                                            />
-                                            <CapsuleSelect
-                                                compact
-                                                value={targetDept}
-                                                onChange={e => { setTargetDept(e); setTargetLevel(''); setTargetClassroomId(''); }}
-                                                options={[
-                                                    { value: 'early', label: 'ปฐมวัย' },
-                                                    { value: 'primary', label: 'ประถมฯ' },
-                                                    { value: 'secondary', label: 'มัธยมฯ' },
-                                                ]}
-                                                placeholder="แผนก"
-                                                className="min-w-0"
-                                            />
-                                            <CapsuleSelect
-                                                compact
-                                                value={targetLevel}
-                                                onChange={e => { setTargetLevel(e); setTargetClassroomId(''); }}
-                                                options={targetDept ? GRADE_ORDER[targetDept].map(g => ({ value: g, label: g })) : []}
-                                                placeholder="ชั้น"
-                                                disabled={!targetDept}
-                                                className="min-w-0"
-                                            />
-                                            <CapsuleSelect
-                                                compact
-                                                value={targetClassroomId}
-                                                disabled={!targetLevel}
-                                                onChange={e => setTargetClassroomId(e)}
-                                                options={targetClassrooms.map(c => ({ value: c.id, label: c.className }))}
-                                                placeholder="ห้อง"
-                                                className="min-w-0"
-                                            />
-                                        </motion.div>
-                                    ) : (
-                                        <motion.div
-                                            key="action-alert"
-                                            initial={{ opacity: 0, scale: 0.95 }}
-                                            animate={{ opacity: 1, scale: 1 }}
-                                            exit={{ opacity: 0, scale: 0.95 }}
-                                            className="flex h-8 flex-1 items-center gap-2 rounded-full border border-amber-200/50 bg-amber-50/80 px-3 backdrop-blur-md shadow-sm lg:h-9 lg:px-4"
-                                        >
-                                            <AlertCircle className="shrink-0 text-amber-600" size={12} />
-                                            <p className="text-[9px] font-bold leading-none text-amber-700 lg:text-[10px]">
-                                                สถานะจะเปลี่ยนเป็น <strong className="font-black text-amber-800">{transitionAction === 'graduate' ? 'จบการศึกษา' : 'ย้ายออก'}</strong>
-                                            </p>
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
-
-                                <div className="flex shrink-0 items-center rounded-full border border-white bg-white/80 p-0.5 shadow-lg shadow-black/5 backdrop-blur-xl">
-                                    <motion.button
-                                        whileTap={{ scale: 0.95 }}
-                                        onClick={() => toggleAll(false)}
-                                        className="flex h-7 w-7 items-center justify-center rounded-full text-slate-700 transition-colors"
-                                        title="เลือกทั้งหมด"
-                                    >
-                                        <CheckSquare size={13} />
-                                    </motion.button>
-                                </div>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-64 p-4 flex flex-col gap-3 font-sukhumvit rounded-2xl bg-white shadow-xl border border-slate-100" align="end">
+                                            <div className="flex flex-col gap-1.5">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">ปีการศึกษา</span>
+                                                <CapsuleSelect
+                                                    value={targetYear}
+                                                    onChange={e => setTargetYear(e)}
+                                                    options={YEARS.map(y => ({ value: y, label: `ปี ${y}` }))}
+                                                />
+                                            </div>
+                                            <div className="flex flex-col gap-1.5">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">แผนก</span>
+                                                <CapsuleSelect
+                                                    value={targetDept}
+                                                    onChange={e => { setTargetDept(e); setTargetLevel(''); setTargetClassroomId(''); }}
+                                                    options={[
+                                                        { value: 'early', label: 'ปฐมวัย' },
+                                                        { value: 'primary', label: 'ประถมฯ' },
+                                                        { value: 'secondary', label: 'มัธยมฯ' },
+                                                    ]}
+                                                    placeholder="เลือกแผนก"
+                                                />
+                                            </div>
+                                            <div className="flex flex-col gap-1.5">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">ชั้นเรียน</span>
+                                                <CapsuleSelect
+                                                    value={targetLevel}
+                                                    onChange={e => { setTargetLevel(e); setTargetClassroomId(''); }}
+                                                    options={targetDept ? GRADE_ORDER[targetDept].map(g => ({ value: g, label: g })) : []}
+                                                    placeholder="เลือกชั้นเรียน"
+                                                    disabled={!targetDept}
+                                                />
+                                            </div>
+                                            <div className="flex flex-col gap-1.5">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">ห้องเรียน</span>
+                                                <CapsuleSelect
+                                                    value={targetClassroomId}
+                                                    disabled={!targetLevel}
+                                                    onChange={e => setTargetClassroomId(e)}
+                                                    options={targetClassrooms.map(c => ({ value: c.id, label: c.className }))}
+                                                    placeholder="เลือกห้องเรียน"
+                                                />
+                                            </div>
+                                        </PopoverContent>
+                                    </Popover>
+                                ) : (
+                                    <div className="flex h-9 items-center gap-1.5 px-1 shrink-0">
+                                        <AlertCircle className="shrink-0 text-rose-500 animate-pulse" size={13} />
+                                        <p className="text-[10px] font-black text-rose-600 font-sukhumvit">
+                                            สถานะ {transitionAction === 'graduate' ? 'จบการศึกษา' : 'ย้ายออก'}
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -757,61 +720,74 @@ export default function StudentTransitionTab() {
                             ) : (
                                 <>
                                     {stagedStudents.length > 0 && (
-                                        <div className="mb-3 flex flex-col pb-2">
-                                            <p className="mb-2 px-1 text-[10px] font-black uppercase tracking-wider text-emerald-600">
-                                                คิวรอประมวลผล · {stagedStudents.length} คน
-                                            </p>
-                                            <AnimatePresence>
-                                                {stagedStudents
-                                                    .sort((a, b) => (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true }) || a.firstName.localeCompare(b.firstName))
-                                                    .map((student, index, arr) => {
-                                                        const isSelected = selectedStagedIds.has(student.id);
-                                                        const prevSelected = index > 0 && selectedStagedIds.has(arr[index - 1].id);
-                                                        const nextSelected = index < arr.length - 1 && selectedStagedIds.has(arr[index + 1].id);
-                                                        return (
-                                                            <StudentCard
-                                                                key={student.id}
-                                                                student={student}
-                                                                isSelected={isSelected}
-                                                                onToggle={() => unstageStudent(student.id)}
-                                                                colorScheme="emerald"
-                                                                isFirstInSelection={isSelected && !prevSelected}
-                                                                isLastInSelection={isSelected && !nextSelected}
-                                                            />
-                                                        );
-                                                    })}
-                                            </AnimatePresence>
+                                        <div className={cn("flex flex-1 min-h-0 flex-col mb-4", TABLE_SHELL)}>
+                                            <div className="border-b border-border bg-slate-100/90 shrink-0">
+                                                <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 2rem' }}>
+                                                    <span className={TABLE_HEADER_CELL}>รหัส</span>
+                                                    <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                                                    <div className="flex justify-center shrink-0">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => toggleAll(false)}
+                                                            className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
+                                                            title="เลือกทั้งหมด"
+                                                        >
+                                                            <CheckSquare size={13} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-col flex-1 overflow-y-auto">
+                                                <AnimatePresence>
+                                                    {stagedStudents
+                                                        .sort((a, b) => (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true }) || a.firstName.localeCompare(b.firstName))
+                                                        .map((student) => {
+                                                            const isSelected = selectedStagedIds.has(student.id);
+                                                            return (
+                                                                <StudentCard
+                                                                    key={student.id}
+                                                                    student={student}
+                                                                    isSelected={isSelected}
+                                                                    onToggle={() => unstageStudent(student.id)}
+                                                                    colorScheme="emerald"
+                                                                />
+                                                            );
+                                                        })}
+                                                </AnimatePresence>
+                                            </div>
                                         </div>
                                     )}
 
-                                    {transitionAction === 'leave' && (
-                                        <div className={cn('flex min-h-0 flex-col', stagedStudents.length > 0 ? 'border-t border-slate-200/70 pt-3' : 'flex-1')}>
-                                            <div className="mb-2 flex items-center justify-between px-1">
-                                                <p className="text-[10px] font-black uppercase tracking-wider text-amber-700">
-                                                    รายชื่อนักเรียนที่ย้ายออกแล้ว
-                                                </p>
-                                                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
-                                                    {filteredLeftStudents.length} คน
-                                                </span>
-                                            </div>
-
+                                    {transitionAction === 'leave' && stagedStudents.length === 0 && (
+                                        <div className="flex-1 overflow-y-auto scrollbar-hide flex flex-col pt-1">
                                             {loadingLeftStudents ? (
                                                 <div className="flex flex-1 items-center justify-center py-10 text-slate-400">
                                                     <Loader2 size={20} className="animate-spin" />
                                                 </div>
                                             ) : filteredLeftStudents.length === 0 ? (
-                                                <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-amber-100 bg-amber-50/40 px-4 py-12 text-center">
-                                                    <LogOut size={24} className="mb-2 text-amber-300" />
-                                                    <p className="text-sm font-bold text-slate-500">ยังไม่มีรายชื่อย้ายออก</p>
+                                                <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200/60 py-20 text-slate-400 opacity-50">
+                                                    <LogOut size={28} className="mb-2 text-slate-300" />
+                                                    <p className="text-sm font-bold">ยังไม่มีรายชื่อย้ายออก</p>
                                                     <p className="mt-1 text-[11px] font-medium text-slate-400">
                                                         {sourceLevel ? `ในชั้น ${sourceLevel}` : 'เลือกชั้นเรียนที่ต้นทางเพื่อกรองรายชื่อ'}
                                                     </p>
                                                 </div>
                                             ) : (
-                                                <div className="overflow-hidden rounded-2xl border border-amber-100/80 bg-white/55">
-                                                    {filteredLeftStudents.map((student) => (
-                                                        <ProcessedStudentRow key={student.id} student={student} />
-                                                    ))}
+                                                <div className={cn("flex flex-col flex-1 min-h-0 mb-4", TABLE_SHELL)}>
+                                                    <div className="border-b border-border bg-slate-100/90 shrink-0">
+                                                        <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 4.5rem' }}>
+                                                            <span className={TABLE_HEADER_CELL}>รหัส</span>
+                                                            <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                                                            <div className="flex h-6 items-center justify-center shrink-0">
+                                                                <span className={cn(TABLE_HEADER_CELL, "text-center whitespace-nowrap")}>สถานะ</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex flex-col flex-1 overflow-y-auto">
+                                                        {filteredLeftStudents.map((student) => (
+                                                            <ProcessedStudentRow key={student.id} student={student} />
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             )}
                                         </div>

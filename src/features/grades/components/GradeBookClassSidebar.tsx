@@ -49,12 +49,20 @@ type Props = {
   showRooms?: boolean;
   /** Extra content in the scroll area (e.g. teacher list / subject groups). */
   children?: ReactNode;
-  /** Desktop-only control above dept cards (e.g. sidebar collapse). */
+  /** Control row above dept cards (e.g. search, settings, sidebar collapse). Desktop-only unless headerActionMobile. */
   headerAction?: ReactNode;
+  /** Show headerAction on mobile too (default: desktop-only). */
+  headerActionMobile?: boolean;
+  /** Hide the card frame (border/background/rounding) on mobile — full-bleed. Default false. */
+  hideFrameOnMobile?: boolean;
   /** Desktop: narrow rail — dept icons only; content stays mounted. */
   collapsed?: boolean;
   /** Desktop collapsed rail content under dept icons (e.g. mode + teacher avatars). */
   collapsedExtra?: ReactNode;
+  /** Disable enter/exit animations on grade/room sections. Default false. */
+  disableAnimations?: boolean;
+  /** Hide the department card grid entirely (e.g. student view — dept/grade is fixed, skip straight to children). Default false. */
+  hideDeptCards?: boolean;
 };
 
 export default function GradeBookClassSidebar({
@@ -72,13 +80,18 @@ export default function GradeBookClassSidebar({
   showRooms = true,
   children,
   headerAction,
+  headerActionMobile = false,
+  hideFrameOnMobile = false,
   collapsed = false,
   collapsedExtra,
+  disableAnimations = false,
+  hideDeptCards = false,
 }: Props) {
   return (
     <aside
       className={cn(
-        'relative flex h-full max-h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-card',
+        'relative flex h-full max-h-full min-h-0 w-full flex-col overflow-hidden',
+        hideFrameOnMobile ? 'lg:rounded-2xl lg:border lg:border-border lg:bg-card' : 'rounded-2xl border border-border bg-card',
         headerAction
           ? 'px-2 pb-2 sm:px-2.5 sm:pb-2.5'
           : 'p-2 sm:p-2.5',
@@ -88,7 +101,8 @@ export default function GradeBookClassSidebar({
       {headerAction ? (
         <div
           className={cn(
-            'mb-2 hidden min-h-[3.25rem] w-full shrink-0 items-center gap-2 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:flex',
+            'mb-2 min-h-[3.25rem] w-full shrink-0 items-center gap-2 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5',
+            headerActionMobile ? 'flex' : 'hidden lg:flex',
             collapsed ? 'justify-center' : 'justify-end',
           )}
         >
@@ -102,7 +116,7 @@ export default function GradeBookClassSidebar({
         )}
         onWheel={(e) => e.stopPropagation()}
       >
-        <section className={cn(collapsed && 'lg:w-full')}>
+        <section className={cn(collapsed && 'lg:w-full', hideDeptCards && 'hidden')}>
           <div
             className={cn(
               'grid grid-cols-1 gap-2',
@@ -178,15 +192,9 @@ export default function GradeBookClassSidebar({
           <div className={cn(collapsed && 'lg:hidden')}>{afterDept}</div>
         ) : null}
 
-        <AnimatePresence initial={false}>
-          {selectedDept && showGradeRoomNav && (
-            <motion.section
-              key={`grades-${selectedDept}`}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              className={cn(collapsed && 'lg:hidden')}
-            >
+        {disableAnimations ? (
+          selectedDept && showGradeRoomNav && (
+            <section className={cn(collapsed && 'lg:hidden')}>
               {loading ? (
                 <div className="grid grid-cols-3 gap-2">
                   {Array.from({ length: 6 }).map((_, i) => (
@@ -220,19 +228,59 @@ export default function GradeBookClassSidebar({
                   })}
                 </div>
               )}
-            </motion.section>
-          )}
-        </AnimatePresence>
+            </section>
+          )
+        ) : (
+          <AnimatePresence initial={false}>
+            {selectedDept && showGradeRoomNav && (
+              <motion.section
+                key={`grades-${selectedDept}`}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                className={cn(collapsed && 'lg:hidden')}
+              >
+                {loading ? (
+                  <div className="grid grid-cols-3 gap-2">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={i} className="h-16 animate-pulse rounded-2xl bg-muted" />
+                    ))}
+                  </div>
+                ) : gradeOptions.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border px-3 py-6 text-center text-[12px] font-bold text-muted-foreground">
+                    ไม่พบระดับชั้นในแผนกนี้
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-2">
+                    {gradeOptions.map((grade) => {
+                      const active = selectedGrade === grade;
+                      return (
+                        <button
+                          key={grade}
+                          type="button"
+                          onClick={() => onSelectGrade(grade)}
+                          className={cn(
+                            'flex flex-col items-center justify-center gap-1 rounded-xl border px-2 py-3 transition-all',
+                            active
+                              ? 'border-foreground bg-foreground text-background shadow-sm'
+                              : 'border-border bg-muted/40 text-foreground hover:bg-muted',
+                          )}
+                        >
+                          <HiAcademicCap className={cn('h-4 w-4', active ? 'text-background' : 'text-muted-foreground')} />
+                          <span className="text-[12px] font-black font-sukhumvit">{grade}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </motion.section>
+            )}
+          </AnimatePresence>
+        )}
 
-        <AnimatePresence initial={false}>
-          {selectedDept && showGradeRoomNav && selectedGrade && showRooms && (
-            <motion.section
-              key={`rooms-${selectedDept}-${selectedGrade}`}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              className={cn('pb-1', collapsed && 'lg:hidden')}
-            >
+        {disableAnimations ? (
+          selectedDept && showGradeRoomNav && selectedGrade && selectedGrade !== 'all' && showRooms && (
+            <section className={cn('pb-1', collapsed && 'lg:hidden')}>
               {loading ? (
                 <div className="flex flex-col gap-2">
                   {Array.from({ length: 3 }).map((_, i) => (
@@ -286,12 +334,78 @@ export default function GradeBookClassSidebar({
                   })}
                 </div>
               )}
-            </motion.section>
-          )}
-        </AnimatePresence>
+            </section>
+          )
+        ) : (
+          <AnimatePresence initial={false}>
+            {selectedDept && showGradeRoomNav && selectedGrade && selectedGrade !== 'all' && showRooms && (
+              <motion.section
+                key={`rooms-${selectedDept}-${selectedGrade}`}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                className={cn('pb-1', collapsed && 'lg:hidden')}
+              >
+                {loading ? (
+                  <div className="flex flex-col gap-2">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <div key={i} className="h-14 animate-pulse rounded-2xl bg-muted" />
+                    ))}
+                  </div>
+                ) : classOptions.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border px-3 py-6 text-center text-[12px] font-bold text-muted-foreground">
+                    ไม่พบห้องเรียนในระดับชั้นนี้
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {classOptions.map((room) => {
+                      const active = selectedClassId === room.id;
+                      return (
+                        <button
+                          key={room.id}
+                          type="button"
+                          onClick={() => onSelectClass(room.id)}
+                          className={cn(
+                            'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all',
+                            active
+                              ? 'border-foreground bg-foreground text-background shadow-sm'
+                              : 'border-border bg-card text-foreground hover:bg-muted/50',
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                              active ? 'bg-background/15' : 'bg-muted',
+                            )}
+                          >
+                            <HiHomeModern className={cn('h-4 w-4', active ? 'text-background' : 'text-muted-foreground')} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] font-black font-sukhumvit">
+                              {room.className}
+                            </span>
+                            <span
+                              className={cn(
+                                'block text-[10px] font-bold',
+                                active ? 'text-background/75' : 'text-muted-foreground',
+                              )}
+                            >
+                              {room.studentCount} นักเรียน
+                              {room.track ? ` · ${room.track}` : ''}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </motion.section>
+            )}
+          </AnimatePresence>
+        )}
 
-        {selectedDept ? (
-          <div className={cn(collapsed && 'lg:hidden')}>{children}</div>
+        {children ? (
+          <div className={cn('w-full flex-1 min-h-0 flex flex-col', collapsed && 'lg:hidden')}>{children}</div>
         ) : null}
       </div>
     </aside>

@@ -29,6 +29,7 @@ import { useLeaveRequesterClassMap, type LeaveRequesterProfile } from '@/feature
 import { getInitials } from '@/features/profile/profileLayoutShared';
 import { getGradeLevelBadgeStyle } from '@/lib/school/gradeLevelBadge';
 import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
+import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
 
 type StatusFilter = 'all' | LeaveStatus;
 
@@ -53,7 +54,7 @@ const LEAVE_REQUESTS_PER_PAGE = 8;
 
 const LEAVE_CARD_OUTER = 'px-0.5 py-0.5';
 const LEAVE_CARD_SHELL =
-  'rounded-2xl bg-white/90 p-3 shadow-sm cursor-pointer transition-all hover:bg-white';
+  'rounded-2xl cursor-pointer transition-all overflow-hidden relative';
 
 function formatLeaveDateCompact(startDate: string, endDate: string): string {
   if (startDate === endDate) return formatDate(startDate);
@@ -105,57 +106,6 @@ function resolveLeaveApproverLabels(
 }
 
 // ── Status Badge ─────────────────────────────────────────────────────────────
-function LeaveListPagination({
-  page,
-  totalPages,
-  totalItems,
-  rangeStart,
-  rangeEnd,
-  itemLabel,
-  onPageChange,
-}: {
-  page: number;
-  totalPages: number;
-  totalItems: number;
-  rangeStart: number;
-  rangeEnd: number;
-  itemLabel: string;
-  onPageChange: (page: number) => void;
-}) {
-  if (totalPages <= 1) return null;
-
-  return (
-    <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
-      <p className="text-[11px] font-semibold text-slate-400">
-        แสดง {rangeStart}–{rangeEnd} จาก {totalItems} {itemLabel}
-      </p>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          disabled={page === 1}
-          onClick={() => onPageChange(Math.max(page - 1, 1))}
-          className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-4 py-1.5 text-[11px] font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          <ChevronLeft className="h-3.5 w-3.5" />
-          ก่อนหน้า
-        </button>
-        <span className="px-2 text-[11px] font-medium text-slate-400">
-          {page} / {totalPages}
-        </span>
-        <button
-          type="button"
-          disabled={page === totalPages}
-          onClick={() => onPageChange(Math.min(page + 1, totalPages))}
-          className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-4 py-1.5 text-[11px] font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          ถัดไป
-          <ChevronRight className="h-3.5 w-3.5" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function StatusPill({ status }: { status: LeaveStatus }) {
   const c = STATUS_CONFIG[status];
   return (
@@ -225,13 +175,23 @@ function LeaveCard({
   const approverLabels = resolveLeaveApproverLabels(req, requesterProfile);
   const showApproverList = showRequester || showApprover;
 
+  const statusColor = {
+    pending: '#f59e0b',
+    approved: '#10b981',
+    rejected: '#ef4444',
+  }[req.status] || '#6366f1';
+
   return (
     <motion.div layout className={LEAVE_CARD_OUTER}>
       <div
         className={cn(LEAVE_CARD_SHELL, expanded && 'ring-2 ring-blue-100')}
         onClick={() => setExpanded(v => !v)}
+        style={{
+          backgroundColor: statusColor,
+          backgroundImage: 'linear-gradient(45deg, rgba(255, 255, 255, 0.28) 0%, rgba(0, 0, 0, 0.25) 100%)',
+        }}
       >
-        <div className="flex items-start justify-between gap-2">
+        <div className="relative z-10 p-3 flex items-start justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-start gap-2.5">
             {showAvatar && (
               req.requesterPhotoUrl ? (
@@ -249,14 +209,14 @@ function LeaveCard({
 
             <div className="min-w-0 flex-1">
               <p
-                className="truncate text-[13px] font-bold text-slate-800"
+                className="truncate text-[13px] font-bold text-white"
                 title={showRequester ? displayName : LEAVE_TYPE_LABEL[req.leaveType]}
               >
                 {showRequester ? displayName : LEAVE_TYPE_LABEL[req.leaveType]}
               </p>
 
               {showRequester && req.requesterStudentCode && (
-                <p className="mt-0.5 text-[11px] font-medium text-blue-600 tabular-nums">
+                <p className="mt-0.5 text-[11px] font-medium text-white/80 tabular-nums">
                   รหัส {req.requesterStudentCode}
                 </p>
               )}
@@ -275,29 +235,29 @@ function LeaveCard({
           </div>
 
           <div className="shrink-0 text-center">
-            <p className="mb-0.5 text-[9px] font-black uppercase tracking-wide text-slate-400">
+            <p className="mb-0.5 text-[9px] font-black uppercase tracking-wide text-white/60">
               สถานะ
             </p>
             <StatusPill status={req.status} />
           </div>
         </div>
 
-        <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-slate-100 pt-2.5">
+        <div className="relative z-10 mt-2.5 px-3 pb-3 grid grid-cols-3 gap-2 border-t border-white/20 pt-2.5">
           <div>
-            <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+            <p className="text-[9px] font-black uppercase tracking-wide text-white/60">
               ประเภท
             </p>
-            <p className="mt-0.5 text-[11px] font-bold text-slate-700">
+            <p className="mt-0.5 text-[11px] font-bold text-white">
               {LEAVE_TYPE_LABEL[req.leaveType]}
             </p>
           </div>
 
           <div className="text-center">
-            <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+            <p className="text-[9px] font-black uppercase tracking-wide text-white/60">
               ยื่นคำขอ
             </p>
             <p
-              className="mt-0.5 text-[10px] font-bold leading-tight text-slate-600 tabular-nums"
+              className="mt-0.5 text-[10px] font-bold leading-tight text-white/80 tabular-nums"
               title={submittedAtLabel}
             >
               {submittedAtLabel}
@@ -305,29 +265,29 @@ function LeaveCard({
           </div>
 
           <div className="text-right">
-            <p className="mb-0.5 text-[9px] font-black uppercase tracking-wide text-slate-400">
+            <p className="mb-0.5 text-[9px] font-black uppercase tracking-wide text-white/60">
               วันที่ลา
             </p>
             <span
-              className="inline-flex max-w-[11rem] items-center justify-center rounded-lg bg-blue-50 px-2 py-0.5 text-[11px] font-black text-blue-700 sm:max-w-none"
+              className="inline-flex max-w-[11rem] items-center justify-center rounded-lg bg-white/30 px-2 py-0.5 text-[11px] font-black text-white sm:max-w-none"
               title={dateLabel}
             >
               <span className="truncate">{dateLabel}</span>
-              <span className="ml-1 shrink-0 text-blue-500">({days} วัน)</span>
+              <span className="ml-1 shrink-0">({days} วัน)</span>
             </span>
           </div>
         </div>
 
         {showApproverList && approverLabels.length > 0 && (
-          <div className="mt-2.5 border-t border-slate-100 pt-2.5">
-            <p className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+          <div className="relative z-10 mt-2.5 px-3 border-t border-white/20 pt-2.5">
+            <p className="text-[9px] font-black uppercase tracking-wide text-white/60">
               ผู้อนุมัติ
             </p>
             <div className="mt-1 flex flex-wrap gap-1">
               {approverLabels.map((name) => (
                 <span
                   key={name}
-                  className="inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-bold text-violet-700"
+                  className="inline-flex items-center rounded-md bg-white/30 px-1.5 py-0.5 text-[10px] font-bold text-white"
                 >
                   {name}
                 </span>
@@ -338,20 +298,20 @@ function LeaveCard({
 
         {req.status === 'pending' && onApprove && onReject && (
           <div
-            className="mt-2.5 flex items-center justify-end gap-1.5 border-t border-slate-100 pt-2.5"
+            className="relative z-10 mt-2.5 px-3 pb-3 flex items-center justify-end gap-1.5 border-t border-white/20 pt-2.5"
             onClick={e => e.stopPropagation()}
           >
             <button
               type="button"
               onClick={async () => { await onApprove(req.id); }}
-              className="inline-flex h-7 items-center justify-center rounded-lg bg-emerald-50 px-3 text-[11px] font-black text-emerald-700 transition-all hover:bg-emerald-100"
+              className="inline-flex h-7 items-center justify-center rounded-lg bg-white/30 px-3 text-[11px] font-black text-white transition-all hover:bg-white/40"
             >
               อนุมัติ
             </button>
             <button
               type="button"
               onClick={() => onReject(req.id)}
-              className="inline-flex h-7 items-center justify-center rounded-lg bg-rose-50 px-3 text-[11px] font-black text-rose-700 transition-all hover:bg-rose-100"
+              className="inline-flex h-7 items-center justify-center rounded-lg bg-white/30 px-3 text-[11px] font-black text-white transition-all hover:bg-white/40"
             >
               ปฏิเสธ
             </button>
@@ -464,13 +424,13 @@ function SubmitModal({
     >
       <div className="space-y-6 py-2">
         {isSameDayLeaveCutoffPassed() && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs font-bold text-amber-700">
             {LEAVE_SAME_DAY_CUTOFF_MESSAGE}
           </div>
         )}
 
         {submitError && (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-bold text-rose-600">
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs font-bold text-rose-600">
             {submitError}
           </div>
         )}
@@ -666,6 +626,10 @@ export default function LeaveManagementPage() {
     if (action === 'new') setShowSubmit(true);
   }, [action]);
 
+  useEffect(() => {
+    document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+  }, [pageTab]);
+
   const tabs: { key: LeavePageTab; label: string }[] = isAdmin
     ? [
         { key: 'my', label: 'คำขอของฉัน' },
@@ -673,20 +637,25 @@ export default function LeaveManagementPage() {
         { key: 'report', label: 'รายงาน' },
         { key: 'settings', label: 'ตั้งค่า' },
       ]
-    : [
-        { key: 'my', label: 'คำขอของฉัน' },
-        { key: 'team', label: isTeacher ? 'การลานักเรียน' : 'ทีมงาน' },
-      ];
+    : isTeacher
+      ? [
+          { key: 'my', label: 'คำขอของฉัน' },
+          { key: 'team', label: 'การลานักเรียน' },
+        ]
+      : [
+          { key: 'my', label: 'คำขอของฉัน' },
+          { key: 'team', label: 'ทีมงาน' },
+        ];
 
   return (
-    <div className="flex flex-1 flex-col min-h-0 gap-5 pb-28 px-3 md:px-6">
+    <div className="flex h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)] min-h-0 w-full flex-col gap-5 overflow-hidden pb-28 px-3 md:px-6">
       <LeavePageTabMenu tabs={tabs} pageTab={pageTab} onTabChange={setPageTab} />
 
       {pageTab === 'my' && (
         <MyLeavePanel displayName={displayName} photoUrl={photoUrl} uid={uid} requesterType={requesterType} userData={userData} showSubmit={showSubmit} setShowSubmit={setShowSubmit} />
       )}
       {pageTab === 'team' && (
-        <TeamLeavePanel isTeacher={isTeacher} />
+        isTeacher ? <StudentLeaveReviewPanel /> : <TeamLeavePanel isTeacher={isTeacher} />
       )}
       {pageTab === 'report' && isAdmin && (
         <ReportPanel />
@@ -735,51 +704,55 @@ function MyLeavePanel({ displayName, photoUrl, uid, requesterType, userData, sho
   };
 
   return (
-    <div className="flex flex-col gap-5">
+    <>
       {headerActionsPortalEl && createPortal(
-        <motion.button
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
+        <button
+          type="button"
           onClick={() => setShowSubmit(true)}
-          className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700 transition-all active:scale-95"
+          className={HEADER_ICON_BTN}
           title="ยื่นคำขอลาใหม่"
         >
-          <Plus size={18} />
-        </motion.button>,
+          <Plus size={16} />
+        </button>,
         headerActionsPortalEl
       )}
 
-      <div className="flex-1 w-full space-y-4 bg-white/90 backdrop-blur-xl rounded-[2.5rem] p-6 border-2 border-slate-100 min-h-0 overflow-y-auto">
-        <p className="text-sm font-black text-slate-800 uppercase tracking-tight mb-4">
-          {myHook.requests.length > 0 ? `คำขอของฉัน (${activeRequests.length})` : 'ไม่พบคำขอ'}
-        </p>
-        {myHook.loading ? (
-          <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
-            <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
-            <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
-          </div>
-        ) : activeRequests.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
-            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-              <ClipboardList size={32} className="text-slate-300" />
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
+        <div className="mb-2 flex h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border pb-2 pt-2 sm:pt-2.5">
+          <p className="text-sm font-black text-foreground uppercase tracking-tight font-sukhumvit">
+            {myHook.requests.length > 0 ? `คำขอของฉัน (${activeRequests.length})` : 'ไม่พบคำขอ'}
+          </p>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {myHook.loading ? (
+            <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
+              <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
+              <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
             </div>
-            <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
-            <p className="text-xs font-bold text-slate-400 mt-1">
-              เมื่อมีการยื่นคำขอใหม่ รายการจะปรากฏขึ้นที่นี่
-            </p>
-          </div>
-        ) : (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-2.5">
-            {activeRequests.map(req => (
-              <LeaveCard
-                key={req.id}
-                req={req}
-                showApprover={true}
-                requesterProfile={requesterType === 'student' ? (requesterClassMap.get(uid) ?? null) : null}
-              />
-            ))}
-          </motion.div>
-        )}
+          ) : activeRequests.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
+              <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+                <ClipboardList size={32} className="text-slate-300" />
+              </div>
+              <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
+              <p className="text-xs font-bold text-slate-400 mt-1">
+                เมื่อมีการยื่นคำขอใหม่ รายการจะปรากฏขึ้นที่นี่
+              </p>
+            </div>
+          ) : (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex h-full flex-col gap-2.5 overflow-y-auto">
+              {activeRequests.map(req => (
+                <LeaveCard
+                  key={req.id}
+                  req={req}
+                  showApprover={true}
+                  requesterProfile={requesterType === 'student' ? (requesterClassMap.get(uid) ?? null) : null}
+                />
+              ))}
+            </motion.div>
+          )}
+        </div>
       </div>
 
       <AnimatePresence>
@@ -787,6 +760,225 @@ function MyLeavePanel({ displayName, photoUrl, uid, requesterType, userData, sho
           <SubmitModal
             onClose={() => setShowSubmit(false)}
             onSubmit={handleSubmit}
+          />
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
+// ── Student Leave Review Panel (teacher) ────────────────────────────────────
+// Built as a single scroll region on purpose — no nested flex-1/overflow chains,
+// no internal "sticky header + pinned footer" — that layered layout kept drifting
+// out of sync with the page's fixed h-[calc(100dvh-4.25rem)] shell.
+function StudentLeaveReviewPanel() {
+  const { activeYear, year } = useActiveAcademicYear();
+  const sinceDate = activeYear?.startDate || defaultAcademicYearStart();
+  const { requests, loading, updateStatus } = useStudentLeaveRequests(sinceDate);
+  const { user, userData } = useAuth();
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+
+  const requesterIds = useMemo(
+    () => requests.map((r) => r.requesterId).filter(Boolean),
+    [requests],
+  );
+  const requesterClassMap = useLeaveRequesterClassMap(year, requesterIds);
+
+  const activeRequests = useMemo(() => {
+    const filtered = requests.filter((r) => statusFilter === 'all' || r.status === statusFilter);
+    return sortLeaveRequestsByNewest(filtered);
+  }, [requests, statusFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(activeRequests.length / LEAVE_REQUESTS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const rangeStart = activeRequests.length === 0 ? 0 : (currentPage - 1) * LEAVE_REQUESTS_PER_PAGE + 1;
+  const rangeEnd = Math.min(currentPage * LEAVE_REQUESTS_PER_PAGE, activeRequests.length);
+  const paginatedRequests = useMemo(
+    () => activeRequests.slice((currentPage - 1) * LEAVE_REQUESTS_PER_PAGE, currentPage * LEAVE_REQUESTS_PER_PAGE),
+    [activeRequests, currentPage],
+  );
+
+  const currentApproverName = userData?.name || userData?.displayName || userData?.fullName || userData?.email || user?.displayName || 'ผู้ใช้';
+  const currentApproverId = user?.uid || '';
+
+  const handleApprove = async (id: string) => {
+    await updateStatus(id, 'approved', undefined, currentApproverId, currentApproverName);
+  };
+
+  const handleRejectConfirm = async (id: string, note: string) => {
+    await updateStatus(id, 'rejected', note, currentApproverId, currentApproverName);
+  };
+
+  return (
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
+      {/* TOP BAR — identical recipe to MyLeavePanel's top bar */}
+      <div className="mb-2 flex h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border pb-2 pt-2 sm:pt-2.5">
+        <div className="flex items-center gap-1 rounded-xl bg-muted p-1 w-fit">
+          {([
+            { value: 'all' as StatusFilter, label: 'ทั้งหมด' },
+            { value: 'pending' as StatusFilter, label: 'รอพิจารณา' },
+            { value: 'approved' as StatusFilter, label: 'อนุมัติแล้ว' },
+            { value: 'rejected' as StatusFilter, label: 'ไม่อนุมัติ' },
+          ]).map((opt) => {
+            const isActive = statusFilter === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setStatusFilter(opt.value)}
+                className={cn(
+                  'whitespace-nowrap rounded-lg px-3.5 py-1 text-[11px] font-black font-sukhumvit',
+                  isActive ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Single scroll region — everything scrolls together, no nested overflow */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
+            <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
+            <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
+          </div>
+        ) : activeRequests.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
+            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+              <ClipboardList size={32} className="text-slate-300" />
+            </div>
+            <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
+            <p className="text-xs font-bold text-slate-400 mt-1">ยังไม่มีนักเรียนคนใดยื่นคำขอลา</p>
+          </div>
+        ) : (
+          <>
+            {/* Mobile: cards */}
+            <div className="flex flex-col gap-2.5 md:hidden">
+              {paginatedRequests.map((req) => (
+                <LeaveCard
+                  key={req.id}
+                  req={req}
+                  showRequester={true}
+                  requesterProfile={requesterClassMap.get(req.requesterId) ?? null}
+                  onApprove={handleApprove}
+                  onReject={(id) => setRejectTarget(id)}
+                />
+              ))}
+            </div>
+
+            {/* Desktop: table — no internal scroll, scrolls together with parent */}
+            <div className="hidden md:block rounded-xl border border-border overflow-hidden">
+              <div
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }}
+                className="gap-3 border-b border-border bg-muted px-3 py-3"
+              >
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ผู้ยื่นคำขอ</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ประเภท</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">วันที่ลา</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">สถานะ</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">การดำเนินการ</p>
+              </div>
+              {paginatedRequests.map((req) => {
+                const statusCfg = STATUS_CONFIG[req.status];
+                const days = countDays(req.startDate, req.endDate);
+                return (
+                  <div
+                    key={req.id}
+                    style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }}
+                    className="gap-3 border-b border-border px-3 py-3 items-center hover:bg-muted/40 last:border-b-0"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-bold text-foreground font-sukhumvit truncate">{req.requesterName || '—'}</p>
+                      {req.requesterStudentCode && (
+                        <p className="text-[11px] font-medium text-blue-600 tabular-nums mt-0.5">รหัส {req.requesterStudentCode}</p>
+                      )}
+                    </div>
+                    <p className="text-[13px] font-bold text-foreground font-sukhumvit">{LEAVE_TYPE_LABEL[req.leaveType]}</p>
+                    <div>
+                      <p className="text-[13px] font-bold text-foreground font-sukhumvit">{formatLeaveDateCompact(req.startDate, req.endDate)}</p>
+                      <p className="text-[11px] font-semibold text-muted-foreground mt-0.5">{days} วัน</p>
+                    </div>
+                    <div>
+                      <span className={cn('inline-flex min-w-[80px] items-center justify-center rounded-lg px-2 py-0.5 text-[11px] font-black', statusCfg.bg, statusCfg.text)}>
+                        {statusCfg.label}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {req.status === 'pending' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={async () => { await handleApprove(req.id); }}
+                            className="inline-flex h-7 items-center justify-center rounded-lg bg-emerald-50 px-2 text-[10px] font-black text-emerald-700 hover:bg-emerald-100"
+                            title="อนุมัติ"
+                          >
+                            อนุมัติ
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRejectTarget(req.id)}
+                            className="inline-flex h-7 items-center justify-center rounded-lg bg-rose-50 px-2 text-[10px] font-black text-rose-700 hover:bg-rose-100"
+                            title="ปฏิเสธ"
+                          >
+                            ปฏิเสธ
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-slate-300 font-bold text-[13px] pl-4">—</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {totalPages > 1 && (
+              <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
+                <p className="text-[11px] font-semibold text-slate-400">
+                  แสดง {rangeStart}–{rangeEnd} จาก {activeRequests.length} คำขอ
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={currentPage === 1}
+                    onClick={() => setPage(Math.max(currentPage - 1, 1))}
+                    className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-4 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    ก่อนหน้า
+                  </button>
+                  <span className="px-2 text-[11px] font-medium text-slate-400">{currentPage} / {totalPages}</span>
+                  <button
+                    type="button"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setPage(Math.min(currentPage + 1, totalPages))}
+                    className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-4 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    ถัดไป
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {rejectTarget && (
+          <RejectModal
+            requestId={rejectTarget}
+            onClose={() => setRejectTarget(null)}
+            onConfirm={handleRejectConfirm}
           />
         )}
       </AnimatePresence>
@@ -851,42 +1043,45 @@ function TeamLeavePanelContent({
   };
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Status Filter Tabs */}
-      <div className="flex items-center gap-1 rounded-xl bg-slate-100/60 p-1 w-fit border border-slate-200/40">
-        {[
-          { value: 'all' as StatusFilter, label: 'ทั้งหมด' },
-          { value: 'pending' as StatusFilter, label: 'รอพิจารณา' },
-          { value: 'approved' as StatusFilter, label: 'อนุมัติแล้ว' },
-          { value: 'rejected' as StatusFilter, label: 'ไม่อนุมัติ' },
-        ].map((opt) => {
-          const isActive = statusFilter === opt.value;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => setStatusFilter(opt.value)}
-              className={cn(
-                'whitespace-nowrap rounded-lg px-3.5 py-1 text-[11px] font-black transition-all font-sukhumvit',
-                isActive
-                  ? 'bg-white text-slate-800 shadow-xs border border-slate-200/10'
-                  : 'text-slate-500 hover:text-slate-800',
-              )}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
+      {/* TOP BAR — Status Filter Tabs */}
+      <div className="mb-2 flex h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border pb-2 pt-2 sm:pt-2.5">
+        <div className="flex items-center gap-1 rounded-xl bg-muted p-1 w-fit">
+          {[
+            { value: 'all' as StatusFilter, label: 'ทั้งหมด' },
+            { value: 'pending' as StatusFilter, label: 'รอพิจารณา' },
+            { value: 'approved' as StatusFilter, label: 'อนุมัติแล้ว' },
+            { value: 'rejected' as StatusFilter, label: 'ไม่อนุมัติ' },
+          ].map((opt) => {
+            const isActive = statusFilter === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setStatusFilter(opt.value)}
+                className={cn(
+                  'whitespace-nowrap rounded-lg px-3.5 py-1 text-[11px] font-black font-sukhumvit',
+                  isActive
+                    ? 'bg-card text-foreground shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <div className="flex w-full flex-col gap-3 min-h-0 overflow-hidden">
+      {/* BODY */}
+      <div className="min-h-0 flex-1 overflow-hidden">
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
+          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
             <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
             <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
           </div>
         ) : activeRequests.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 bg-white/40 rounded-[2rem] border border-dashed border-white/60">
+          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
             <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
               <ClipboardList size={32} className="text-slate-300" />
             </div>
@@ -898,7 +1093,7 @@ function TeamLeavePanelContent({
         ) : (
           <>
             {/* Mobile: cards */}
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-2.5 md:hidden">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex h-full flex-col gap-2.5 overflow-y-auto md:hidden">
               {paginatedRequests.map((req, i) => (
                 <motion.div
                   key={req.id}
@@ -918,15 +1113,15 @@ function TeamLeavePanelContent({
             </motion.div>
 
             {/* Desktop: table */}
-            <div className="hidden md:flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card">
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }} className="gap-3 border-b border-border bg-background px-4 py-3">
+            <div className="hidden h-full flex-col overflow-hidden rounded-2xl border border-border bg-card md:flex">
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }} className="gap-3 border-b border-border bg-muted px-3 py-3 shrink-0">
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ผู้ยื่นคำขอ</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ประเภท</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">วันที่ลา</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">สถานะ</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">การดำเนินการ</p>
               </div>
-              <div className="flex-1 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto">
                 {paginatedRequests.map((req, i) => {
                   const statusCfg = STATUS_CONFIG[req.status];
                   const days = countDays(req.startDate, req.endDate);
@@ -937,7 +1132,7 @@ function TeamLeavePanelContent({
                       animate={{ opacity: 1 }}
                       transition={{ delay: i * 0.015 }}
                       style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }}
-                      className="gap-3 border-b border-border px-4 py-3 items-center hover:bg-muted/40 transition-colors last:border-b-0"
+                      className="gap-3 border-b border-border px-3 py-3 items-center hover:bg-muted/40 transition-colors last:border-b-0"
                     >
                       <div className="min-w-0">
                         <p className="text-[13px] font-bold text-foreground font-sukhumvit truncate">
@@ -997,17 +1192,37 @@ function TeamLeavePanelContent({
                   );
                 })}
               </div>
+              {totalPages > 1 && (
+                <div className="border-t border-border bg-muted px-3 py-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-between shrink-0">
+                  <p className="text-[11px] font-semibold text-slate-400">
+                    แสดง {rangeStart}–{rangeEnd} จาก {activeRequests.length} คำขอ
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={currentPage === 1}
+                      onClick={() => setPage(Math.max(currentPage - 1, 1))}
+                      className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-4 py-1.5 text-[11px] font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      ก่อนหน้า
+                    </button>
+                    <span className="px-2 text-[11px] font-medium text-slate-400">
+                      {currentPage} / {totalPages}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={currentPage === totalPages}
+                      onClick={() => setPage(Math.min(currentPage + 1, totalPages))}
+                      className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-4 py-1.5 text-[11px] font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      ถัดไป
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-
-            <LeaveListPagination
-              page={currentPage}
-              totalPages={totalPages}
-              totalItems={activeRequests.length}
-              rangeStart={rangeStart}
-              rangeEnd={rangeEnd}
-              itemLabel="คำขอ"
-              onPageChange={setPage}
-            />
           </>
         )}
       </div>

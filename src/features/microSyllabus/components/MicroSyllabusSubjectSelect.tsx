@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { HiOutlineCalendarDays, HiOutlineChevronDown } from 'react-icons/hi2';
 import { cn } from '@/lib/utils';
+import { PORTAL_MENU_TITLES } from '@/lib/portalMenu';
 
-export const MICRO_SYLLABUS_FEATURE_TITLE = 'แผนการสอน';
+export const MICRO_SYLLABUS_FEATURE_TITLE = PORTAL_MENU_TITLES['/portal/micro-syllabus'];
 
 export interface MicroSyllabusSubjectOption {
   key: string;

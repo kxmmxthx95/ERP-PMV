@@ -1,17 +1,23 @@
-import React, { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useSyncExternalStore, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     HiArrowRight, HiPlus, HiXMark,
     HiArrowLeft,
     HiPencil, HiTrash,
-    HiChevronDown, HiAcademicCap,
+    HiAcademicCap,
     HiUserPlus,
     HiMagnifyingGlass,
     HiOutlineBookOpen,
 } from 'react-icons/hi2';
 import { collection, doc, writeBatch, getDocs, arrayUnion, arrayRemove, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { invalidateStudentSummaryCache } from '@/lib/firestoreShared/studentSummaryStore';
+import {
+    getStudentsByYearStore,
+    getEnrollmentsByYearStore,
+    getClassesByYearStore,
+    invalidateStudentSummaryCache,
+} from '@/lib/firestoreShared/studentSummaryStore';
+import { curriculumsCollectionStore } from '@/lib/firestoreShared/curriculumsStore';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
@@ -25,6 +31,7 @@ import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
     Dialog,
     DialogContent,
@@ -133,25 +140,18 @@ function PanelCapsuleSelect({
     disabled?: boolean;
 }) {
     return (
-        <div className="relative flex items-center w-full">
-            <select
-                value={value}
-                disabled={disabled}
-                onChange={(e) => onChange(e.target.value)}
-                className="w-full appearance-none pl-3.5 pr-7 h-8 bg-transparent text-[11px] font-bold text-slate-800 outline-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-                {placeholder && <option value="">{placeholder}</option>}
+        <Select value={value} onValueChange={onChange} disabled={disabled}>
+            <SelectTrigger className="h-10 w-full rounded-xl border border-slate-200 bg-white/70 px-3.5 text-xs font-bold text-slate-800 shadow-sm focus:ring-2 focus:ring-slate-100 hover:bg-slate-50 transition-colors">
+                <SelectValue placeholder={placeholder} />
+            </SelectTrigger>
+            <SelectContent className="font-sukhumvit">
                 {options.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
+                    <SelectItem key={opt.value} value={opt.value} className="text-xs font-bold">
                         {opt.label}
-                    </option>
+                    </SelectItem>
                 ))}
-            </select>
-            <HiChevronDown
-                size={10}
-                className={`absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ${disabled ? 'opacity-30' : 'text-slate-400'}`}
-            />
-        </div>
+            </SelectContent>
+        </Select>
     );
 }
 
@@ -190,10 +190,6 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
     const [curriculumFilterGrade, setCurriculumFilterGrade] = useState('');
     const [curriculumFilterYear, setCurriculumFilterYear] = useState('');
 
-    const [students, setStudents] = useState<Student[]>([]);
-    const [classrooms, setClassrooms] = useState<Classroom[]>([]);
-    const [curriculumPackages, setCurriculumPackages] = useState<CurriculumPackage[]>([]);
-    const [loading, setLoading] = useState<boolean>(true);
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
     // Bulk Select State
@@ -206,56 +202,40 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
         }
     }, [classroomYear, editingClassroom]);
 
-    // --- Fetch Data ---
-    useEffect(() => {
-        const fetchData = async () => {
-            setLoading(true);
-            try {
-                const stSnapshot = await getDocs(collection(db, 'students'));
-                const stData = stSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student));
+    // --- Shared cached data (ไม่ refetch ทั้งโรงเรียนใหม่ทุกครั้งที่ mount/สลับ tab) ---
+    const studentsStore = useMemo(() => getStudentsByYearStore(classroomYear), [classroomYear]);
+    const enrollmentsStore = useMemo(() => getEnrollmentsByYearStore(classroomYear), [classroomYear]);
+    const classesStore = useMemo(() => getClassesByYearStore(classroomYear), [classroomYear]);
 
-                const clSnapshot = await getDocs(collection(db, 'classes'));
-                let clData = clSnapshot.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() } as Classroom))
-                    .filter(c =>
-                        String(c.academicYearId) === classroomYear ||
-                        String((c as any).academicYear) === classroomYear
-                    );
+    const rawStudents = useSyncExternalStore(studentsStore.subscribe, studentsStore.getSnapshot, studentsStore.getSnapshot);
+    const rawEnrollments = useSyncExternalStore(enrollmentsStore.subscribe, enrollmentsStore.getSnapshot, enrollmentsStore.getSnapshot);
+    const rawClassrooms = useSyncExternalStore(classesStore.subscribe, classesStore.getSnapshot, classesStore.getSnapshot);
+    const rawCurriculums = useSyncExternalStore(
+        curriculumsCollectionStore.subscribe,
+        curriculumsCollectionStore.getSnapshot,
+        curriculumsCollectionStore.getSnapshot,
+    );
+    const loading = !studentsStore.getReady() || !enrollmentsStore.getReady() || !classesStore.getReady();
 
-                const enSnapshot = await getDocs(collection(db, 'enrollments'));
-                const enData = enSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+    const classrooms = rawClassrooms as unknown as Classroom[];
+    const curriculumPackages = rawCurriculums as unknown as CurriculumPackage[];
 
-                const mergedStudents = stData.map(student => {
-                    const enrollment = enData.find(
-                        e => e.studentId === student.id && enrollmentMatchesYear(e, classroomYear),
-                    );
-                    if (enrollment) {
-                        return {
-                            ...student,
-                            academicYearId: String(enrollment.academicYearId),
-                            gradeLevel: enrollment.gradeLevel || student.gradeLevel,
-                            classroomId: enrollment.classId || student.classroomId || null
-                        };
-                    }
-                    return student;
-                });
-
-                setStudents(mergedStudents);
-                setClassrooms(clData);
-                setSelectedStudentIds(new Set());
-
-                const pkSnapshot = await getDocs(collection(db, 'curriculums'));
-                const pkData = pkSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as any));
-                setCurriculumPackages(pkData);
-            } catch (error) {
-                console.error('Error fetching data:', error);
-            } finally {
-                setLoading(false);
+    const students = useMemo(() => {
+        return (rawStudents as unknown as Student[]).map(student => {
+            const enrollment = rawEnrollments.find(
+                e => e.studentId === student.id && enrollmentMatchesYear(e, classroomYear),
+            );
+            if (enrollment) {
+                return {
+                    ...student,
+                    academicYearId: String(enrollment.academicYearId),
+                    gradeLevel: enrollment.gradeLevel || student.gradeLevel,
+                    classroomId: enrollment.classId || student.classroomId || null,
+                };
             }
-        };
-
-        fetchData();
-    }, [classroomYear]);
+            return student;
+        });
+    }, [rawStudents, rawEnrollments, classroomYear]);
 
     // --- Derived State ---
     const sidebarGradeOptions = useMemo(() => {
@@ -488,27 +468,6 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
             });
 
             await batch.commit();
-
-            setStudents(prev => prev.map(s => {
-                if (studentIdsToMove.includes(s.id)) {
-                    return {
-                        ...s,
-                        classroomId: targetClassroomId === 'unassigned' ? null : targetClassroomId,
-                        currentTrack: targetClass ? targetClass.track : undefined
-                    };
-                }
-                return s;
-            }));
-
-            setClassrooms(prev => prev.map((cls) => {
-                const changes = classUpdates[cls.id];
-                if (!changes) return cls;
-                const ids = new Set(cls.studentIds ?? []);
-                changes.remove.forEach((sid) => ids.delete(sid));
-                changes.add.forEach((sid) => ids.add(sid));
-                return { ...cls, studentIds: [...ids] };
-            }));
-
             await invalidateStudentSummaryCache(classroomYear);
 
             setSelectedStudentIds(new Set());
@@ -531,7 +490,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
 
         try {
             await deleteDoc(doc(db, 'classes', classroomId));
-            setClassrooms(prev => prev.filter(c => c.id !== classroomId));
+            await invalidateStudentSummaryCache(classroomYear);
             if (selectedClassroomId === classroomId) setSelectedClassroomId(null);
         } catch (error) {
             console.error("Delete classroom error:", error);
@@ -544,7 +503,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
         setIsProcessing(true);
         try {
             await updateDoc(doc(db, 'classes', classroomId), { curriculumPackageId: null });
-            setClassrooms(prev => prev.map(c => c.id === classroomId ? { ...c, curriculumPackageId: undefined } : c));
+            await invalidateStudentSummaryCache(classroomYear);
         } catch (error) {
             console.error("Remove curriculum error:", error);
             alert('เกิดข้อผิดพลาดในการนำหลักสูตรออก');
@@ -600,11 +559,10 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
 
             if (editingClassroom) {
                 await updateDoc(doc(db, 'classes', editingClassroom.id), roomData);
-                setClassrooms(prev => prev.map(c => c.id === editingClassroom.id ? { ...c, ...roomData } : c));
             } else {
-                const docRef = await addDoc(collection(db, 'classes'), { ...roomData, studentIds: [] });
-                setClassrooms(prev => [...prev, { id: docRef.id, ...roomData, studentIds: [] }]);
+                await addDoc(collection(db, 'classes'), { ...roomData, studentIds: [] });
             }
+            await invalidateStudentSummaryCache(classroomYear);
 
             setShowCreateModal(false);
             setEditingClassroom(null);
@@ -634,7 +592,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
     const assignCurriculumToClass = async (curriculumId: string, classroomId: string) => {
         try {
             await updateDoc(doc(db, 'classes', classroomId), { curriculumPackageId: curriculumId });
-            setClassrooms(prev => prev.map(c => c.id === classroomId ? { ...c, curriculumPackageId: curriculumId } : c));
+            await invalidateStudentSummaryCache(classroomYear);
         } catch (error) {
             console.error("Error assigning curriculum:", error);
             alert('ไม่สามารถมอบหมายหลักสูตรได้');
@@ -711,21 +669,29 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                             headerAction={(
                                 <>
                                     {!sidebarCollapsed && (
-                                        <div className="flex h-8 min-w-0 flex-1 items-center rounded-full border border-border bg-muted/50 px-1 shadow-sm">
-                                            <PanelCapsuleSelect
-                                                value={classroomYear}
-                                                onChange={(y) => {
-                                                    setClassroomYear(y);
-                                                    setDeptFilter('');
-                                                    setGradeFilter('');
-                                                    setSelectedClassroomId(null);
-                                                }}
-                                                options={ACADEMIC_YEARS.map((y) => ({
-                                                    value: y,
-                                                    label: `ปี ${y}`,
-                                                }))}
-                                            />
-                                        </div>
+                                        <Select
+                                            value={classroomYear}
+                                            onValueChange={(y) => {
+                                                setClassroomYear(y);
+                                                setDeptFilter('');
+                                                setGradeFilter('');
+                                                setSelectedClassroomId(null);
+                                            }}
+                                        >
+                                            <SelectTrigger
+                                                aria-label="ปีการศึกษา"
+                                                className="h-8 min-w-0 flex-1 rounded-full border-border bg-background px-2 text-[11px] font-bold text-foreground font-sukhumvit"
+                                            >
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {ACADEMIC_YEARS.map((y) => (
+                                                    <SelectItem key={y} value={y}>
+                                                        ปี {y}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                     )}
                                     <div className={cn('flex shrink-0', HEADER_ICON_BTN_GROUP)}>
                                         {!sidebarCollapsed && (
@@ -818,44 +784,47 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                                         </span>
                                     )}
                                     {cls && (
-                                        <>
+                                        <div className="flex items-center bg-white rounded-full p-1 border border-slate-200 shadow-[0_1px_2px_rgba(0,0,0,0.03)] shrink-0">
                                             <button
                                                 type="button"
                                                 onClick={openAddStudentsDrawer}
-                                                className={HEADER_ICON_BTN}
+                                                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
                                                 title="เพิ่มนักเรียนเข้าห้อง"
                                                 aria-label="เพิ่มนักเรียนเข้าห้อง"
                                             >
                                                 <HiUserPlus size={16} />
                                             </button>
+                                            <div className="w-[1px] h-3.5 bg-slate-300/60 mx-1" />
                                             <button
                                                 type="button"
                                                 onClick={openCurriculumDrawer}
-                                                className={HEADER_ICON_BTN}
+                                                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
                                                 title="มอบหมายหลักสูตร"
                                                 aria-label="มอบหมายหลักสูตร"
                                             >
                                                 <HiOutlineBookOpen size={16} />
                                             </button>
+                                            <div className="w-[1px] h-3.5 bg-slate-300/60 mx-1" />
                                             <button
                                                 type="button"
                                                 onClick={openEdit}
-                                                className={HEADER_ICON_BTN}
+                                                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
                                                 title="แก้ไขห้องเรียน"
                                                 aria-label="แก้ไขห้องเรียน"
                                             >
                                                 <HiPencil size={16} />
                                             </button>
+                                            <div className="w-[1px] h-3.5 bg-slate-300/60 mx-1" />
                                             <button
                                                 type="button"
                                                 onClick={() => deleteClassroom(cls.id, count)}
-                                                className={HEADER_ICON_BTN}
+                                                className="w-8 h-8 rounded-full flex items-center justify-center text-rose-500 hover:bg-rose-50 transition-colors cursor-pointer"
                                                 title="ลบห้องเรียน"
                                                 aria-label="ลบห้องเรียน"
                                             >
                                                 <HiTrash size={16} />
                                             </button>
-                                        </>
+                                        </div>
                                     )}
                                 </div>
                             );
@@ -975,7 +944,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
 
                                                             {/* Desktop table */}
                                                             <div className={cn('hidden md:block', TABLE_SHELL)}>
-                                                                <div className="border-b border-border bg-background">
+                                                                <div className="border-b border-border bg-muted shrink-0">
                                                                     <div
                                                                         className="grid gap-3 px-4 py-3"
                                                                         style={{ gridTemplateColumns: TABLE_GRID }}
@@ -1149,30 +1118,37 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                                     <label className={FIELD_LABEL}>
                                         ปีการศึกษา <span className="text-destructive">*</span>
                                     </label>
-                                    <select
+                                    <Select
                                         value={newRoom.academicYearId}
-                                        onChange={(e) => setNewRoom((p) => ({ ...p, academicYearId: e.target.value }))}
-                                        className={cn(FIELD_INPUT, 'w-full appearance-none outline-none')}
+                                        onValueChange={(v) => setNewRoom((p) => ({ ...p, academicYearId: v }))}
                                     >
-                                        {ACADEMIC_YEARS.map((y) => (
-                                            <option key={y} value={y}>{y}</option>
-                                        ))}
-                                    </select>
+                                        <SelectTrigger className={cn(FIELD_INPUT, 'w-full')}>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {ACADEMIC_YEARS.map((y) => (
+                                                <SelectItem key={y} value={y}>{y}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                                 <div className="space-y-1">
                                     <label className={FIELD_LABEL}>
                                         ระดับชั้น <span className="text-destructive">*</span>
                                     </label>
-                                    <select
+                                    <Select
                                         value={newRoom.gradeLevel}
-                                        onChange={(e) => setNewRoom((p) => ({ ...p, gradeLevel: e.target.value }))}
-                                        className={cn(FIELD_INPUT, 'w-full appearance-none outline-none')}
+                                        onValueChange={(v) => setNewRoom((p) => ({ ...p, gradeLevel: v }))}
                                     >
-                                        <option value="" disabled>เลือกชั้น</option>
-                                        {(GRADE_ORDER[newRoom.departmentId || 'secondary'] || []).map((g) => (
-                                            <option key={g} value={g}>{g}</option>
-                                        ))}
-                                    </select>
+                                        <SelectTrigger className={cn(FIELD_INPUT, 'w-full')}>
+                                            <SelectValue placeholder="เลือกชั้น" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {(GRADE_ORDER[newRoom.departmentId || 'secondary'] || []).map((g) => (
+                                                <SelectItem key={g} value={g}>{g}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                             </div>
 
@@ -1254,13 +1230,11 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
 
                         <div className="flex items-center gap-2">
                             <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">ย้ายไปที่</span>
-                            <div className="relative">
-                                <select
-                                    value={bulkTargetClass}
-                                    onChange={e => setBulkTargetClass(e.target.value)}
-                                    className="bg-slate-100 hover:bg-slate-200 border border-slate-200/50 rounded-full pl-4 pr-7 py-1.5 text-[11px] font-bold text-slate-900 focus:outline-none appearance-none min-w-[140px] cursor-pointer transition-all"
-                                >
-                                    <option value="">-- เลือกห้อง --</option>
+                            <Select value={bulkTargetClass} onValueChange={setBulkTargetClass}>
+                                <SelectTrigger className="min-w-[140px] rounded-full border-slate-200/50 bg-slate-100 py-1.5 pl-4 text-[11px] font-bold text-slate-900 shadow-none hover:bg-slate-200">
+                                    <SelectValue placeholder="-- เลือกห้อง --" />
+                                </SelectTrigger>
+                                <SelectContent>
                                     {([...classrooms].sort((a, b) => {
                                         const flatGrades = Object.values(GRADE_ORDER).flat();
                                         const idxA = flatGrades.indexOf(a.gradeLevel);
@@ -1268,11 +1242,10 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                                         if (idxA !== idxB) return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
                                         return a.className.localeCompare(b.className, undefined, { numeric: true });
                                     })).map(c => (
-                                        <option key={c.id} value={c.id}>{c.className}</option>
+                                        <SelectItem key={c.id} value={c.id}>{c.className}</SelectItem>
                                     ))}
-                                </select>
-                                <HiChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
-                            </div>
+                                </SelectContent>
+                            </Select>
                         </div>
 
                         <button
@@ -1480,7 +1453,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                                     className="min-w-0 flex-1 bg-transparent text-xs font-bold text-foreground outline-none placeholder:text-muted-foreground font-sukhumvit"
                                 />
                             </div>
-                            <div className="flex h-9 items-center rounded-full border border-border bg-muted/50 px-1 shadow-sm">
+                            <div>
                                 <PanelCapsuleSelect
                                     value={curriculumFilterYear}
                                     onChange={setCurriculumFilterYear}
@@ -1492,7 +1465,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                                 />
                             </div>
                             <div className="grid grid-cols-2 gap-2">
-                                <div className="flex h-9 items-center rounded-full border border-border bg-muted/50 px-1 shadow-sm">
+                                <div>
                                     <PanelCapsuleSelect
                                         value={curriculumFilterDept}
                                         onChange={(v) => {
@@ -1505,7 +1478,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                                         ).map(([id, cfg]) => ({ value: id, label: cfg.label }))}
                                     />
                                 </div>
-                                <div className="flex h-9 items-center rounded-full border border-border bg-muted/50 px-1 shadow-sm">
+                                <div>
                                     <PanelCapsuleSelect
                                         value={curriculumFilterGrade}
                                         onChange={setCurriculumFilterGrade}

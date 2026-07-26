@@ -1,4 +1,4 @@
-import { Phone, MapPin, User, BookOpen, Pencil, Trash2, ToggleLeft, ToggleRight, X } from 'lucide-react';
+import { Phone, MapPin, User, BookOpen, Pencil, Trash2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Student, Enrollment } from '@/types/student';
 import StudentAvatar from './StudentAvatar';
@@ -79,7 +79,7 @@ export default function StudentDetailPanel({ open, onClose, student, enrollments
             style={GLASS}
           >
             {/* Header Area */}
-            <div className="relative p-8 pb-4">
+            <div className="relative px-8 pt-10 pb-4">
               <button
                 onClick={onClose}
                 className="absolute top-6 right-6 p-2 rounded-full bg-black/5 hover:bg-black/10 transition-colors"
@@ -114,22 +114,36 @@ export default function StudentDetailPanel({ open, onClose, student, enrollments
               </div>
 
               {/* Actions Row */}
-              <div className="flex items-center gap-2 mt-6">
+              <div className="flex items-center justify-center gap-3 mt-6">
+                {/* 1. Add/Import Button */}
                 <button
                   onClick={onEdit}
-                  className="flex-1 flex items-center justify-center gap-2 py-2 rounded-2xl bg-slate-900 text-white text-xs font-black shadow-lg hover:shadow-xl transition-all"
+                  title="แก้ไขข้อมูล"
+                  className="w-11 h-11 rounded-full flex items-center justify-center bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 shadow-sm transition-all cursor-pointer"
                 >
-                  <Pencil size={14} />
-                  แก้ไขข้อมูล
+                  <Pencil size={18} />
                 </button>
+
+                {/* 2. Toggle Status / Sync Button */}
                 <button
                   onClick={() => onToggleStatus(student.id)}
-                  className={`w-11 h-11 rounded-2xl flex items-center justify-center border transition-all ${
-                    isActive ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-400'
+                  title={isActive ? 'พักการเรียน' : 'เปิดสถานะ'}
+                  className={`w-11 h-11 rounded-full flex items-center justify-center border shadow-sm transition-all cursor-pointer ${
+                    isActive ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'
                   }`}
                 >
-                  {isActive ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                  {isActive ? (
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.656 48.656 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3M4.5 12a48.564 48.564 0 00.138 3.662 4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l-3 3m3-3l3-3" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                  )}
                 </button>
+
+                {/* 3. Delete Button */}
                 <button
                   onClick={() => {
                     if (confirm(`ลบ "${student.prefix}${student.firstName} ${student.lastName}" ออกจากระบบ?`)) {
@@ -137,9 +151,21 @@ export default function StudentDetailPanel({ open, onClose, student, enrollments
                       onClose();
                     }
                   }}
-                  className="w-11 h-11 rounded-2xl flex items-center justify-center bg-rose-50 border border-rose-100 text-rose-500 hover:bg-rose-500 hover:text-white transition-all"
+                  title="ลบข้อมูล"
+                  className="w-11 h-11 rounded-full flex items-center justify-center bg-white border border-slate-200 text-rose-500 hover:bg-rose-50 hover:border-rose-200 shadow-sm transition-all cursor-pointer"
                 >
                   <Trash2 size={18} />
+                </button>
+
+                {/* 4. LINE OA Button */}
+                <button
+                  onClick={() => window.open('https://lin.ee/QKGIt0J', '_blank', 'noopener,noreferrer')}
+                  title="เชื่อมต่อ LINE"
+                  className="w-11 h-11 rounded-xl flex items-center justify-center bg-[#06c755] hover:bg-[#05b34c] text-white shadow-sm transition-all cursor-pointer"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 5.58 2 10.02c0 2.22 1.09 4.22 2.87 5.61-.17.6-.62 2.45-.71 2.8-.1.43.14.42.3.31.13-.09 2.11-1.43 2.95-2.01.81.23 1.67.35 2.59.35 5.52 0 10-3.58 10-8.02S17.52 2 12 2zm-4.66 11.23H5.85c-.2 0-.37-.17-.37-.37V7.16c0-.2.17-.37.37-.37.2 0 .37.17.37.37v4.97h1.49c.2 0 .37.17.37.37s-.17.36-.37.36zm1.74-.37c0 .2-.17.37-.37.37s-.37-.17-.37-.37V7.16c0-.2.17-.37.37-.37s.37.17.37.37v4.96c0 .01 0 .01 0 0zm4.27 0c0 .1-.04.19-.11.26-.07.07-.16.11-.26.11h-1.63c-.09 0-.17-.03-.23-.09-.07-.07-.1-.15-.1-.24v-4.9c0-.1.04-.19.11-.26.07-.07.16-.11.26-.11h1.6c.1 0 .19.04.26.11.07.07.11.16.11.26.01.2 0 .2-.19.2h-1.41v1.65h1.36c.2 0 .37.17.37.37s-.17.37-.37.37h-1.36v1.65h1.41c.2 0 .37.17.37.37v.01zm3.89-2.19c.14.15.21.32.21.52v2.04c0 .2-.17.37-.37.37s-.37-.17-.37-.37v-2.01c0-.09-.03-.17-.09-.23a.35.35 0 00-.25-.09h-1.04v2.33c0 .2-.17.37-.37.37s-.37-.17-.37-.37V7.16c0-.2.17-.37.37-.37.2 0 .37.17.37.37v1.89h1.04c.2 0 .37.07.51.21l1.19 1.25.13-.15V7.16c0-.2.17-.37.37-.37s.37.17.37.37v2.04c0 .2-.07.38-.21.52l-1.34 1.41 1.4 1.48c.1.1.15.22.15.35 0 .29-.24.52-.53.52-.14 0-.27-.06-.37-.16l-1.44-1.52.01-.01z" />
+                  </svg>
                 </button>
               </div>
             </div>

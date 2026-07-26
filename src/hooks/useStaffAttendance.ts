@@ -124,17 +124,12 @@ export interface ResolvedStaffAttendanceDisplay {
   note: string;
 }
 
-/** คำนวณสถานะแสดงผล: ไม่เช็คอินหรือเช็คอินหลัง 12:00 = ขาดงาน */
 export function resolveStaffAttendanceDisplay(
   record: Pick<StaffAttendanceRecord, 'checkInTime' | 'status' | 'note' | 'overrideBy' | 'date'>,
   opts: ResolveStaffAttendanceOptions,
 ): ResolvedStaffAttendanceDisplay {
-  const now = opts.now ?? new Date();
   const todayStr = getLocalDateString();
-  const isPastDate = opts.selectedDate < todayStr;
   const isFutureDate = opts.selectedDate > todayStr;
-  const isTodayAfterNoon = opts.selectedDate === todayStr && isAtOrAfterNoon(now);
-  const cutoffPassed = opts.isWorkingDay && (isPastDate || isTodayAfterNoon);
   const note = record.note ?? '';
 
   if (isFutureDate) {
@@ -168,15 +163,17 @@ export function resolveStaffAttendanceDisplay(
     return { status: record.status, isAutoAbsent: false, isPending: false, note };
   }
 
-  if (!cutoffPassed) {
-    return { status: record.status, isAutoAbsent: false, isPending: true, note };
+  // วันหยุด (เสาร์-อาทิตย์ หรือวันหยุดนักขัตฤกษ์) ในอดีต/ปัจจุบัน
+  if (!opts.isWorkingDay) {
+    return { status: record.status, isAutoAbsent: false, isPending: false, note };
   }
 
+  // ถ้าไม่มีการเช็กอินเข้างานในวันทำงาน (อดีต หรือ วันปัจจุบัน)
   return {
     status: 'absent',
     isAutoAbsent: true,
     isPending: false,
-    note: note || 'ไม่มีการเช็กอินหลัง 12:00 และไม่มีการลา',
+    note: note || 'ไม่มีการเช็กอินเข้างาน',
   };
 }
 

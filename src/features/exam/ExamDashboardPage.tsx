@@ -757,7 +757,7 @@ function KpiCard({
   );
 }
 
-export default function ExamDashboardPage() {
+export default function ExamDashboardPage({ embedded = false }: { embedded?: boolean } = {}) {
   const navigate = useNavigate();
   const { role, user } = useAuth();
   const { activeYear, year, isLoaded } = useActiveAcademicYear();
@@ -766,6 +766,13 @@ export default function ExamDashboardPage() {
   // ของเพื่อนร่วมห้องทุกคนทุกห้องมาก่อนแล้วค่อยกรองทีหลัง เหมือน StudentExamScoreWidget
   const { rooms, attempts, isLoading } = useExamRoom({ loadAttempts: isStudent ? 'mine' : 'all' });
   const [filterDepartment, setFilterDepartment] = useState<Department | 'all'>('all');
+
+  // Same header-portal tab bar as ExamManager's rooms page (ภาพรวม/รายชื่อห้องสอบ)
+  // so staff can jump straight to the room list without hunting through the page.
+  const [headerCenterPortalEl, setHeaderCenterPortalEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setHeaderCenterPortalEl(document.getElementById('header-portal-center'));
+  }, []);
 
   const filteredRooms = useMemo(() => {
     if (filterDepartment === 'all') return rooms;
@@ -814,6 +821,24 @@ export default function ExamDashboardPage() {
 
   return (
     <div className="relative flex flex-col min-h-0 gap-2 pb-10 md:flex-1 md:gap-5 md:pb-4">
+      {headerCenterPortalEl && !isStudent && !embedded && createPortal(
+        <div className="pointer-events-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded-lg text-[12px] font-black bg-slate-900 text-white"
+          >
+            ภาพรวม
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/portal/exams/rooms')}
+            className="px-3 py-1.5 rounded-lg text-[12px] font-black text-slate-600 hover:text-slate-900 hover:bg-slate-100/50"
+          >
+            รายชื่อห้องสอบ
+          </button>
+        </div>,
+        headerCenterPortalEl,
+      )}
       <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
         <div className="absolute -top-24 -left-16 h-72 w-72 rounded-full bg-violet-200/45 blur-3xl" />
         <div className="absolute top-24 -right-20 h-80 w-80 rounded-full bg-indigo-200/40 blur-3xl" />

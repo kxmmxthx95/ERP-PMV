@@ -23,6 +23,9 @@ export interface TeacherProfile {
   status: TeacherStatus;
   photoURL?: string;
   userId?: string;
+  lineId?: string;
+  lineUserId?: string;
+  isLineConnected?: boolean;
   createdAt?: string;           // ISO date string
 }
 

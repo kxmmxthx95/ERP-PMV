@@ -303,7 +303,7 @@ export default function MorningRollCallSummaryWidget() {
             </div>
           </DrawerHeader>
 
-          <div className="px-4 pb-4 overflow-y-auto flex-1 min-h-0">
+          <div className="px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] overflow-y-auto flex-1 min-h-0">
             {selectedSession ? (
               selectedSession.attendance.length === 0 ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold text-slate-500">

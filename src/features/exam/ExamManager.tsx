@@ -48,7 +48,6 @@ import {
   HiChevronRight,
   HiChevronLeft,
   HiArrowDownTray,
-  HiOutlineExclamationTriangle,
   HiOutlineXMark,
 } from 'react-icons/hi2';
 import {
@@ -78,7 +77,10 @@ import {
 } from '@/lib/exam/manualEssayGrading';
 import { toast } from 'sonner';
 import { useExamShell } from '@/features/exam/ExamLayout';
-
+import { matchesTeacherIdentity } from '@/lib/teachers/teacherIdentity';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
+import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
 
 function DeleteConfirmDialog({
   open,
@@ -259,8 +261,9 @@ import { useMyPermissions } from '@/hooks/useMyPermissions';
 import type { ExamRoom, ExamAttempt, ExamScoreOverrideRequest, GradeScoreType, GradeBookSubjectLink, ScoreCollectionType } from '@/types/exam';
 import { rawPointsToPercent } from '@/types/grades';
 import { resolveAttemptScoreDisplay } from '@/lib/exam/examRoomScoring';
+import { resolveExamRoomIconSrc } from '@/lib/exam/examRoomIcons';
+import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
 import { Button } from '@/components/ui/button';
-import { SubSubjectGroupBadge } from '@/components/school/SubSubjectGroupBadge';
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from '@/components/ui/dialog';
 import { DEPARTMENT_CONFIG, SUBJECT_GROUP_CONFIG, SUBJECT_SUBGROUP_CONFIG, type Department, type SubjectGroupId } from '@/types/curriculum';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
@@ -276,10 +279,6 @@ import {
   isExamRoomQuestionsConfigured,
   propagateRoundConfigToEmptyRounds,
 } from '@/lib/exam/roundQuestions';
-import {
-  formatClassRoomBadgeLabel,
-  getGradeLevelBadgeStyle,
-} from '@/lib/school/gradeLevelBadge';
 import type { Subject } from '@/types/curriculum';
 import { db } from '@/lib/firebase';
 import { logActivity } from '@/lib/activityLogger';
@@ -323,6 +322,7 @@ function getExamRoomNumber(room: ExamRoom): string {
   return parseExamRoomClassName(room.className).roomNumber || '';
 }
 
+
 function sortGradeLevels(grades: string[], department: Department | 'all'): string[] {
   const order = department !== 'all'
     ? DEPARTMENT_CONFIG[department].grades
@@ -342,8 +342,8 @@ function sortGradeLevels(grades: string[], department: Department | 'all'): stri
 const EXAM_FILTER_SELECT_CLASS =
   'h-9 min-w-0 flex-1 basis-0 rounded-xl border border-slate-200 bg-white/95 px-2 sm:px-3 text-[11px] sm:text-[12px] font-bold text-slate-700 font-sukhumvit outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/25 disabled:opacity-50 disabled:cursor-not-allowed';
 
-const EXAM_STATUS_FILTER_SELECT_CLASS =
-  'h-9 max-w-[min(132px,34vw)] appearance-none rounded-full border border-slate-200 bg-white/95 pl-6 pr-3 text-[11px] font-black text-slate-900 font-sukhumvit outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500/25 [&::-ms-expand]:hidden';
+/** Sentinel for "ไม่มีสาระย่อย" — ห้องสอบที่ไม่ได้ระบุสาระย่อยไว้ */
+const NO_SUB_SUBJECT_GROUP = '__none__';
 
 const EXAM_STATUS_FILTER_COLORS: Record<'all' | ExamRoom['status'], string> = {
   all: '#6366f1',
@@ -656,6 +656,65 @@ function RoomCardActionsPanel({
   );
 }
 
+/** ปุ่มเมนู (จัดการห้องสอบ) กดแล้วลอยเป็น plate แทนที่จะดันเนื้อหาการ์ด — ตำแหน่งอิงจากปุ่มที่กด */
+function RoomCardActionsPlate({
+  anchorRect,
+  onClose,
+  canEdit,
+  canDelete,
+  needsQuestionSetup,
+  onEdit,
+  onOpenSettings,
+  onDelete,
+}: {
+  anchorRect: DOMRect;
+  onClose: () => void;
+  canEdit?: boolean;
+  canDelete?: boolean;
+  needsQuestionSetup: boolean;
+  onEdit: () => void;
+  onOpenSettings: (tab: SettingsTab) => void;
+  onDelete: () => void;
+}) {
+  const PLATE_W = 224;
+  const GAP = 8;
+  const placeBelow = anchorRect.bottom + 220 < window.innerHeight;
+  let left = anchorRect.right - PLATE_W;
+  left = Math.max(8, Math.min(left, window.innerWidth - PLATE_W - 8));
+
+  return createPortal(
+    <>
+      <button
+        type="button"
+        aria-label="ปิดเมนู"
+        className="fixed inset-0 z-[80] cursor-default bg-transparent"
+        onClick={onClose}
+      />
+      <div
+        role="menu"
+        className="fixed z-[90] w-[224px] rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl"
+        style={
+          placeBelow
+            ? { top: anchorRect.bottom + GAP, left }
+            : { bottom: window.innerHeight - anchorRect.top + GAP, left }
+        }
+        onClick={(e) => e.stopPropagation()}
+      >
+        <RoomCardActionsPanel
+          canEdit={canEdit}
+          canDelete={canDelete}
+          needsQuestionSetup={needsQuestionSetup}
+          onEdit={onEdit}
+          onOpenSettings={onOpenSettings}
+          onDelete={onDelete}
+          onClose={onClose}
+        />
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function MobileRoundSelect({
   rounds,
   value,
@@ -696,32 +755,6 @@ function MobileRoundSelect({
         />
       </div>
     </div>
-  );
-}
-
-function GradeLevelBadge({
-  gradeLevel,
-  roomNumber,
-}: {
-  gradeLevel: string;
-  roomNumber?: string;
-}) {
-  const label = formatClassRoomBadgeLabel(gradeLevel, roomNumber);
-  if (!label) return null;
-
-  const style = getGradeLevelBadgeStyle(gradeLevel);
-
-  return (
-    <span
-      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit leading-none shrink-0"
-      style={{
-        color: style.color,
-        backgroundColor: style.bg,
-        border: `1px solid ${style.border}`,
-      }}
-    >
-      {label}
-    </span>
   );
 }
 
@@ -2747,6 +2780,122 @@ const SCORE_COLLECTION_CONFIG: Record<ScoreCollectionType, { label: string; desc
   final: { label: 'ปลายภาค', desc: 'สอบปลายภาคเรียน', color: '#059669', bg: 'rgba(5,150,105,0.08)', border: 'rgba(5,150,105,0.25)' },
 };
 
+const DRAWER_QUICK_TABS: SettingsTab[] = ['takers', 'questions', 'score-settings', 'score-summary', 'score-config'];
+
+const ROOM_DETAIL_DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh max-h-dvh flex-col overflow-hidden bg-transparent p-0 before:hidden',
+  'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+  'sm:h-full sm:max-h-full sm:p-2.5',
+  'sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md',
+);
+
+const ROOM_DETAIL_DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white',
+  'sm:rounded-4xl sm:border sm:border-slate-200/80 sm:shadow-2xl',
+);
+
+/** กดที่ icon ห้องสอบ → เปิด Drawer ด้านข้างแสดงรายละเอียดห้องสอบ + ปุ่ม tab ลัดไปหน้าจัดการห้องสอบ */
+function RoomIconDetailDrawer({ open, onClose, room, canEdit, isStudent, onOpenSettings, onEdit }: {
+  open: boolean;
+  onClose: () => void;
+  room: ExamRoom;
+  canEdit?: boolean;
+  isStudent?: boolean;
+  onOpenSettings: (tab?: SettingsTab) => void;
+  onEdit: () => void;
+}) {
+  const dept = (room.departmentId || 'secondary') as Department;
+  const deptCfg = DEPARTMENT_CONFIG[dept];
+  const groupCfg = room.subjectGroupId ? SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId] : undefined;
+  const subjectLabel = room.subSubjectGroup?.trim() || groupCfg?.name || '—';
+
+  const rows: { label: string; value: string }[] = [
+    { label: 'แผนก / ชั้น', value: `${deptCfg?.label ?? '—'} · ${getExamRoomGradeLevel(room) || '—'}` },
+    { label: 'กลุ่มสาระ / สาระย่อย', value: subjectLabel },
+    { label: 'ครูผู้สอน', value: room.teacherName || '—' },
+    { label: 'จำนวนข้อ / คะแนนเต็ม', value: `${room.questionCount ?? 0} ข้อ · ${room.totalPoints ?? 0} คะแนน` },
+    { label: 'ระยะเวลาทำข้อสอบ', value: room.durationMinutes ? `${room.durationMinutes} นาที` : 'ไม่จำกัดเวลา' },
+    { label: 'รอบสอบ', value: `เปิดแล้ว ${room.completedRounds ?? 0} รอบ · ปัจจุบันรอบ ${room.currentRound ?? 1}` },
+    ...(canEdit && !isStudent ? [{ label: 'รหัสห้องสอบ', value: room.password || '—' }] : []),
+    { label: 'สร้างเมื่อ', value: room.createdAt ? new Date(room.createdAt).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' }) : '—' },
+  ];
+
+  return (
+    <Drawer open={open} onOpenChange={(next) => { if (!next) onClose(); }} direction="right">
+      <DrawerContent className={ROOM_DETAIL_DRAWER_CONTENT_CLASS}>
+        <div className={ROOM_DETAIL_DRAWER_PANEL_CLASS}>
+          <DrawerHeader className="shrink-0 border-b border-slate-100 px-5 pb-3 pt-5">
+            <div className="relative flex min-h-10 items-center justify-start">
+              <div className="flex items-center gap-2.5 min-w-0 pr-12">
+                <img src={resolveExamRoomIconSrc(room)} alt="" className="h-9 w-9 shrink-0 object-contain" />
+                <div className="min-w-0 text-left">
+                  <DrawerTitle className="line-clamp-2 min-h-[calc(1.375em*2)] font-sukhumvit text-[15px] font-black leading-snug text-slate-800 text-left">
+                    {room.title}
+                  </DrawerTitle>
+                  <DrawerDescription className="truncate font-sukhumvit text-[11px] text-slate-400 text-left">
+                    {room.subjectName || '—'}
+                  </DrawerDescription>
+                </div>
+              </div>
+              <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className={DRAWER_HEADER_ICON_BTN}
+                  aria-label="ปิด"
+                >
+                  <HiXMark size={16} />
+                </button>
+              </div>
+            </div>
+          </DrawerHeader>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 scrollbar-hide">
+            {canEdit && !isStudent && (
+              <div className="mb-4 grid grid-cols-3 gap-2">
+                {DRAWER_QUICK_TABS.map((tab) => {
+                  const cfg = TAB_CONFIG[tab];
+                  const Icon = cfg.icon;
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => { onClose(); onOpenSettings(tab); }}
+                      className="flex flex-col items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 hover:bg-slate-100 transition-colors"
+                    >
+                      <Icon className="w-4 h-4 text-slate-600" />
+                      <span className="text-[10px] font-bold text-slate-600 font-sukhumvit">{cfg.label}</span>
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => { onClose(); onEdit(); }}
+                  className="flex flex-col items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 hover:bg-slate-100 transition-colors"
+                >
+                  <HiMiniPencil className="w-4 h-4 text-slate-600" />
+                  <span className="text-[10px] font-bold text-slate-600 font-sukhumvit">แก้ไข</span>
+                </button>
+              </div>
+            )}
+            <div className="mb-4 flex justify-center">
+              <RoomCardStatusPill room={room} />
+            </div>
+            <div className="flex flex-col divide-y divide-slate-100">
+              {rows.map((row) => (
+                <div key={row.label} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                  <span className="shrink-0 text-[11px] font-bold text-slate-500 font-sukhumvit">{row.label}</span>
+                  <span className="min-w-0 truncate text-[12px] font-bold text-slate-800 font-sukhumvit text-right">{row.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
 // ── Room Card ─────────────────────────────────────────────────────────────────
 function RoomCard({
   room, onProctor, onChangeStatus, onFinish, onDelete, onEdit, onOpenSettings, isStudent, onTakeExam,
@@ -2770,6 +2919,8 @@ function RoomCard({
 }) {
   const { role } = useAuth();
   const [showActions, setShowActions] = useState(false);
+  const [actionsAnchorRect, setActionsAnchorRect] = useState<DOMRect | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
   const needsQuestionSetup = Boolean(!isStudent && canEdit && !isExamRoomQuestionsConfigured(room));
   // Unlimited-round rooms (maxAttempts === 0) cycle active <-> upcoming forever —
   // they need an explicit way to reach a terminal 'closed' state.
@@ -2777,21 +2928,11 @@ function RoomCard({
   const showFinishButton = Boolean(!isStudent && canEdit && isUnlimitedRoom && room.status !== 'closed');
   const showClosedFinishDisabled = Boolean(!isStudent && canEdit && room.status === 'closed');
 
-  const gradeLevel = getExamRoomGradeLevel(room);
-  const roomNumber = getExamRoomNumber(room);
-  const classBadgeLabel = formatClassRoomBadgeLabel(gradeLevel, roomNumber)
-    || (room.className?.trim() ? room.className.trim() : '');
-
   const showStudentTakeExam = Boolean(isStudent && room.status === 'active');
   const showStudentResults = Boolean(
     isStudent && myAttempt && (myAttempt.status === 'submitted' || myAttempt.status === 'graded'),
   );
-  const showStaffRoundControl = Boolean(
-    !isStudent && canEdit && (room.status === 'upcoming' || room.status === 'active'),
-  );
-  const showFooterActions = showStudentTakeExam
-    || showStudentResults
-    || showStaffRoundControl
+  const showFooterActions = showStudentResults
     || showFinishButton
     || showClosedFinishDisabled;
 
@@ -2799,28 +2940,12 @@ function RoomCard({
     (room.settings?.gradeBookSubjects && room.settings.gradeBookSubjects.length > 0) ||
     room.settings?.gradeBookSubjectId
   );
-  const scoreCollectionEnabled = room.settings?.scoreCollectionEnabled === true;
-  const scoreCollectionType = (room.settings?.scoreCollectionType ?? 'classwork') as ScoreCollectionType;
-  const scoreTypeCfg = SCORE_COLLECTION_CONFIG[scoreCollectionType] ?? SCORE_COLLECTION_CONFIG.classwork;
-
-  const createdDateStr = useMemo(() => {
-    if (!room.createdAt) return '';
-    try {
-      return new Date(room.createdAt).toLocaleDateString('th-TH', {
-        day: 'numeric',
-        month: 'short',
-        year: '2-digit',
-      });
-    } catch {
-      return '';
-    }
-  }, [room.createdAt]);
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="relative overflow-hidden rounded-2xl p-2.5 flex flex-col gap-2 h-full transition-all duration-300 shadow-sm hover:shadow-md bg-white"
+      className="relative overflow-hidden rounded-2xl p-2.5 flex flex-col gap-2 h-full transition-all duration-300"
       style={{ perspective: 800 }}
     >
       <AnimatePresence mode="wait" initial={false}>
@@ -2850,24 +2975,87 @@ function RoomCard({
             transition={{ duration: 0.35 }}
             className="flex flex-1 flex-col gap-2 min-h-0"
           >
-      {/* Header */}
-      <div className="flex items-start gap-2 min-w-0">
-        <div className="flex-1 min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <RoomCardStatusPill room={room} />
-            {needsQuestionSetup && (
-              <span
-                className="inline-flex items-center justify-center"
-                title="ยังไม่ได้ตั้งค่าข้อสอบ — กดไอคอนตั้งค่าเพื่อเลือกชุดข้อสอบ"
-              >
-                <HiOutlineExclamationTriangle className="w-4 h-4 text-rose-500" aria-hidden />
-                <span className="sr-only">ยังไม่ได้ตั้งค่าข้อสอบ</span>
-              </span>
+      {/* Icon + name — หลักการเดียวกับโฟลเดอร์แผนการสอน: รูปกับชื่ออยู่บนสุด กึ่งกลาง ปุ่ม/สถานะตามด้านล่าง */}
+      <div className="flex flex-col items-center gap-1.5 text-center">
+        <div className="relative shrink-0">
+          <img
+            src={resolveExamRoomIconSrc(room)}
+            alt=""
+            draggable={false}
+            onClick={() => setShowDetail(true)}
+            className={cn(
+              'h-48 w-48 shrink-0 object-contain drop-shadow-sm cursor-pointer',
+              room.status === 'closed' && 'opacity-50 grayscale',
+              room.status === 'active' && 'animate-pulse drop-shadow-[0_0_16px_rgba(34,197,94,0.75)]',
+              needsQuestionSetup && 'drop-shadow-[0_0_16px_rgba(244,63,94,0.75)]',
             )}
-          </div>
+          />
+          {showStudentTakeExam && (
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.92 }}
+              onClick={onTakeExam}
+              title="ทำข้อสอบ"
+              className="absolute inset-0 m-auto flex h-14 w-14 items-center justify-center rounded-full bg-white/40 backdrop-blur-md border border-white/50 text-slate-800 shadow-lg hover:bg-white/60 transition-colors"
+            >
+              <HiPlay className="w-6 h-6" />
+            </motion.button>
+          )}
+          {!isStudent && canEdit && room.status === 'active' && (
+            <>
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.92 }}
+                onClick={() => onChangeStatus('closed')}
+                title={`ปิดรอบ ${room.currentRound ?? 1}`}
+                className="absolute inset-0 m-auto flex h-14 w-14 items-center justify-center rounded-full bg-white/40 backdrop-blur-md border border-white/50 text-rose-600 shadow-lg hover:bg-white/60 transition-colors"
+              >
+                <HiStop className="w-6 h-6" />
+              </motion.button>
+              <div className="absolute inset-x-0 bottom-1 flex justify-center">
+                <span className="rounded-full bg-white/70 backdrop-blur-md px-2 py-0.5 text-[10px] font-bold text-rose-600 font-sukhumvit">
+                  <CountdownTimer
+                    startTime={room.startTime}
+                    durationMinutes={room.durationMinutes}
+                    onExpire={() => onChangeStatus('closed', true)}
+                    variant="plain"
+                  />
+                </span>
+              </div>
+            </>
+          )}
         </div>
+        <div className="w-full space-y-1">
+          <h3
+            className="text-[13px] font-black text-slate-800 font-sukhumvit leading-snug line-clamp-2 min-h-[calc(1.375em*2)]"
+            title={room.title}
+          >
+            {room.title}
+          </h3>
+          {role === 'sysadmin' && (
+            <p className="text-[9px] font-mono text-slate-400 truncate" title={room.id}>
+              {room.id}
+            </p>
+          )}
+        </div>
+        {(() => {
+          const groupCfg = room.subjectGroupId
+            ? SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId]
+            : undefined;
+          const label = room.subSubjectGroup?.trim() || groupCfg?.name;
+          if (!label) return null;
+          return (
+            <span
+              className="inline-flex max-w-full items-center rounded-full px-2 py-0.5 text-[9px] font-bold truncate"
+              style={{ color: groupCfg?.color, backgroundColor: groupCfg?.bg }}
+              title={label}
+            >
+              {label}
+            </span>
+          );
+        })()}
         {!isStudent && (canEdit || canDelete) && (
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center justify-center gap-1.5">
             {hasScoreConnection && (
               <button
                 type="button"
@@ -2886,221 +3074,24 @@ function RoomCard({
                 <HiEye className="w-4 h-4" />
               </RoomCardIconButton>
             )}
-            <RoomCardIconButton
-              onClick={() => setShowActions((prev) => !prev)}
-              title={showActions ? 'กลับ' : 'จัดการห้องสอบ'}
-            >
-              {showActions ? (
-                <HiXMark className="w-4 h-4" />
-              ) : (
-                <HiSquares2X2 className="w-4 h-4" />
-              )}
-            </RoomCardIconButton>
-          </div>
-        )}
-      </div>
-
-      <AnimatePresence mode="wait" initial={false}>
-        {showActions ? (
-          <motion.div
-            key="actions"
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.15 }}
-            className="flex-1"
-          >
-            <RoomCardActionsPanel
-              canEdit={canEdit}
-              canDelete={canDelete}
-              needsQuestionSetup={needsQuestionSetup}
-              onEdit={onEdit}
-              onOpenSettings={onOpenSettings}
-              onDelete={onDelete}
-              onClose={() => setShowActions(false)}
-            />
-          </motion.div>
-        ) : (
-          <motion.div
-            key="details"
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.15 }}
-            className="flex flex-col gap-2 flex-1 min-h-0"
-          >
-            <div className="space-y-1 min-w-0">
-              <h3
-                className="text-[13px] font-black text-slate-800 font-sukhumvit leading-snug line-clamp-2 min-h-[calc(1.375em*2)]"
-                title={room.title}
-              >
-                {room.title}
-              </h3>
-              {role === 'sysadmin' && (
-                <p
-                  className="text-[9px] font-mono text-slate-400 truncate"
-                  title={room.id}
-                >
-                  {room.id}
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-nowrap items-center gap-1 min-w-0 overflow-hidden min-h-[1.5rem]">
-              {classBadgeLabel ? (
-                <>
-                {gradeLevel ? (
-                  <GradeLevelBadge gradeLevel={gradeLevel} roomNumber={roomNumber || undefined} />
-                ) : (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit text-slate-600 bg-slate-100 border border-slate-200 shrink-0">
-                    {classBadgeLabel}
-                  </span>
-                )}
-                {room.subjectName && (
-                  <>
-                    <span className="text-[10px] text-slate-300">·</span>
-                    <span className="text-[10px] text-slate-500 font-sarabun truncate">{room.subjectName}</span>
-                  </>
-                )}
-                {room.subjectGroupId && SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId] && (
-                  <>
-                    <span className="text-[10px] text-slate-300"> · </span>
-                    <span
-                      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit leading-none max-w-[180px] truncate"
-                      style={{
-                        color: SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].color,
-                        backgroundColor: SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].bg,
-                        border: `1px solid ${SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].border}`,
-                      }}
-                      title={SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].name}
-                    >
-                      {SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].name}
-                    </span>
-                  </>
-                )}
-                {room.subSubjectGroup && (
-                  <>
-                    <span className="text-[10px] text-slate-300"> · </span>
-                    <SubSubjectGroupBadge
-                      label={room.subSubjectGroup}
-                      subjectGroupId={room.subjectGroupId}
-                      maxWidth="160px"
-                    />
-                  </>
-                )}
-                </>
-              ) : null}
-              {scoreCollectionEnabled && (
-                <>
-                  {classBadgeLabel ? <span className="text-[10px] text-slate-300"> · </span> : null}
-                  <span
-                    className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black font-sukhumvit leading-none shrink-0"
-                    style={{
-                      color: scoreTypeCfg.color,
-                      backgroundColor: scoreTypeCfg.bg,
-                      border: `1px solid ${scoreTypeCfg.border}`,
-                    }}
-                    title={`ประเภทการเก็บคะแนน: ${scoreTypeCfg.label}`}
-                  >
-                    {scoreTypeCfg.label}
-                  </span>
-                </>
-              )}
-            </div>
-
-            <div className="flex items-center gap-1.5 min-w-0 min-h-[1.25rem]">
-              {room.teacherName && (
-                <p className="text-[10px] font-bold text-slate-600 font-sarabun truncate min-w-0">
-                  {room.teacherName}
-                </p>
-              )}
-              {createdDateStr && (
-                <span className="text-[10px] text-slate-400 font-sarabun shrink-0 ml-auto">
-                  {createdDateStr}
-                </span>
-              )}
-            </div>
-
-            {showFooterActions && (
-              <div className="flex items-center gap-1.5 pt-0.5 mt-auto">        {isStudent ? (
-          <>
-            {showStudentTakeExam && (
+            {!isStudent && room.status === 'upcoming' && (
               <motion.button
-                whileTap={{ scale: 0.98 }}
-                onClick={onTakeExam}
-                className="flex items-center justify-center gap-1 h-7 px-3 rounded-lg text-[10px] font-bold text-white flex-1 min-w-0 transition-colors bg-indigo-600 hover:bg-indigo-700"
-              >
-                <HiBookOpen className="w-3 h-3 shrink-0" />
-                <span className="truncate">ทำข้อสอบ</span>
-              </motion.button>
-            )}
-            {showStudentResults && (
-              <>
-                <motion.button
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => { window.location.href = `/exam/${room.id}`; }}
-                  className="flex items-center justify-center gap-1 h-8 px-3 rounded-lg text-[10px] font-bold flex-1 min-w-0 border border-slate-200/80 bg-slate-50 text-slate-600"
-                >
-                  <HiDocumentText className="w-3 h-3 shrink-0" />
-                  <span className="truncate">
-                    {(() => {
-                      const display = resolveAttemptScoreDisplay(room, myAttempt!);
-                      return display.score !== null
-                        ? `${display.score}/${display.maxPoints || '?'}`
-                        : 'ดูผล';
-                    })()}
-                  </span>
-                </motion.button>
-                <motion.button
-                  whileTap={{ scale: 0.92 }}
-                  onClick={() => onShowSummary(room, myAttempt!)}
-                  className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors"
-                  title="สรุปคะแนน"
-                >
-                  <HiPresentationChartLine className="w-3.5 h-3.5" />
-                </motion.button>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            {room.status === 'upcoming' && (
-              <motion.button
-                whileTap={{ scale: 0.98 }}
+                whileTap={{ scale: 0.92 }}
                 onClick={() => onChangeStatus('active')}
-                className="flex items-center justify-center gap-1 h-7 px-2.5 rounded-lg text-[10px] font-bold flex-1 min-w-0 bg-emerald-100 text-emerald-700 hover:bg-emerald-200/80 transition-colors"
+                title={`เริ่มรอบ ${(room.completedRounds ?? 0) + 1}`}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 hover:bg-emerald-200/80 transition-colors"
               >
-                <HiPlay className="w-3 h-3 shrink-0" />
-                <span className="truncate">
-                  รอบ {(room.completedRounds ?? 0) + 1}
-                </span>
-              </motion.button>
-            )}
-            {room.status === 'active' && (
-              <motion.button
-                whileTap={{ scale: 0.98 }}
-                onClick={() => onChangeStatus('closed')}
-                className="flex items-center justify-center gap-1.5 h-7 px-2.5 rounded-lg text-[10px] font-bold flex-1 min-w-0 bg-rose-100 text-rose-600 hover:bg-rose-200/80 transition-colors"
-              >
-                <HiStop className="w-3 h-3 shrink-0" />
-                <span className="truncate">ปิด รอบ {room.currentRound ?? 1}</span>
-                <CountdownTimer
-                  startTime={room.startTime}
-                  durationMinutes={room.durationMinutes}
-                  onExpire={() => onChangeStatus('closed', true)}
-                  variant="plain"
-                />
+                <HiPlay className="w-4 h-4" />
               </motion.button>
             )}
             {showFinishButton && (
               <motion.button
-                whileTap={{ scale: 0.98 }}
+                whileTap={{ scale: 0.92 }}
                 onClick={onFinish}
                 title="จบห้องสอบถาวร — ห้องสอบนี้จะไม่สามารถเปิดได้อีก"
-                className="inline-flex items-center justify-center gap-1 h-7 px-2 rounded-lg text-[10px] font-bold shrink-0 bg-blue-100 text-blue-600 hover:bg-blue-200/80 transition-colors"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200/80 transition-colors"
               >
-                <HiCheckCircle className="w-3 h-3 shrink-0" />
-                <span className="truncate">เสร็จสิ้น</span>
+                <HiCheckCircle className="w-4 h-4" />
               </motion.button>
             )}
             {showClosedFinishDisabled && (
@@ -3108,22 +3099,97 @@ function RoomCard({
                 type="button"
                 disabled
                 title="ห้องสอบนี้ปิดแล้ว"
-                className="flex w-full items-center justify-center gap-1 h-7 px-2 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-400 cursor-not-allowed"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400 cursor-not-allowed"
               >
-                <HiCheckCircle className="w-3 h-3 shrink-0" />
-                <span className="truncate">เสร็จสิ้น</span>
+                <HiCheckCircle className="w-4 h-4" />
               </button>
             )}
-          </>
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.92 }}
+              onClick={(e) => {
+                if (showActions) {
+                  setShowActions(false);
+                  setActionsAnchorRect(null);
+                  return;
+                }
+                setActionsAnchorRect(e.currentTarget.getBoundingClientRect());
+                setShowActions(true);
+              }}
+              title="จัดการห้องสอบ"
+              className={cn(ROOM_CARD_ICON_BTN_BASE, 'bg-slate-100 hover:bg-slate-200/80 text-slate-900')}
+            >
+              <HiSquares2X2 className="w-4 h-4" />
+            </motion.button>
+          </div>
         )}
+      </div>
+
+      {showActions && actionsAnchorRect && (
+        <RoomCardActionsPlate
+          anchorRect={actionsAnchorRect}
+          canEdit={canEdit}
+          canDelete={canDelete}
+          needsQuestionSetup={needsQuestionSetup}
+          onEdit={onEdit}
+          onOpenSettings={onOpenSettings}
+          onDelete={onDelete}
+          onClose={() => {
+            setShowActions(false);
+            setActionsAnchorRect(null);
+          }}
+        />
+      )}
+
+      <div className="flex flex-col gap-2 flex-1 min-h-0">
+            {room.subjectName && (
+              <div className="flex flex-nowrap items-center gap-1 min-w-0 overflow-hidden min-h-[1.5rem]">
+                <span className="text-[10px] text-slate-500 font-sarabun truncate">{room.subjectName}</span>
               </div>
             )}
+
+            {showFooterActions && (
+              <div className="flex items-center justify-center gap-1.5 pt-0.5 mt-auto">        {isStudent ? (
+          <>
+            {showStudentResults && (
+              <>
+                <motion.button
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => { window.location.href = `/exam/${room.id}`; }}
+                  className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-slate-100 hover:bg-slate-200/80 text-slate-900 transition-colors"
+                  title="ดูผล"
+                >
+                  <HiPlay className="w-3.5 h-3.5" />
+                </motion.button>
+                <motion.button
+                  whileTap={{ scale: 0.92 }}
+                  onClick={() => onShowSummary(room, myAttempt!)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-slate-100 hover:bg-slate-200/80 text-slate-900 transition-colors"
+                  title="สรุปคะแนน"
+                >
+                  <HiPresentationChartLine className="w-3.5 h-3.5" />
+                </motion.button>
+              </>
+            )}
+          </>
+        ) : null}
+              </div>
+            )}
+      </div>
           </motion.div>
         )}
       </AnimatePresence>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {showDetail && (
+        <RoomIconDetailDrawer
+          open={showDetail}
+          onClose={() => setShowDetail(false)}
+          room={room}
+          canEdit={canEdit}
+          isStudent={isStudent}
+          onOpenSettings={(tab) => onOpenSettings(tab)}
+          onEdit={onEdit}
+        />
+      )}
     </motion.div>
   );
 }
@@ -5132,13 +5198,14 @@ export default function ExamManager() {
   const [createPrefill, setCreatePrefill] = useState<CreateRoomPrefill | null>(null);
   const [editingRoom, setEditingRoom] = useState<ExamRoom | null>(null);
   const [proctoringRoom, setProctoringRoom] = useState<ExamRoom | null>(null);
-  const [filterStatus, setFilterStatus] = useState<'all' | ExamRoom['status']>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | ExamRoom['status']>(isStudent ? 'active' : 'upcoming');
   const [filterDepartment, setFilterDepartment] = useState<Department | 'all'>('all');
   const [filterGradeLevel, setFilterGradeLevel] = useState<string>('all');
   const [filterRoomNumber, setFilterRoomNumber] = useState<string>('all');
   const [filterSubjectGroup, setFilterSubjectGroup] = useState<SubjectGroupId | 'all'>('all');
   const [filterSubSubjectGroup, setFilterSubSubjectGroup] = useState<string>('all');
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileStatusMenuOpen, setMobileStatusMenuOpen] = useState(false);
   const [roomSearchText, setRoomSearchText] = useState('');
   const [detailRoom, setDetailRoom] = useState<ExamRoom | null>(null);
@@ -5308,7 +5375,9 @@ export default function ExamManager() {
 
       const matchSubjectGroup = filterSubjectGroup === 'all' || room.subjectGroupId === filterSubjectGroup;
       const matchSubSubjectGroup = filterSubSubjectGroup === 'all'
-        || (room.subSubjectGroup?.trim() || '') === filterSubSubjectGroup;
+        || (filterSubSubjectGroup === NO_SUB_SUBJECT_GROUP
+          ? !room.subSubjectGroup?.trim()
+          : (room.subSubjectGroup?.trim() || '') === filterSubSubjectGroup);
 
       return matchStatus && matchSearch && matchDepartment && matchGrade && matchRoom && matchSubjectGroup && matchSubSubjectGroup;
     })
@@ -5346,25 +5415,32 @@ export default function ExamManager() {
     setMobileStatusMenuOpen(false);
   };
 
-  const desktopStatusFilterSelect = (
-    <div className="relative hidden items-center lg:flex">
-      <span
-        className="pointer-events-none absolute left-3 h-1.5 w-1.5 rounded-full"
-        style={{ backgroundColor: EXAM_STATUS_FILTER_COLORS[filterStatus] }}
-        aria-hidden
-      />
-      <select
-        value={filterStatus}
-        onChange={(e) => handleStatusFilterChange(e.target.value as typeof filterStatus)}
-        className={EXAM_STATUS_FILTER_SELECT_CLASS}
-        aria-label="กรองตามสถานะห้องสอบ"
-      >
-        {statusFilterOptions.map((option) => (
-          <option key={option.key} value={option.key}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+  // Header panel ฝั่งขวา มุมขวา: tab กรองสถานะห้องสอบ (ย้ายมาจาก select บน header บนสุด)
+  const statusFilterTabs = (
+    <div className="mb-3 hidden justify-start lg:flex">
+      <div className="flex h-8 items-center gap-0.5 rounded-lg border border-slate-200/20 bg-slate-100/80 p-0.5">
+        {statusFilterOptions.map((option) => {
+          const active = filterStatus === option.key;
+          return (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => handleStatusFilterChange(option.key)}
+              className={cn(
+                'flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-[11px] font-bold transition-all',
+                active ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-800',
+              )}
+            >
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ backgroundColor: EXAM_STATUS_FILTER_COLORS[option.key] }}
+                aria-hidden
+              />
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 
@@ -5428,12 +5504,16 @@ export default function ExamManager() {
     setFilterDepartment(dept);
     setFilterGradeLevel('all');
     setFilterRoomNumber('all');
+    setFilterSubjectGroup('all');
+    setFilterSubSubjectGroup('all');
     setDetailRoom(null);
   };
 
   const handleGradeFilterChange = (grade: string) => {
     setFilterGradeLevel(grade);
     setFilterRoomNumber('all');
+    setFilterSubjectGroup('all');
+    setFilterSubSubjectGroup('all');
     setDetailRoom(null);
   };
 
@@ -5446,6 +5526,31 @@ export default function ExamManager() {
     return Object.entries(SUBJECT_GROUP_CONFIG).sort(([, a], [, b]) => a.order - b.order);
   }, []);
 
+  // Teacher role: กรอง sidebar ให้เหลือเฉพาะกลุ่มสาระที่ได้รับมอบหมายสอนจริงในชั้นที่เลือก
+  const myAssignedSubjectGroupIds = useMemo(() => {
+    if (role !== 'teacher' || filterDepartment === 'all' || filterGradeLevel === 'all') return null;
+    const subjectGroupBySubjectId = new Map(
+      teachingMgr.mySubjects
+        .filter((s) => s.subjectGroup)
+        .map((s) => [s.id, s.subjectGroup as string]),
+    );
+    const groupIds = new Set<string>();
+    teachingMgr.yearClasses
+      .filter((c) => (c.departmentId || c.department) === filterDepartment && c.gradeLevel === filterGradeLevel)
+      .forEach((c) => {
+        (c.enrolledCourses ?? []).forEach((ec) => {
+          if (!matchesTeacherIdentity(ec.teacherId, teachingMgr.teacherIdentityKeys)) return;
+          const groupId = subjectGroupBySubjectId.get(ec.subjectId);
+          if (groupId) groupIds.add(groupId);
+        });
+      });
+    return groupIds;
+  }, [role, filterDepartment, filterGradeLevel, teachingMgr.mySubjects, teachingMgr.yearClasses, teachingMgr.teacherIdentityKeys]);
+
+  const visibleSubjectGroups = myAssignedSubjectGroupIds
+    ? subjectGroups.filter(([id]) => myAssignedSubjectGroupIds.has(id))
+    : subjectGroups;
+
   const resetStructureFilters = () => {
     setFilterDepartment('all');
     setFilterGradeLevel('all');
@@ -5456,115 +5561,125 @@ export default function ExamManager() {
     setDetailRoom(null);
   };
 
-  const structureFilterFields = (
-    <div className="flex w-full flex-col gap-2">
-      <div className="flex w-full flex-col gap-2 lg:flex-row lg:flex-nowrap lg:items-center lg:gap-1.5">
-        <select
-          value={filterDepartment}
-          onChange={(e) => handleDepartmentFilterChange(e.target.value as Department | 'all')}
-          className={cn(
-            EXAM_FILTER_SELECT_CLASS,
-            'lg:flex-1',
-            filterDepartment === 'all' && 'text-slate-400',
-          )}
-        >
-          <option value="all">แผนก</option>
-          {examFilterOptions.departments.map((dept) => (
-            <option key={dept} value={dept}>{DEPARTMENT_CONFIG[dept].label}</option>
-          ))}
-        </select>
+  // Sidebar: แผนก → ชั้น (built-in cascade) → กลุ่มสาระ (children, card-based)
+  // Student: dept/grade การ์ดถูกซ่อน (rooms ถูก scope จากฝั่ง server มาเป็นของตัวเองแล้ว) จึงข้ามไปแสดงกลุ่มสาระได้เลย
+  const sidebarBrowseNav = isStudent || (filterDepartment !== 'all' && filterGradeLevel !== 'all') ? (
+    <>
+      <section className="pb-1">
+        <p className="mb-2 px-0.5 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+          กลุ่มสาระ
+        </p>
+        <div className="flex flex-col gap-2">
+          {visibleSubjectGroups.map(([id, cfg]) => {
+            const active = filterSubjectGroup === id;
+            const count = rooms.filter((r) => {
+              const dept = (r.departmentId || 'secondary') as Department;
+              return (filterDepartment === 'all' || dept === filterDepartment)
+                && (filterGradeLevel === 'all' || getExamRoomGradeLevel(r) === filterGradeLevel)
+                && r.subjectGroupId === id;
+            }).length;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setFilterSubjectGroup(id as SubjectGroupId);
+                  setFilterSubSubjectGroup('all');
+                  setDetailRoom(null);
+                }}
+                className="flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all shadow-sm"
+                style={{
+                  backgroundColor: active ? cfg.color : cfg.bg,
+                  borderColor: active ? cfg.color : cfg.border,
+                }}
+              >
+                <span
+                  className={cn(
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg shadow-sm',
+                    active ? 'bg-white/20' : 'bg-white',
+                  )}
+                  style={{ color: active ? '#ffffff' : cfg.color }}
+                >
+                  <SubjectIcon subjectGroup={id} size={18} className="text-current drop-shadow-sm" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span
+                    className="block truncate text-[13px] font-black font-sukhumvit"
+                    style={{ color: active ? '#ffffff' : cfg.color }}
+                  >
+                    {cfg.name}
+                  </span>
+                  <span
+                    className="block text-[10px] font-bold"
+                    style={{ color: active ? 'rgba(255,255,255,0.75)' : cfg.color, opacity: active ? 1 : 0.75 }}
+                  >
+                    {count.toLocaleString('th-TH')} ห้องสอบ
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    </>
+  ) : null;
 
-        <select
-          value={filterGradeLevel}
-          onChange={(e) => handleGradeFilterChange(e.target.value)}
-          disabled={availableGradeLevels.length === 0}
-          className={cn(
-            EXAM_FILTER_SELECT_CLASS,
-            'lg:flex-1',
-            filterGradeLevel === 'all' && 'text-slate-400',
-          )}
-        >
-          <option value="all">ระดับชั้น</option>
-          {availableGradeLevels.map((grade) => (
-            <option key={grade} value={grade}>{grade}</option>
-          ))}
-        </select>
-
-        <select
-          value={filterRoomNumber}
-          onChange={(e) => handleRoomFilterChange(e.target.value)}
-          disabled={filterGradeLevel === 'all' || availableRoomNumbers.length === 0}
-          className={cn(
-            EXAM_FILTER_SELECT_CLASS,
-            'lg:flex-1',
-            filterRoomNumber === 'all' && 'text-slate-400',
-          )}
-        >
-          <option value="all">ห้อง</option>
-          {availableRoomNumbers.map((roomNumber) => (
-            <option key={roomNumber} value={roomNumber}>{roomNumber}</option>
-          ))}
-        </select>
-
-        <select
-          value={filterSubjectGroup}
-          onChange={(e) => {
-            setFilterSubjectGroup(e.target.value as SubjectGroupId | 'all');
-            setFilterSubSubjectGroup('all');
-            setDetailRoom(null);
-          }}
-          className={cn(
-            EXAM_FILTER_SELECT_CLASS,
-            'lg:flex-1',
-            filterSubjectGroup === 'all' && 'text-slate-400',
-          )}
-        >
-          <option value="all">กลุ่มสาระ</option>
-          {subjectGroups.map(([id, group]) => (
-            <option key={id} value={id}>{group.name}</option>
-          ))}
-        </select>
-
-        <select
-          value={filterSubSubjectGroup}
-          onChange={(e) => {
-            setFilterSubSubjectGroup(e.target.value);
-            setDetailRoom(null);
-          }}
-          disabled={availableSubSubjectGroups.length === 0}
-          className={cn(
-            EXAM_FILTER_SELECT_CLASS,
-            'lg:flex-1',
-            (filterSubSubjectGroup === 'all' || availableSubSubjectGroups.length === 0) && 'text-slate-400',
-          )}
-        >
-          <option value="all">สาระย่อย</option>
-          {availableSubSubjectGroups.map((sub) => (
-            <option key={sub} value={sub}>{sub}</option>
-          ))}
-        </select>
-
-        {hasStructureFilter && (
+  // Header panel ฝั่งขวา: tab เลือกสาระย่อย — โผล่เฉพาะตอนกลุ่มสาระที่เลือกมีสาระย่อยจริง
+  const subSubjectGroupTabs = filterSubjectGroup !== 'all' ? (
+    <div className="mb-3 flex h-8 w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-slate-200/20 bg-slate-100/80 p-0.5 scrollbar-hide">
+      <button
+        type="button"
+        onClick={() => {
+          setFilterSubSubjectGroup('all');
+          setDetailRoom(null);
+        }}
+        className={cn(
+          'flex h-7 shrink-0 items-center justify-center rounded-md px-3 text-[11px] font-bold transition-all',
+          filterSubSubjectGroup === 'all'
+            ? 'bg-white text-slate-800 shadow-xs'
+            : 'text-slate-500 hover:text-slate-800',
+        )}
+      >
+        ทั้งหมด
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setFilterSubSubjectGroup(NO_SUB_SUBJECT_GROUP);
+          setDetailRoom(null);
+        }}
+        className={cn(
+          'flex h-7 shrink-0 items-center justify-center rounded-md px-3 text-[11px] font-bold transition-all',
+          filterSubSubjectGroup === NO_SUB_SUBJECT_GROUP
+            ? 'bg-white text-slate-800 shadow-xs'
+            : 'text-slate-500 hover:text-slate-800',
+        )}
+      >
+        ไม่มีสาระย่อย
+      </button>
+      {availableSubSubjectGroups.map((sub) => {
+        const active = filterSubSubjectGroup === sub;
+        return (
           <button
+            key={sub}
             type="button"
             onClick={() => {
-              resetStructureFilters();
-              setMobileFilterOpen(false);
+              setFilterSubSubjectGroup(sub);
+              setDetailRoom(null);
             }}
-            className="inline-flex h-9 shrink-0 items-center rounded-xl border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-50 font-sukhumvit"
+            className={cn(
+              'flex h-7 shrink-0 items-center justify-center rounded-md px-3 text-[11px] font-bold transition-all',
+              active
+                ? 'bg-white text-slate-800 shadow-xs'
+                : 'text-slate-500 hover:text-slate-800',
+            )}
           >
-            ล้างตัวกรอง
+            {sub}
           </button>
-        )}
-      </div>
+        );
+      })}
     </div>
-  );
-
-  const examStructureFilters = (
-    <div className="mb-3 hidden flex-col gap-2 lg:flex">
-      {structureFilterFields}
-    </div>
-  );
+  ) : null;
 
   const handleChangeStatus = async (roomId: string, status: ExamRoom['status'], bypassConfirm = false) => {
     if (status === 'closed' && !bypassConfirm) {
@@ -5645,23 +5760,7 @@ export default function ExamManager() {
   };
 
   return (
-    <div className={cn('relative w-full flex flex-col', liveDetailRoom && 'min-h-0 flex-1')}>
-      {headerRightPortalEl && !liveDetailRoom &&
-        createPortal(
-          <div className="hidden lg:flex items-center gap-1.5">
-            {desktopStatusFilterSelect}
-            {canEdit && !isStudent && (
-              <button
-                onClick={() => setShowCreate(true)}
-                className="flex items-center justify-center w-9 h-9 rounded-full text-white transition-all border border-blue-700 bg-blue-600 hover:bg-blue-700"
-                title="สร้างห้องสอบ"
-              >
-                <Plus size={18} />
-              </button>
-            )}
-          </div>,
-          headerRightPortalEl,
-        )}
+    <div className="relative flex w-full min-h-0 flex-1 flex-col h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]">
       {headerMobileActionsPortalEl && !liveDetailRoom && createPortal(
         <div className="pointer-events-auto flex items-center gap-1.5">
           <ExamMobileFilterTriggerButton
@@ -5732,10 +5831,10 @@ export default function ExamManager() {
         </motion.button>,
         headerMobileBackPortalEl,
       )}
-      <div className={cn('w-full flex flex-col gap-4', liveDetailRoom ? 'flex-1 min-h-0' : 'pb-24 lg:pb-0')}>
+      <div className={cn('flex w-full min-h-0 flex-1 flex-col gap-4', !liveDetailRoom && 'pb-24 lg:pb-0')}>
 
-        {/* ── Main area: grid OR detail ── */}
-        <div className={liveDetailRoom ? 'flex-1 min-h-0 flex flex-col overflow-hidden' : undefined}>
+        {/* ── Main area: rooms grid/detail ── */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <AnimatePresence mode="wait">
             {liveDetailRoom ? (
               <RoomDetailView
@@ -5763,13 +5862,67 @@ export default function ExamManager() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="w-full"
+                className="flex min-h-0 w-full flex-1 flex-col gap-4 lg:flex-row lg:items-stretch"
               >
-                {examStructureFilters}
+                <div
+                  className={cn(
+                    'hidden shrink-0 flex-col overflow-hidden lg:flex lg:h-auto lg:max-h-full',
+                    sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+                  )}
+                >
+                  <GradeBookClassSidebar
+                    selectedDept={filterDepartment === 'all' ? '' : filterDepartment}
+                    selectedGrade={filterGradeLevel === 'all' ? '' : filterGradeLevel}
+                    selectedClassId=""
+                    gradeOptions={availableGradeLevels}
+                    classOptions={[]}
+                    onSelectDept={handleDepartmentFilterChange}
+                    onSelectGrade={handleGradeFilterChange}
+                    onSelectClass={() => {}}
+                    showRooms={false}
+                    showGradeRoomNav={!isStudent}
+                    hideDeptCards={isStudent}
+                    collapsed={sidebarCollapsed}
+                    headerAction={(
+                      <div className={cn('flex', HEADER_ICON_BTN_GROUP)}>
+                        {canEdit && !isStudent && (
+                          <button
+                            type="button"
+                            onClick={() => setShowCreate(true)}
+                            className={HEADER_ICON_BTN}
+                            title="สร้างห้องสอบ"
+                            aria-label="สร้างห้องสอบ"
+                          >
+                            <Plus size={16} strokeWidth={3} />
+                          </button>
+                        )}
+                        <SidebarCollapseButton
+                          collapsed={sidebarCollapsed}
+                          onToggle={() => setSidebarCollapsed((v) => !v)}
+                        />
+                      </div>
+                    )}
+                  >
+                    {sidebarBrowseNav}
+                  </GradeBookClassSidebar>
+                </div>
+
+                <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain scrollbar-hide">
+                {statusFilterTabs}
+                {subSubjectGroupTabs}
                 {isLoading ? (
                   <div className="flex-1 flex flex-col items-center justify-center py-40 gap-6">
                     <IndeterminateProgress />
                     <p className="text-slate-400 font-sarabun text-[14px]">กำลังโหลดข้อมูลห้องสอบ...</p>
+                  </div>
+                ) : !isStudent && filterSubjectGroup === 'all' ? (
+                  <div className="flex flex-col items-center justify-center py-20 gap-3">
+                    <div className="w-16 h-16 rounded-full bg-white/50 flex items-center justify-center">
+                      <ClipboardList size={28} className="text-slate-300" />
+                    </div>
+                    <p className="text-slate-400 font-sarabun text-[14px]">
+                      เลือกกลุ่มสาระด้านซ้ายเพื่อดูห้องสอบ
+                    </p>
                   </div>
                 ) : filtered.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-20 gap-3">
@@ -5910,6 +6063,7 @@ export default function ExamManager() {
                     )}
                   </div>
                 )}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>

@@ -1,0 +1,30 @@
+---
+description: Caveman mouth + Ponytail build + UI iron rules. Always on.
+alwaysApply: true
+---
+
+# Agent core
+
+Caveman = mouth. Ponytail = build. UI = primitives/tokens. No overlap.
+
+## Mouth (caveman)
+Terse. Substance stay. Fluff die. Fragments OK. Code/commits/PRs = normal prose.
+- Drop articles, filler, hedging, pleasantries. Pattern: `[thing] [action] [reason].`
+- Switch: `/caveman lite|full|ultra|wenyan`. Stop: `stop caveman` / `normal mode`.
+- Auto-Clarity: drop caveman for security, irreversible acts, user confused.
+
+## Build (ponytail)
+Understand problem first. Then first rung that holds:
+1. Need exist? skip · 2. In codebase? reuse · 3. Stdlib · 4. Native · 5. Installed dep · 6. One line · 7. Min that works
+Bug = root cause once (grep callers). Deletion > addition. Fewest files. No unrequested abstractions/deps/boilerplate.
+Never cut: trust-boundary validation, data-loss handling, security, a11y. Wrong-place small diff = second bug.
+Mark deliberate ceilings with `ponytail:` comment + upgrade path. Non-trivial logic → one tiny runnable check.
+
+## UI (กฎเหล็ก)
+1. Button/form/card/modal → import `@/components/ui/*` only. Missing variant? edit that ui file once — never fork in feature.
+2. New buttons = `rounded-2xl` (Button default). No `rounded-full`/`rounded-4xl` on action buttons.
+3. Header icons → `HEADER_ICON_BTN` + `HEADER_ICON_BTN_GROUP` from `@/lib/headerIconBtn` (gap-1.5). Filter = `HiOutlineFunnel` size 16.
+4. Colors → semantic tokens from `src/index.css` only (`primary`, `destructive`, `border`…). No hex / raw `slate-*` for brand/semantic.
+
+## Commit discipline (Cursor + Claude Code, used sequentially)
+Commit at every checkpoint (unit done + `npm run build` green), not just on tool-switch. Ask "commit now?" at each checkpoint instead of waiting. Never switch to Claude Code mid-task — finish + commit first. No handoff notes; git log is the handoff.

@@ -359,6 +359,14 @@ authService.ts → onAuthStateChanged
 
 New skills (from GitHub or elsewhere) go in `.claude/skills/` only — Claude Code's native project-skill location. Never ask an agent to bulk "learn" a skill into `.cursor/rules/*.mdc` — skills are often generic and context-free (a Next.js-focused skill once got transcribed this way and left a wrong "stack is Next.js" claim in `.cursorrules` for this Vite project). If a rule from a skill should also apply to Cursor, hand-pick and rewrite just that rule as its own `.mdc` file — don't bulk-import.
 
+### Commit Discipline (Cursor + Claude Code)
+
+This project is worked on from both Cursor and Claude Code, sequentially (not concurrently). To keep unrelated work from piling up uncommitted in one giant diff:
+
+- Commit at every working checkpoint — a logical unit of work done and `npm run build` passing — not just when switching tools.
+- Claude Code should proactively ask "commit now?" at each checkpoint rather than waiting to be asked.
+- Never switch tools mid-task before reaching a checkpoint. Finish and commit first, then switch. This removes the need for handoff notes between tools — git log is the handoff.
+
 ---
 
 ## Known Mock/TODOs in Code

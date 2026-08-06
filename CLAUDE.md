@@ -357,7 +357,11 @@ authService.ts → onAuthStateChanged
 
 ### Installing Skills
 
-New skills (from GitHub or elsewhere) go in `.claude/skills/` only — Claude Code's native project-skill location. Never ask an agent to bulk "learn" a skill into `.cursor/rules/*.mdc` — skills are often generic and context-free (a Next.js-focused skill once got transcribed this way and left a wrong "stack is Next.js" claim in `.cursorrules` for this Vite project). If a rule from a skill should also apply to Cursor, hand-pick and rewrite just that rule as its own `.mdc` file — don't bulk-import.
+Cursor and Claude Code both read the same `SKILL.md` format natively — Cursor has its own skill support (`.cursor/skills/` project-level, `~/.cursor/skills/` user-level, plus its built-in `~/.cursor/skills-cursor/` — never touch that one). No transcription needed between tools.
+
+Install new skills into `.claude/skills/<name>/`. If the skill should also be available in Cursor, symlink it: `ln -s ../../.claude/skills/<name> .cursor/skills/<name>`. One real copy, two tools see it, nothing to keep in sync by hand.
+
+`.cursor/rules/*.mdc` is a separate, older mechanism (always-on project rules, not the skill system) — reserve it for genuinely project-specific conventions written by hand (see `agent-core.mdc`), not as a place to dump a skill's content. A generic skill's guidance can be wrong for this project's actual stack if copied in blind (a Next.js-focused skill once got transcribed this way and left a wrong "stack is Next.js" claim in the now-removed `.cursorrules`).
 
 ### Commit Discipline (Cursor + Claude Code)
 

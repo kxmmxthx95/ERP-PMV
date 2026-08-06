@@ -66,14 +66,7 @@ import { PermissionGate } from '../components/PermissionGate'; // ✗
 
 ---
 
-## Firebase Setup & Firestore Indexes
-
-### Initial Setup
-
-1. Get `.env` with Firebase config from a team member
-2. Install Firebase CLI: `npm install -g firebase-tools`
-3. Authenticate: `firebase login`
-4. Verify config: `npm run validate:firestore-config`
+## Firestore Indexes
 
 ### Deploying Indexes
 
@@ -84,16 +77,6 @@ firebase deploy --only firestore:indexes
 ```
 
 This is safe to run locally — it just creates indexes in your Firebase project, doesn't mutate data. Check [Firebase Console](https://console.firebase.google.com) → Firestore → Indexes to see deployment status.
-
-### Local Emulator (Optional)
-
-To test locally without hitting live Firebase:
-
-```bash
-firebase emulators:start
-```
-
-Then point your app to the local emulator by setting environment variables in your `.env.local` or modifying `src/lib/firebase.ts`.
 
 ---
 
@@ -120,37 +103,51 @@ The canonical feature key list is in `src/types/rolePermission.ts` (`FEATURE_LIS
 The active router is **`src/App.tsx`** (not `src/router/AppRouter.tsx`, which is legacy/unused). All feature pages are lazy-loaded via `React.lazy`. The layout wrapper is `src/components/layouts/PortalLayout.tsx`, which renders the mobile bottom tab bar and the side drawer nav — both configured per role via `ROLE_CONFIG` and `BOTTOM_TAB_CONFIG` inside that file.
 
 ```
-/login                    → LoginPage (public)
-/line/connect             → LineConnectPage (public)
-/portal                   → PortalLayout (protected)
-  /portal                 → HomePage (widgets, role-aware)
-  /portal/users           → UsersPage
-  /portal/logs            → LogsPage
-  /portal/roles           → RolePermissionManager
-  /portal/calendar        → AcademicCalendar
-  /portal/curriculum      → CurriculumManager
-  /portal/schedule        → ScheduleEditor
-  /portal/teachers        → TeacherManager
-  /portal/lesson-plan     → LessonPlanManager
-  /portal/classes         → ClassManager
-  /portal/students        → StudentManager
-  /portal/profile         → ProfilePage
-  /portal/teaching        → TeachingManager
-  /portal/exams           → ExamManager
-  /portal/question-bank   → QuestionBankManager
-  /portal/grades          → GradeBookPage
-  /portal/attendance      → AttendanceCenterPage
-  /portal/staff-attendance → StaffAttendancePage
-  /portal/morning-rollcall → MorningRollCallPage
-  /portal/leave           → LeaveManagementPage
-  /portal/leave/report    → LeaveReportPage
-  /portal/duty-schedule   → DutySchedulePage
-  /portal/report-control  → ReportControlCenter
-  /portal/announcements   → AnnouncementsPage
-  /portal/feedback        → FeedbackPage
-  /portal/settings        → SettingsPage (sysadmin, require='full')
-  /portal/migrate         → CourseMigrationTool (sysadmin, require='full')
-/exam/:roomId             → StudentExamPage (standalone, no layout)
+/login                        → LoginPage (public)
+/signup                       → LoginPage (public)
+/line/connect                 → LineConnectPage (public)
+/line/checkin                 → LineCheckInPage (public)
+/portal                       → PortalLayout (protected)
+  /portal                     → HomePage (widgets, role-aware)
+  /portal/users               → UsersPage
+  /portal/logs                → LogsPage
+  /portal/roles               → RolePermissionManager
+  /portal/calendar            → AcademicCalendar
+  /portal/curriculum          → CurriculumManager
+  /portal/schedule            → ScheduleEditor
+  /portal/teachers            → TeacherManager
+  /portal/lesson-plan         → LessonPlanManager
+  /portal/micro-syllabus      → MicroSyllabusPage
+  /portal/classes             → ClassManager
+  /portal/students            → StudentManager
+  /portal/profile             → ProfilePage
+  /portal/exams               → ExamLayout
+  /portal/exams/rooms         → ExamManager
+  /portal/question-bank       → QuestionBankManager
+  /portal/ai-agents           → AiAgentCommandPage
+  /portal/tasks               → TasksPage
+  /portal/grades              → GradeBookPage
+  /portal/student-analytics   → StudentAnalyticsPage
+  /portal/attendance          → AttendanceRouter (role-aware: routes to staff/teacher/admin attendance views)
+  /portal/staff-attendance    → StaffAttendancePage
+  /portal/fingerprint-devices → FingerprintDeviceManagerPage
+  /portal/teacher-kpi         → TeacherKpiPage
+  /portal/morning-rollcall    → MorningRollCallPage
+  /portal/leave               → LeaveManagementPage
+  /portal/leave/report        → LeaveReportPage
+  /portal/duty-schedule       → DutySchedulePage
+  /portal/substitute-teaching → SubstituteAssignmentPage
+  /portal/report-control      → ReportControlCenter
+  /portal/announcements       → AnnouncementsPage
+  /portal/feedback            → FeedbackPage
+  /portal/behavior            → BehaviorScorePage
+  /portal/future-plan         → FuturePlanPage
+  /portal/tuition             → TuitionLayout (index=TuitionDashboardPage, +campaigns, +campaigns/:campaignId)
+  /portal/courses             → CoursesPage
+  /portal/courses/:courseId   → CoursePlayerPage
+  /portal/settings            → SettingsPage (sysadmin, require='full')
+  /portal/migrate             → CourseMigrationTool (sysadmin, require='full')
+/exam/:roomId                 → StudentExamPage (standalone, no layout)
 ```
 
 ### State Management
@@ -166,31 +163,43 @@ Each subdirectory of `src/features/` is a self-contained feature with its own co
 
 | Feature dir | Routes | Key hook |
 |---|---|---|
-| `auth/` | `/login` | `authService.ts` |
+| `aiAgents/` | `/portal/ai-agents` | `useAgentChat` |
+| `auth/` | `/login`, `/signup` | `authService.ts` |
+| `behavior/` | `/portal/behavior` | `useBehaviorCatalog` |
 | `home/` | `/portal` | `useRolePermissions` |
 | `announcements/` | `/portal/announcements` | `useAnnouncements` |
 | `attendance/` | `/portal/attendance`, `/portal/staff-attendance`, `/portal/morning-rollcall` | `useStaffAttendance`, `useDailySchedules`, `useMorningRollCall` |
 | `calendar/` | `/portal/calendar` | `useAcademicCalendar` |
 | `classes/` | `/portal/classes` | `useSchoolStructure` |
-| `curriculum/` | `/portal/curriculum` | `useCurriculum`, `useCurriculumVersioned` |
+| `courses/` | `/portal/courses`, `/portal/courses/:courseId` | — |
+| `curriculum/` | `/portal/curriculum` | `useCurriculum`, `useCurriculumVersioned` (both in `src/hooks/`) |
 | `duty/` | `/portal/duty-schedule` | — |
-| `exam/` | `/portal/exams`, `/exam/:roomId` | `useExamRoom`, `useQuestionSetBank` |
+| `exam/` | `/portal/exams`, `/portal/exams/rooms`, `/exam/:roomId` | `useExamRoom`, `useQuestionSetBank` |
 | `feedback/` | `/portal/feedback` | `useStudentFeedback` |
+| `fingerprintDevices/` | `/portal/fingerprint-devices` | `useAttendanceDevices` |
+| `futurePlan/` | `/portal/future-plan` | `useAllFuturePlans` |
 | `grades/` | `/portal/grades` | `useGradeBook` |
 | `leave/` | `/portal/leave`, `/portal/leave/report` | `useLeaveRequests` |
 | `lessonPlan/` | `/portal/lesson-plan` | `useLessonPlan` |
+| `lineCheckIn/` | `/line/checkin` | — |
 | `logs/` | `/portal/logs` | — |
+| `microSyllabus/` | `/portal/micro-syllabus` | `useMicroSyllabus` |
 | `profile/` | `/portal/profile`, `/line/connect` | — |
 | `questionBank/` | `/portal/question-bank` | `useQuestionSetBank`, `useSetQuestions` |
 | `reports/` | `/portal/report-control` | — |
 | `roles/` | `/portal/roles` | `useRolePermissions` |
 | `schedule/` | `/portal/schedule` | `useSchedule` |
 | `settings/` | `/portal/settings`, `/portal/migrate` | — |
+| `studentAnalytics/` | `/portal/student-analytics` | `useStudentAnalytics` |
 | `students/` | `/portal/students` | `useStudentManager` |
-| `syllabus/` | (admin/teacher views) | `useSyllabus`, `useSyllabusManager`, `useTeacherSyllabus` |
+| `substituteTeaching/` | `/portal/substitute-teaching` | `useDailySchedules` |
+| `tasks/` | `/portal/tasks` | `useCreatedTasks` |
+| `teacherKpi/` | `/portal/teacher-kpi` | `useTeacherKpi` |
 | `teachers/` | `/portal/teachers` | — |
-| `teaching/` | `/portal/teaching` | `useTeachingManager` |
+| `tuition/` | `/portal/tuition` (+`campaigns`, `campaigns/:campaignId`) | — |
 | `users/` | `/portal/users` | `useUserForm` |
+
+`syllabus` hooks (`useSyllabus`, `useSyllabusManager`, `useTeacherSyllabus`) live in `src/hooks/` but aren't wired to a routed feature currently — used by each other only, not imported by any page. `teaching/` also exists under `src/features/` (components only, no page/route) — only `useTeachingManager` (a different, actively-used hook in `src/hooks/`) shares part of the name.
 
 ---
 
@@ -303,6 +312,22 @@ Theme colors are defined once in `src/index.css` as CSS variables (`:root` block
 - **ALWAYS** use the semantic Tailwind class instead: `text-primary`, `bg-destructive`, `border-border`, `text-muted-foreground`, etc.
 - To rebrand (e.g. change the school's institutional color), edit the variables in `src/index.css` once — every component using `primary`/`destructive`/etc. updates automatically.
 
+### Portal UI Iron Rules
+
+These patterns are enforced across the portal. Canonical reference files are the source of truth if this section and the code ever disagree.
+
+**Button radius:** every new button defaults to `rounded-2xl` (set on `@/components/ui/button`). Don't override with `rounded-full`/`rounded-4xl` except for circular things like avatars.
+
+**Header icon buttons** (filter/settings/home/menu/back in a portal header): use `HEADER_ICON_BTN` + `HEADER_ICON_BTN_GROUP` from `@/lib/headerIconBtn` (group gap is always `gap-1.5`). Filter trigger specifically = `HEADER_ICON_BTN` + `HiOutlineFunnel` (`react-icons/hi2`, size 16); active-filter state is an `absolute` dot (`bg-destructive`), never a restyled button. Canonical: `ScheduleEditor`.
+
+**Data tables** (student rosters, grades, exam scores — anything list+columns): use the `GradeTable` CSS-grid pattern, not `@/components/ui/table` or a card grid. Shell: `rounded-2xl border border-border bg-card overflow-hidden`. Row: `grid gap-3 px-4 py-3 items-center border-b border-border last:border-b-0 hover:bg-muted/40`. Student avatar: `<StudentAvatar />` from `@/features/students/components/StudentAvatar`. Mobile (`md:hidden`) gets cards; desktop (`hidden md:block`) gets the grid. Canonical: `src/features/grades/components/GradeTable.tsx`, `ExamRoomScoreTable.tsx`.
+
+**Split-panel pages** (sidebar list ↔ detail, e.g. student/class/teacher managers): root locks viewport height (`h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)] overflow-hidden`) — the page itself never scrolls, only inner panels do (`overflow-y-auto scrollbar-hide` + `min-h-0`, required together or flexbox won't shrink). Sidebar↔detail gap is `gap-4`; use `GradeBookClassSidebar` as the sidebar shell, don't hand-roll one. Canonical: `src/features/students/StudentManager.tsx`.
+
+**Drawer close button:** `DRAWER_HEADER_ICON_BTN` + `DRAWER_HEADER_RIGHT_ACTIONS` from `@/lib/drawerHeaderBtn`, icon `HiXMark` (`react-icons/hi2`), top-right of `DrawerHeader` (never left, never footer). A paired back button uses the same class + `HiArrowLeft`, placed left of close in the same cluster. Canonical: `MorningRollCallWidget` drawer header.
+
+**Dialog/form design** (settings & edit forms in Dialog/Sheet/Drawer): shell `rounded-2xl`, no nested bordered/shadowed card wrapping the body. Label: `text-[10px] font-black uppercase tracking-wider text-slate-600`. Input: `Input` from `@/components/ui/input` styled `h-10 rounded-xl border-none bg-slate-50/70 text-xs font-bold`. Primary save button is full-width in `DialogFooter`, system `primary` variant — never a hardcoded color, never a footer "cancel" button (use the Dialog's own X). Canonical: `src/features/schedule/components/ScheduleSettingsModal.tsx`.
+
 ### Home Page Widgets
 
 `src/features/home/HomePage.tsx` renders role-aware widgets from `src/features/home/widgets/`. Each widget is wrapped in `ProtectedWidget` (checks `featureKey` starting with `widget_`). To add a new widget:
@@ -330,31 +355,16 @@ authService.ts → onAuthStateChanged
 
 `sysadmin` role never calls Firestore for permissions — it short-circuits to `full` for everything.
 
+### Installing Skills
+
+New skills (from GitHub or elsewhere) go in `.claude/skills/` only — Claude Code's native project-skill location. Never ask an agent to bulk "learn" a skill into `.cursor/rules/*.mdc` — skills are often generic and context-free (a Next.js-focused skill once got transcribed this way and left a wrong "stack is Next.js" claim in `.cursorrules` for this Vite project). If a rule from a skill should also apply to Cursor, hand-pick and rewrite just that rule as its own `.mdc` file — don't bulk-import.
+
 ---
 
 ## Known Mock/TODOs in Code
 
-- `MOCK_TEACHER_ID = 't03'` in teacher-scoped hooks → replace with `useAuth().user.uid` when teacher backend is ready.
+- `MOCK_TEACHER_ID = 't03'` in teacher-scoped hooks (`AttendanceCenterPage.tsx`, `LessonPlanManager.tsx`) → replace with `useAuth().user.uid` when teacher backend is ready.
 - Active academic year in localStorage → migrate to Firestore real-time listener.
-- **In-memory mock data:** Several features (`curriculum/`, `syllabus/`, `schedule/`) still use hardcoded mock data instead of Firestore:
-  - `src/features/curriculum/hooks/useCurriculum.ts` → curriculum maps are mocked
-  - `src/features/syllabus/` → syllabus queries return mock documents
-  - Subject lists in curriculum/schedule features are not yet integrated with Firestore `subjects` collection
-  - These will need Firestore integration when ready for production use.
-
----
-
-## Firestore Quota Optimizations
-
-### Curriculum Feature (Soft Delete + Admin-Only Listener)
-
-**Applied:** 2026-05-20
-
-- **Soft Delete:** `deleteVersion()` now sets `isDeleted: true` + `deletedAt` instead of hard-deleting. Saves ~90% writes on curriculum deletion.
-- **Admin-Only Listener:** `useCurriculumVersioned()` listener only activates for `admin` / `sysadmin` roles. Saves ~80% reads from non-admin users.
-- **New Index:** `curriculums(isDeleted)` composite index added to `firestore.indexes.json` — deploy with `firebase deploy --only firestore:indexes`.
-
-See `.claude/CURRICULUM_SOFT_DELETE_MIGRATION.md` for details.
 
 ---
 

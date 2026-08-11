@@ -2061,7 +2061,6 @@ function QuestionsPanel({
                       )
                     ) : (
                       setQuestions.map((q, qi) => {
-                        const pts = resolveQuestionPoints(q.id, draft.questionPoints, q);
                         const plain = questionPlainText(q.questionText);
                         return (
                           <div
@@ -2079,7 +2078,7 @@ function QuestionsPanel({
                                 type="number"
                                 min={0}
                                 step={1}
-                                value={draft.questionPoints[q.id] ?? pts}
+                                value={draft.questionPoints[q.id] ?? ''}
                                 onChange={(e) => updateQuestionPoint(rk, q.id, e.target.value)}
                                 disabled={isRoundLocked(rk)}
                                 className="w-14 h-8 rounded-lg border border-border bg-card px-1 text-center text-[11px] font-bold text-foreground outline-none focus:ring-2 focus:ring-primary/25 font-sukhumvit disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted"

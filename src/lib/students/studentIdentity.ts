@@ -92,10 +92,18 @@ export function enrichStudentIdentityLookupFromAttempts(
   if (classStudents.length === 0 || attempts.length === 0) return next;
 
   const nameToCanonical = new Map<string, string>();
+  const ambiguousNames = new Set<string>();
   const codeToCanonical = new Map<string, string>();
   classStudents.forEach(({ student }) => {
     const name = studentRosterDisplayName(student);
-    if (name) nameToCanonical.set(name, student.id);
+    if (name) {
+      if (nameToCanonical.has(name)) {
+        // Duplicate display name in roster — name alone can't disambiguate, don't guess.
+        ambiguousNames.add(name);
+      } else {
+        nameToCanonical.set(name, student.id);
+      }
+    }
     const code = String(student.studentCode ?? '').trim();
     if (code) codeToCanonical.set(code, student.id);
   });
@@ -110,7 +118,7 @@ export function enrichStudentIdentityLookupFromAttempts(
     if (rawId && next.has(rawId)) return;
 
     const attName = normalizeStudentDisplayName(att.studentName ?? '');
-    if (attName) {
+    if (attName && !ambiguousNames.has(attName)) {
       const byName = nameToCanonical.get(attName);
       if (byName) {
         linkAttemptKey(rawId, byName);

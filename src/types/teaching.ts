@@ -75,6 +75,8 @@ export interface ClassSession {
   excusedStudentIds?: string[];
   leaveStudentIds?: string[];
   totalStudents?: number;
+  /** true = สร้างจาก sync ใบลาอนุมัติเท่านั้น (มีแค่ 1 นักเรียน) ยังไม่ใช่ครูเช็คชื่อจริง — ดู syncStudentLeaveAttendance.ts */
+  leaveSyncOnly?: boolean;
   createdAt: Timestamp | string;
   updatedAt: Timestamp | string;
 }

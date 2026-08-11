@@ -4,6 +4,7 @@ import {
   collection,
   query,
   where,
+  documentId,
   onSnapshot,
   addDoc,
   updateDoc,
@@ -16,6 +17,7 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { chunkIds } from '@/lib/firestoreShared/fetchStudentsByIds';
 import { normalizeExamScore } from '@/lib/students/studentIdentity';
 import type { ExamRoom, ExamAttempt, ExamRoomStatus, ExamQuestionPublic } from '@/types/exam';
 import type { QuestionPayload, QuestionType } from '@/types/questionBank';
@@ -164,19 +166,27 @@ export const MOCK_QUESTIONS_PUBLIC = [
 
 /** How attempts are loaded — biggest Firestore quota lever for this hook. */
 export type ExamAttemptsLoadMode =
-  /** Full snapshot once, then poll only `active` rooms (default — safe for manager/dashboard). */
+  /** One-time fetch for closed rooms + realtime listener on `active` rooms only (default — safe for manager/dashboard). */
   | 'all'
-  /** Only rooms with status === 'active' (live proctoring / alerts). */
+  /** Realtime listener on rooms with status === 'active' only (live proctoring / alerts). */
   | 'active'
-  /** Only current user's attempts (student score widget). */
+  /** Realtime listener scoped to current user's own attempts in every room (student score views). */
   | 'mine'
   /** Skip attempts entirely (create-room shortcuts). */
   | 'none';
 
 export interface UseExamRoomOptions {
   loadAttempts?: ExamAttemptsLoadMode;
-  /** Poll interval for attempts. Default 20s. */
-  attemptsPollMs?: number;
+  /**
+   * Room ids the caller currently has open (detail view / proctor modal). Only matters for
+   * non-teacher roles in `all` mode (admin/staff/sysadmin) — teachers already see a small,
+   * per-teacher room set so live-listening every active room of theirs is cheap. Admin/staff
+   * see EVERY active room school-wide with no owner filter, so N concurrently-logged-in admins
+   * would each open a live listener on all of them — multiplying reads by admin session count.
+   * Restricting live listeners to `focusRoomIds` keeps that multiplication bounded to rooms an
+   * admin actually opened, not every active room in the school.
+   */
+  focusRoomIds?: string[];
 }
 
 type StudentExamContext = {
@@ -188,6 +198,13 @@ type StudentExamContext = {
 // Session cache — home widget + exam pages remount resolve often
 const studentCtxCache = new Map<string, { at: number; ctx: StudentExamContext }>();
 const STUDENT_CTX_TTL_MS = 5 * 60 * 1000;
+
+// Closed rooms' attempts are frozen once grading settles — cache per-roomId so reopening
+// the same room's detail/proctor view within a session (or remounting ExamManager) doesn't
+// re-fetch a subcollection that hasn't changed. Explicitly invalidated after mutations that
+// touch a closed room's attempts (reset, finish).
+const demandAttemptsCache = new Map<string, { at: number; attempts: ExamAttempt[] }>();
+const DEMAND_ATTEMPTS_TTL_MS = 5 * 60 * 1000;
 
 function mapRoomDoc(d: { id: string; data: () => Record<string, unknown> }): ExamRoom {
   const raw = d.data();
@@ -218,11 +235,21 @@ function mapAttemptDoc(
 
 export function useExamRoom(options: UseExamRoomOptions = {}) {
   const loadAttempts = options.loadAttempts ?? 'all';
-  const attemptsPollMs = options.attemptsPollMs ?? 20000;
+  // Stable string so effects don't resubscribe when the caller passes a fresh array each
+  // render with the same content (e.g. an unmemoized [detailRoom?.id, proctoringRoom?.id]).
+  const focusRoomIdsKey = useMemo(
+    () => (options.focusRoomIds ?? []).filter(Boolean).slice().sort().join(','),
+    [options.focusRoomIds],
+  );
   const { user, role, userData } = useAuth();
   const { year: academicYear, activeSemester } = useActiveAcademicYear();
   const [rooms, setRooms] = useState<ExamRoom[]>([]);
-  const [attempts, setAttempts] = useState<ExamAttempt[]>([]);
+  // `liveAttempts` = active rooms (or every room in `mine` mode) via onSnapshot.
+  // `demandAttempts` = closed/non-active rooms, fetched only when a caller actually
+  // opens that room's detail/proctor view — see loadRoomAttempts below. Merged into
+  // the `attempts` memo exposed to callers.
+  const [liveAttempts, setLiveAttempts] = useState<ExamAttempt[]>([]);
+  const [demandAttempts, setDemandAttempts] = useState<Record<string, ExamAttempt[]>>({});
   const [isLoading, setIsLoading] = useState(true);
   const recalcAttemptedRef = useRef(new Set<string>());
   // Tracks roomId:round combos currently being auto-graded — prevents concurrent duplicate calls
@@ -235,6 +262,11 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
   // Stable string of sorted room IDs — changes only when the set of rooms actually changes,
   // not on every onSnapshot that emits the same rooms with new object references
   const roomIds = useMemo(() => rooms.map(r => r.id).sort().join(','), [rooms]);
+  // Same idea, scoped to rooms currently `active` — drives which attempts listeners stay live
+  const activeRoomIds = useMemo(
+    () => rooms.filter(r => r.status === 'active').map(r => r.id).sort().join(','),
+    [rooms],
+  );
 
   // Load exam rooms by role
   useEffect(() => {
@@ -493,102 +525,122 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
     };
   }, [user?.uid, role, academicYear, activeSemester, userData]);
 
-  // Load attempts — polled (not realtime) to avoid read amplification from answer saves.
-  // Mode `all`: one full fetch when room set changes, then only poll `active` rooms.
+  // Load attempts — realtime, not polled, and not eager for closed rooms. Rooms that are no
+  // longer `active` can't get new attempts writes, so instead of fetching every closed room's
+  // whole subcollection up front (was: billed as (all closed rooms ever created) × reads on
+  // every ExamManager mount, even when none are open), only `active` rooms (or, in `mine`
+  // mode, every room — already cheap because it's filtered to the current user) get a live
+  // `onSnapshot` listener here. Closed rooms are fetched on demand by loadRoomAttempts, only
+  // when a caller actually opens that room (detail view / proctor modal).
+  //
+  // Admin/staff/sysadmin see EVERY active room school-wide (no teacherId filter on rooms) — if
+  // every active room got a live listener here, N concurrently-logged-in admins would each pay
+  // for all of them, multiplying reads by admin session count. Teachers only ever see their own
+  // (small) room set, so that multiplication doesn't apply — only non-teacher roles are scoped
+  // down to `focusRoomIds` (rooms they've actually opened); everything else falls back to the
+  // one-time demand fetch via loadRoomAttempts.
   useEffect(() => {
     if (!roomIds || loadAttempts === 'none') {
-      setAttempts([]);
+      setLiveAttempts([]);
       return;
     }
 
     const ids = roomIds.split(',');
+    const activeIds = activeRoomIds.split(',').filter(Boolean);
+    const isBroadScope = loadAttempts === 'all' && role !== 'teacher';
+    const focusSet = new Set(focusRoomIdsKey ? focusRoomIdsKey.split(',') : []);
+    const liveIds = loadAttempts === 'mine'
+      ? ids
+      : isBroadScope
+        ? activeIds.filter((id) => focusSet.has(id))
+        : activeIds;
+    const studentFilter = loadAttempts === 'mine' ? user?.uid : undefined;
+
+    if (loadAttempts === 'mine' && !studentFilter) {
+      setLiveAttempts([]);
+      return;
+    }
+
     let cancelled = false;
-    let didFullFetch = false;
+    const liveByRoom: Record<string, ExamAttempt[]> = {};
 
-    const fetchRoomAttempts = async (roomId: string, studentIdFilter?: string): Promise<ExamAttempt[]> => {
-      try {
-        if (studentIdFilter) {
-          const snap = await getDocs(
-            query(
-              collection(db, 'exam_rooms', roomId, 'attempts'),
-              where('studentId', '==', studentIdFilter),
-            ),
-          );
-          return snap.docs.map((d) => mapAttemptDoc(d, roomId));
-        }
-        const snap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
-        return snap.docs.map((d) => mapAttemptDoc(d, roomId));
-      } catch (err) {
-        if (studentIdFilter) {
-          console.warn('[useExamRoom] studentId attempts query failed, falling back:', err);
-          const snap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
-          return snap.docs
-            .map((d) => mapAttemptDoc(d, roomId))
-            .filter((a) => String(a.studentId).trim() === studentIdFilter);
-        }
-        console.error('[useExamRoom] fetch attempts failed:', roomId, err);
-        return [];
-      }
-    };
-
-    const fetchAttempts = async (scope: 'full' | 'active-only') => {
-      let targetIds = ids;
-      if (scope === 'active-only' || loadAttempts === 'active') {
-        targetIds = roomsRef.current
-          .filter((r) => r.status === 'active')
-          .map((r) => r.id);
-      }
-
-      const studentFilter =
-        loadAttempts === 'mine' && user?.uid ? user.uid : undefined;
-
-      if (targetIds.length === 0) {
-        if (scope === 'full' || loadAttempts === 'active' || loadAttempts === 'mine') {
-          if (!cancelled) setAttempts([]);
-        }
-        return;
-      }
-
-      const batches = await Promise.all(
-        targetIds.map((roomId) => fetchRoomAttempts(roomId, studentFilter)),
-      );
-      const next = batches.flat();
+    const emit = () => {
       if (cancelled) return;
-
-      if (scope === 'active-only' && loadAttempts === 'all') {
-        const activeSet = new Set(targetIds);
-        setAttempts((prev) => [
-          ...prev.filter((a) => !activeSet.has(a.roomId)),
-          ...next,
-        ]);
-      } else {
-        setAttempts(next);
-      }
+      setLiveAttempts(Object.values(liveByRoom).flat());
     };
 
-    const tick = async () => {
-      if (loadAttempts === 'mine' || loadAttempts === 'active') {
-        await fetchAttempts('full');
-        return;
-      }
-      if (!didFullFetch) {
-        await fetchAttempts('full');
-        didFullFetch = true;
-      } else {
-        await fetchAttempts('active-only');
-      }
-    };
+    const unsubs = liveIds.map((roomId) => {
+      const base = collection(db, 'exam_rooms', roomId, 'attempts');
+      const q = studentFilter ? query(base, where('studentId', '==', studentFilter)) : base;
+      return onSnapshot(q, (snap) => {
+        liveByRoom[roomId] = snap.docs.map((d) => mapAttemptDoc(d, roomId));
+        emit();
+      }, (err) => {
+        console.error('[useExamRoom] attempts listener failed:', roomId, err);
+      });
+    });
 
-    void tick();
-    const interval = window.setInterval(() => {
-      void tick();
-    }, attemptsPollMs);
+    if (liveIds.length === 0) {
+      setLiveAttempts([]);
+    }
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      unsubs.forEach((unsub) => unsub());
     };
-  }, [roomIds, loadAttempts, attemptsPollMs, user?.uid]);
+  }, [roomIds, activeRoomIds, loadAttempts, user?.uid, role, focusRoomIdsKey]);
+
+  // Closed rooms dropped from demandAttempts when they stop being requested (e.g. detail view
+  // closed) would just refetch next time — cheap to keep them around for the session instead.
+  // A room that later goes live again (next round started) is excluded from the demand side
+  // here so its attempts aren't double-counted against the live listener's copy.
+  const attempts = useMemo(() => {
+    const demandEntries = Object.entries(demandAttempts);
+    if (demandEntries.length === 0) return liveAttempts;
+    // Mirror the live-listener effect's liveIds logic so a room that's actually being
+    // live-streamed isn't also counted from its (now stale) demand-loaded copy.
+    const activeIds = activeRoomIds.split(',').filter(Boolean);
+    const isBroadScope = loadAttempts === 'all' && role !== 'teacher';
+    const focusSet = new Set(focusRoomIdsKey ? focusRoomIdsKey.split(',') : []);
+    const liveIdSet = new Set(
+      loadAttempts === 'mine'
+        ? []
+        : isBroadScope
+          ? activeIds.filter((id) => focusSet.has(id))
+          : activeIds,
+    );
+    const demandOnly = demandEntries
+      .filter(([roomId]) => !liveIdSet.has(roomId))
+      .flatMap(([, list]) => list);
+    if (demandOnly.length === 0) return liveAttempts;
+    return [...liveAttempts, ...demandOnly];
+  }, [liveAttempts, demandAttempts, activeRoomIds, loadAttempts, role, focusRoomIdsKey]);
+
+  // On-demand fetch for a single closed room's attempts — call when a room's detail/proctor
+  // view opens. No-op for rooms already covered by the live listener above (active rooms, or
+  // any room in `mine` mode).
+  const loadRoomAttempts = useCallback(async (roomId: string, opts?: { force?: boolean }) => {
+    if (!roomId || loadAttempts === 'none' || loadAttempts === 'mine') return;
+
+    if (!opts?.force) {
+      const room = roomsRef.current.find((r) => r.id === roomId);
+      if (room?.status === 'active') return;
+      const cached = demandAttemptsCache.get(roomId);
+      if (cached && Date.now() - cached.at < DEMAND_ATTEMPTS_TTL_MS) {
+        setDemandAttempts((prev) => (prev[roomId] ? prev : { ...prev, [roomId]: cached.attempts }));
+        return;
+      }
+    }
+
+    try {
+      const snap = await getDocs(collection(db, 'exam_rooms', roomId, 'attempts'));
+      const list = snap.docs.map((d) => mapAttemptDoc(d, roomId));
+      demandAttemptsCache.set(roomId, { at: Date.now(), attempts: list });
+      setDemandAttempts((prev) => ({ ...prev, [roomId]: list }));
+    } catch (err) {
+      console.error('[useExamRoom] load room attempts failed:', roomId, err);
+    }
+  }, [loadAttempts]);
 
   const createRoom = useCallback(async (data: Omit<ExamRoom, 'id' | 'createdAt' | 'status' | 'currentRound' | 'completedRounds'>) => {
     try {
@@ -776,6 +828,11 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
 
         // คะแนนทั้งรอบคำนวณโดย finalizeExamRoundOnClose (Cloud Function) เพียงจุดเดียว —
         // ไม่เรียก calculateRoomScores() ซ้ำจาก client เพื่อกันคำนวณแข่งกัน 2 ทาง
+
+        // Room just left the live listener (active → upcoming/closed) — force a fresh
+        // demand-load so an open detail view doesn't flash empty mid-transition.
+        demandAttemptsCache.delete(roomId);
+        void loadRoomAttempts(roomId, { force: true });
       } else {
         await updateDoc(doc(db, 'exam_rooms', roomId), { status });
       }
@@ -783,7 +840,7 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
       console.error('Error updating exam room status:', err);
       throw err;
     }
-  }, []); // roomsRef is a ref — reading .current doesn't need to be a dep
+  }, [loadRoomAttempts]); // roomsRef is a ref — reading .current doesn't need to be a dep
 
   // Permanently close a room configured for unlimited rounds (maxAttempts === 0).
   // Unlike updateRoomStatus('closed'), this always lands on 'closed' — it never
@@ -796,6 +853,7 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
 
       if (room.status !== 'active') {
         await updateDoc(doc(db, 'exam_rooms', roomId), { status: 'closed' });
+        void loadRoomAttempts(roomId, { force: true });
         return;
       }
 
@@ -831,11 +889,16 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
 
       // คะแนนคำนวณโดย finalizeExamRoundOnClose (Cloud Function) เพียงจุดเดียว —
       // ไม่เรียก calculateRoomScores() ซ้ำจาก client เพื่อกันคำนวณแข่งกัน 2 ทาง
+
+      // Room just left the live listener (active → closed) — force a fresh demand-load so
+      // an open detail view doesn't flash empty while its onSnapshot is still tearing down.
+      demandAttemptsCache.delete(roomId);
+      void loadRoomAttempts(roomId, { force: true });
     } catch (err) {
       console.error('Error finishing exam room:', err);
       throw err;
     }
-  }, []);
+  }, [loadRoomAttempts]);
 
   const updateRoom = useCallback(async (roomId: string, data: Partial<ExamRoom>) => {
     try {
@@ -867,11 +930,15 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
       const batch = writeBatch(db);
       snap.docs.forEach(d => batch.delete(d.ref));
       await batch.commit();
+      // Closed-room deletions aren't covered by a live listener — force-refresh so the
+      // open detail view reflects the reset immediately instead of waiting on cache TTL.
+      demandAttemptsCache.delete(roomId);
+      void loadRoomAttempts(roomId, { force: true });
     } catch (err) {
       console.error('Error resetting student attempt:', err);
       throw err;
     }
-  }, []);
+  }, [loadRoomAttempts]);
 
   // Reset ALL attempts in a room (full exam reset)
   const resetAllAttempts = useCallback(async (roomId: string) => {
@@ -890,11 +957,13 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
         status: 'upcoming',
         finalizedRounds: [],
       });
+      demandAttemptsCache.delete(roomId);
+      void loadRoomAttempts(roomId, { force: true });
     } catch (err) {
       console.error('Error resetting all attempts:', err);
       throw err;
     }
-  }, []);
+  }, [loadRoomAttempts]);
 
   const getAttemptsForRoom = useCallback((roomId: string) => {
     return attempts.filter(a => a.roomId === roomId);
@@ -979,7 +1048,7 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
     });
   }, [attempts, role, isLoading, calculateRoomScores]);
 
-  return { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, finishRoom, deleteRoom, getAttemptsForRoom, resetStudentAttempt, resetAllAttempts, calculateRoomScores };
+  return { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, finishRoom, deleteRoom, getAttemptsForRoom, loadRoomAttempts, resetStudentAttempt, resetAllAttempts, calculateRoomScores };
 }
 
 // ── Hook: useExamAttempt (student side) ───────────────────────────────────────
@@ -1220,11 +1289,14 @@ export function useExamAttempt(roomId: string) {
       let metaById = new Map<string, Record<string, unknown>>();
 
       try {
-        const setMetaSnaps = await Promise.all(
-          metaIdsToLoad.map(async (setId) => {
-            const snap = await getDoc(doc(db, 'question_sets', setId));
-            return { id: snap.id, data: () => snap.data() as Record<string, unknown> | undefined };
-          }),
+        // ดึง metadata ของทุก set ด้วย documentId 'in' แบบ batch แทนการ getDoc ทีละ set (N+1)
+        const metaSnaps = await Promise.all(
+          chunkIds(metaIdsToLoad).map((group) =>
+            getDocs(query(collection(db, 'question_sets'), where(documentId(), 'in', group))),
+          ),
+        );
+        const setMetaSnaps = metaSnaps.flatMap((snap) =>
+          snap.docs.map((d) => ({ id: d.id, data: () => d.data() as Record<string, unknown> | undefined })),
         );
         metaById = metaMapFromSetSnaps(setMetaSnaps);
         const parts = buildExamPdfPartsFromSetSnaps(metaIdsToLoad, metaById);

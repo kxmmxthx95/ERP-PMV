@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft, AlertCircle, BookOpen, ClipboardList, GraduationCap, Monitor, RefreshCw,
 } from 'lucide-react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, collectionGroup, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import { normalizeExamScore } from '@/lib/students/studentIdentity';
@@ -12,7 +12,8 @@ import { useStudentGradeBook, type StudentSubjectGradeCard } from '@/hooks/useSt
 import { StudentExamScoreDetailDrawer } from '@/features/exam/components/StudentExamScoreDetailDrawer';
 import StudentSubjectAttendanceDrawer from '@/features/grades/components/StudentSubjectAttendanceDrawer';
 import { attemptScorePercent } from '@/lib/exam/examRoomScoring';
-import { rawPointsToPercent } from '@/types/grades';
+import { rawPointsToPercent, isPassFailSubjectCategory } from '@/types/grades';
+import type { PassFailResult } from '@/types/grades';
 import { GLASS } from '@/components/layouts/PortalLayout';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
@@ -70,6 +71,18 @@ function formatGradeDisplay(grade: string | null): string {
   if (grade === 'D') return '1';
   if (grade === 'F') return '0';
   return grade;
+}
+
+function formatPassFailDisplay(result: PassFailResult | null | undefined): string {
+  if (result === 'pass') return 'ผ่าน';
+  if (result === 'fail') return 'ไม่ผ่าน';
+  return '—';
+}
+
+function passFailTone(result: PassFailResult | null | undefined): { text: string; bg: string } {
+  if (result === 'pass') return { text: '#059669', bg: '#ecfdf5' };
+  if (result === 'fail') return { text: '#e11d48', bg: '#fff1f2' };
+  return { text: '#94a3b8', bg: '#f1f5f9' };
 }
 
 function gradeTone(grade: string | null): { text: string; bg: string } {
@@ -197,6 +210,9 @@ export default function StudentGradeBookPanel() {
 
   const [selectedSubject, setSelectedSubject] = useState<StudentSubjectGradeCard | null>(null);
   const [examLoading, setExamLoading] = useState(false);
+  // แคช exam_rooms ดิบ (ก่อนกรองวิชา) ตาม classId+gradeLevel+ปี+เทอม — สลับดูวิชาอื่นในคลาสเดิม
+  // (กรณีทั่วไป: นักเรียนคนเดียวมีหลายวิชาในคลาสเดียวกัน) จะไม่ยิง query exam_rooms ซ้ำ
+  const examRoomsCacheRef = useRef<Map<string, ExamRoom[]>>(new Map());
   const [examError, setExamError] = useState<string | null>(null);
   const [examCards, setExamCards] = useState<StudentExamCard[]>([]);
   const [drawerRoom, setDrawerRoom] = useState<ExamRoom | null>(null);
@@ -240,8 +256,55 @@ export default function StudentGradeBookPanel() {
     try {
       const cards: StudentExamCard[] = [];
       const gradeLevel = classRoom?.gradeLevel ?? '';
+      const roomsCacheKey = `${subject.classId}|${gradeLevel}|${academicYear}|${subject.semester}`;
 
-      const [examsSnap, roomsByClass, roomsByGrade] = await Promise.all([
+      const normalizeTs = (val: unknown): number => {
+        if (typeof val === 'number') return val;
+        if (val && typeof (val as { toMillis?: () => number }).toMillis === 'function') {
+          return (val as { toMillis: () => number }).toMillis();
+        }
+        return 0;
+      };
+
+      const loadAllRoomsForClass = async (): Promise<ExamRoom[]> => {
+        const cached = examRoomsCacheRef.current.get(roomsCacheKey);
+        if (cached) return cached;
+
+        const [roomsByClass, roomsByGrade] = await Promise.all([
+          getDocs(query(
+            collection(db, 'exam_rooms'),
+            where('classId', '==', subject.classId),
+            where('academicYearId', '==', String(academicYear)),
+            where('semester', '==', subject.semester),
+          )).catch(() => null),
+          gradeLevel
+            ? getDocs(query(
+                collection(db, 'exam_rooms'),
+                where('gradeLevel', '==', gradeLevel),
+                where('academicYearId', '==', String(academicYear)),
+                where('semester', '==', subject.semester),
+              )).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        const roomDocs = [
+          ...(roomsByClass?.docs ?? []),
+          ...(roomsByGrade?.docs.filter((d) => !roomsByClass?.docs.some((c) => c.id === d.id)) ?? []),
+        ];
+        const mapped = roomDocs.map((d) => {
+          const raw = d.data();
+          return {
+            ...raw,
+            id: d.id,
+            startTime: normalizeTs(raw.startTime),
+            endTime: normalizeTs(raw.endTime),
+          } as ExamRoom;
+        });
+        examRoomsCacheRef.current.set(roomsCacheKey, mapped);
+        return mapped;
+      };
+
+      // ยิง query exam_rooms (ถ้าไม่ได้ cache ไว้) พร้อมกับ exams แบบ offline
+      const [examsSnap, allRoomsForClass] = await Promise.all([
         getDocs(query(
           collection(db, 'exams'),
           where('subjectId', '==', subject.subjectId),
@@ -249,20 +312,7 @@ export default function StudentGradeBookPanel() {
           where('academicYearId', '==', String(academicYear)),
           where('semester', '==', subject.semester),
         )).catch(() => null),
-        getDocs(query(
-          collection(db, 'exam_rooms'),
-          where('classId', '==', subject.classId),
-          where('academicYearId', '==', String(academicYear)),
-          where('semester', '==', subject.semester),
-        )).catch(() => null),
-        gradeLevel
-          ? getDocs(query(
-              collection(db, 'exam_rooms'),
-              where('gradeLevel', '==', gradeLevel),
-              where('academicYearId', '==', String(academicYear)),
-              where('semester', '==', subject.semester),
-            )).catch(() => null)
-          : Promise.resolve(null),
+        loadAllRoomsForClass(),
       ]);
 
       const examDocs = examsSnap?.docs.map((d) => ({ id: d.id, ...d.data() } as Exam)) ?? [];
@@ -303,64 +353,35 @@ export default function StudentGradeBookPanel() {
         });
       });
 
-      const roomDocs = [
-        ...(roomsByClass?.docs ?? []),
-        ...(roomsByGrade?.docs.filter((d) => !roomsByClass?.docs.some((c) => c.id === d.id)) ?? []),
-      ];
-
-      const normalizeTs = (val: unknown): number => {
-        if (typeof val === 'number') return val;
-        if (val && typeof (val as { toMillis?: () => number }).toMillis === 'function') {
-          return (val as { toMillis: () => number }).toMillis();
+      const rooms = allRoomsForClass.filter((room) => {
+        const linked = room.settings?.gradeBookSubjects ?? [];
+        if (linked.length > 0) {
+          return linked.some((item) => item.subjectId === subject.subjectId);
         }
-        return 0;
-      };
+        const legacyId = room.settings?.gradeBookSubjectId ?? room.subjectId;
+        return legacyId === subject.subjectId;
+      });
 
-      const rooms = roomDocs
+      // ยิง collectionGroup query ครั้งเดียวกรองด้วย studentId แทนการวน getDocs ทีละห้อง (N+1)
+      const roomIds = new Set(rooms.map((r) => r.id));
+      const studentIds = Array.from(new Set([student.id, user?.uid].filter(Boolean))) as string[];
+      const attemptsSnap = studentIds.length > 0
+        ? await getDocs(query(
+            collectionGroup(db, 'attempts'),
+            where('studentId', 'in', studentIds),
+          )).catch(() => null)
+        : null;
+      const attempts = (attemptsSnap?.docs ?? [])
         .map((d) => {
           const raw = d.data();
           return {
             ...raw,
             id: d.id,
-            startTime: normalizeTs(raw.startTime),
-            endTime: normalizeTs(raw.endTime),
-          } as ExamRoom;
+            roomId: raw.roomId,
+            score: normalizeExamScore(raw.score),
+          } as ExamAttempt;
         })
-        .filter((room) => {
-          const linked = room.settings?.gradeBookSubjects ?? [];
-          if (linked.length > 0) {
-            return linked.some((item) => item.subjectId === subject.subjectId);
-          }
-          const legacyId = room.settings?.gradeBookSubjectId ?? room.subjectId;
-          return legacyId === subject.subjectId;
-        });
-
-      // Fetch attempts per-room (no collectionGroup = no index needed)
-      // Filter by studentId in memory — each room's attempts subcollection is small
-      const attemptsByRoom = await Promise.all(
-        rooms.map(async (room) => {
-          try {
-            const snap = await getDocs(collection(db, 'exam_rooms', room.id, 'attempts'));
-            return snap.docs
-              .filter((d) => {
-                const sid = String(d.data()?.studentId ?? '').trim();
-                return sid === String(student.id).trim() || sid === String(user?.uid ?? '').trim();
-              })
-              .map((d) => {
-                const raw = d.data();
-                return {
-                  ...raw,
-                  id: d.id,
-                  roomId: room.id,
-                  score: normalizeExamScore(raw.score),
-                } as ExamAttempt;
-              });
-          } catch {
-            return [] as ExamAttempt[];
-          }
-        }),
-      );
-      const attempts = attemptsByRoom.flat();
+        .filter((att) => roomIds.has(att.roomId));
 
 
       rooms.forEach((room) => {
@@ -539,9 +560,12 @@ export default function StudentGradeBookPanel() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {subjectCards.map((card) => {
+                const isPassFail = isPassFailSubjectCategory(card.category);
                 const attTone = attendanceTone(card.attendancePct);
                 const formattedGrade = formatGradeDisplay(card.grade);
-                const grTone = gradeTone(formattedGrade);
+                const grTone = isPassFail
+                  ? passFailTone(card.result)
+                  : gradeTone(formattedGrade);
                 const subjectColor = subjectColorByName(card.subjectName, card.subjectGroup);
                 const cardStyle = {
                   background: subjectGradient(subjectColor),
@@ -604,8 +628,12 @@ export default function StudentGradeBookPanel() {
                         onClick={() => setAttendanceDrawerSubject(card)}
                       />
                       <SubjectStat
-                        label="เกรด"
-                        value={card.grade ? formattedGrade : (card.totalScore !== null ? `${card.totalScore}%` : '—')}
+                        label={isPassFail ? 'ผลการเรียน' : 'เกรด'}
+                        value={
+                          isPassFail
+                            ? formatPassFailDisplay(card.result)
+                            : (card.grade ? formattedGrade : (card.totalScore !== null ? `${card.totalScore}%` : '—'))
+                        }
                         tone={grTone}
                       />
                     </div>
@@ -626,6 +654,23 @@ export default function StudentGradeBookPanel() {
             กลับรายวิชา
           </button>
 
+          {isPassFailSubjectCategory(selectedSubject.category) ? (
+            <div className="rounded-[1.5rem] border border-border bg-card p-5">
+              <p className="text-[11px] font-black uppercase tracking-wider text-muted-foreground font-sukhumvit">
+                ผลการเรียน
+              </p>
+              <p
+                className="mt-2 text-[22px] font-black font-sukhumvit"
+                style={{ color: passFailTone(selectedSubject.result).text }}
+              >
+                {formatPassFailDisplay(selectedSubject.result)}
+              </p>
+              <p className="mt-1 text-[12px] text-muted-foreground font-sarabun">
+                วิชากิจกรรม — ผ่าน/ไม่ผ่าน · ไม่เข้า GPA
+              </p>
+            </div>
+          ) : (
+            <>
           <div className="flex items-center gap-2">
             <ClipboardList size={14} className="text-slate-500" />
             <p className="text-[13px] font-black text-slate-800 font-sukhumvit">การสอบของฉัน</p>
@@ -693,6 +738,8 @@ export default function StudentGradeBookPanel() {
                 </motion.button>
               ))}
             </div>
+          )}
+            </>
           )}
         </div>
       )}

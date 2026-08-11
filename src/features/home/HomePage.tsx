@@ -24,16 +24,16 @@ import LeaveQuotaWidget from './widgets/LeaveQuotaWidget';
 import DailyAttendanceSummaryWidget from './widgets/DailyAttendanceSummaryWidget';
 import StudentQuickLeaveWidget from './widgets/StudentQuickLeaveWidget';
 import FeedbackStatusWidget from './widgets/FeedbackStatusWidget';
-import StudentExamScoreWidget from './widgets/StudentExamScoreWidget';
 import ExecutiveTeachingStatusWidget from './widgets/ExecutiveTeachingStatusWidget';
 import FuturePlanWidget from './widgets/FuturePlanWidget';
 import BehaviorScoreWidget from './widgets/BehaviorScoreWidget';
 import StudentBehaviorScoreWidget from './widgets/StudentBehaviorScoreWidget';
 import HoroscopeWidget from './widgets/HoroscopeWidget';
-import WordGameWidget from './widgets/WordGameWidget';
 import StudentFeeWidget from './widgets/StudentFeeWidget';
+import StudentAvatarWidget from './widgets/StudentAvatarWidget';
 import TuitionStatusSummaryWidget from './widgets/TuitionStatusSummaryWidget';
 import ScoreOverrideApprovalWidget from './widgets/ScoreOverrideApprovalWidget';
+import AcademicDashboardWidget from './widgets/AcademicDashboardWidget';
 import { DashboardWidgetsSkeleton, MenuPageSkeleton } from './components/WidgetSkeleton';
 
 const MENU_GRID_COLUMNS = 4;
@@ -62,23 +62,27 @@ const ALL_MENUS_INDEX_MAP = new Map(ALL_MENUS.map((m, idx) => [m.featureKey, idx
 const MENU_CATEGORIES = [
   {
     id: 'system_admin',
-    name: 'ระบบบริหารจัดการ (System & Admin)',
+    nameTh: 'ระบบบริหารจัดการ',
+    nameEn: 'System & Admin',
     featureKeys: ['users', 'teachers', 'students', 'roles', 'staffAttendance', 'fingerprintDevices', 'teacherKpi', 'leave', 'settings', 'logs', 'tuition'],
   },
   {
     id: 'academic_teaching',
-    name: 'งานวิชาการและการสอน (Academic & Teaching)',
+    nameTh: 'งานวิชาการและการสอน',
+    nameEn: 'Academic & Teaching',
     featureKeys: ['curriculum', 'schedule', 'calendar', 'classes', 'microSyllabus', 'courseOnDemand'],
   },
   {
     id: 'assessment_testing',
-    name: 'การวัดผลและข้อสอบ (Assessment & Testing)',
+    nameTh: 'การวัดผลและข้อสอบ',
+    nameEn: 'Assessment & Testing',
     featureKeys: ['questionBank', 'exams', 'grades'],
   },
   {
     id: 'student_affairs',
-    name: 'งานกิจการนักเรียนและส่วนกลาง (Student Affairs & Operation)',
-    featureKeys: ['attendance', 'morningRollCall', 'dutySchedule', 'announcements', 'tasks', 'feedback', 'behaviorScore', 'studentAnalytics', 'reports', 'aiAgents', 'futurePlan', 'wordGame'],
+    nameTh: 'งานกิจการนักเรียนและส่วนกลาง',
+    nameEn: 'Student Affairs & Operation',
+    featureKeys: ['attendance', 'morningRollCall', 'dutySchedule', 'substituteTeaching', 'announcements', 'tasks', 'feedback', 'behaviorScore', 'studentAnalytics', 'reports', 'aiAgents', 'futurePlan'],
   },
 ];
 
@@ -93,47 +97,67 @@ type MenuIconItem = {
   accent: string;
 };
 
-const AppleMusicCard = memo(function AppleMusicCard({
+const MENU_TILE_GRADIENT =
+  'linear-gradient(145deg, rgba(255,255,255,0.32) 0%, rgba(0,0,0,0.14) 100%)';
+
+const PortalMenuIcon = memo(function PortalMenuIcon({
   item,
   onClick,
 }: {
   item: MenuIconItem;
   onClick: () => void;
 }) {
+  const Icon = item.icon;
+  const tileStyle = {
+    backgroundColor: item.accent,
+    backgroundImage: MENU_TILE_GRADIENT,
+  };
+
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col gap-2 group cursor-pointer select-none text-left w-full active:scale-[0.98] transition-transform duration-100"
+      className="group flex w-full cursor-pointer select-none flex-col items-center gap-1 text-center active:scale-95 transition-transform duration-100 lg:items-stretch lg:gap-2 lg:text-left lg:active:scale-[0.98]"
     >
+      {/* iOS home screen — mobile / tablet */}
       <div
-        className="relative w-full overflow-hidden hover:opacity-95 transition-opacity duration-150"
+        className="relative flex h-[58px] w-[58px] shrink-0 items-center justify-center overflow-hidden rounded-[14px] shadow-[0_2px_8px_rgba(0,0,0,0.12)] lg:hidden"
+        style={tileStyle}
+      >
+        <Icon className="h-[26px] w-[26px] text-white" aria-hidden />
+      </div>
+
+      {/* Apple Music tile — desktop */}
+      <div
+        className="relative hidden w-full overflow-hidden transition-opacity duration-150 hover:opacity-95 lg:block"
         style={{
+          ...tileStyle,
           aspectRatio: '1',
           borderRadius: 16,
-          backgroundColor: item.accent,
-          backgroundImage: 'linear-gradient(45deg, rgba(255, 255, 255, 0.28) 0%, rgba(0, 0, 0, 0.25) 100%)',
         }}
       >
-        {/* Top-Right Icon */}
-        <div className="absolute top-3 right-3 text-white pointer-events-none z-10">
-          <item.icon className="w-5 h-5" />
+        <div className="pointer-events-none absolute top-3 right-3 z-10 text-white">
+          <Icon className="h-5 w-5" />
         </div>
-
-        <div className="absolute bottom-0 left-0 right-0 p-2 pointer-events-none">
+        <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-2">
           <p
-            className="text-white font-black leading-tight line-clamp-2"
+            className="line-clamp-2 font-black leading-tight text-white"
             style={{ fontSize: 'clamp(10px, 1.5vw, 14px)', textShadow: '0 0.5px 2px rgba(0,0,0,0.2)' }}
           >
             {item.label}
           </p>
         </div>
       </div>
-      {item.subtitle && (
-        <p className="text-[11px] text-slate-400 leading-tight line-clamp-1 px-0.5">
+
+      <p className="min-h-[26px] line-clamp-2 px-0.5 text-[11px] font-medium leading-[13px] text-foreground font-sukhumvit lg:hidden">
+        {item.label}
+      </p>
+
+      {item.subtitle ? (
+        <p className="hidden line-clamp-1 px-0.5 text-[11px] leading-tight text-muted-foreground lg:block">
           {item.subtitle}
         </p>
-      )}
+      ) : null}
     </button>
   );
 });
@@ -192,6 +216,9 @@ function DashboardWidgets({
       });
     };
 
+    if (isEnabled('widget_studentAvatar') && hasRole('student')) {
+      pushItem('widget_studentAvatar', 'widget_studentAvatar', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0 sm:col-span-2 lg:col-span-3 xl:col-span-4"><StudentAvatarWidget /></motion.div>);
+    }
     if (isEnabled('widget_announcements')) {
       pushItem('widget_announcements', 'widget_announcements', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><AnnouncementWidget /></motion.div>);
     }
@@ -246,17 +273,11 @@ function DashboardWidgets({
     if (isEnabled('widget_teacherLiveStatus') && hasRole('admin', 'sysadmin')) {
       pushItem('widget_teacherLiveStatus', 'widget_teacherLiveStatus', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><ExecutiveTeachingStatusWidget /></motion.div>);
     }
-    if (isEnabled('widget_studentExamScore') && hasRole('student')) {
-      pushItem('widget_studentExamScore', 'widget_studentExamScore', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><StudentExamScoreWidget /></motion.div>);
-    }
     if (isEnabled('widget_futurePlan') && hasRole('student', 'teacher', 'admin', 'sysadmin')) {
       pushItem('widget_futurePlan', 'widget_futurePlan', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><FuturePlanWidget /></motion.div>);
     }
     if (isEnabled('widget_horoscope')) {
       pushItem('widget_horoscope', 'widget_horoscope', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><HoroscopeWidget /></motion.div>);
-    }
-    if (isEnabled('widget_wordGame')) {
-      pushItem('widget_wordGame', 'widget_wordGame', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><WordGameWidget /></motion.div>);
     }
     if (isEnabled('widget_behaviorScore') && hasRole('teacher', 'staff', 'admin', 'sysadmin')) {
       pushItem('widget_behaviorScore', 'widget_behaviorScore', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><BehaviorScoreWidget /></motion.div>);
@@ -270,20 +291,46 @@ function DashboardWidgets({
     if (isEnabled('widget_tuitionStatus') && hasRole('admin', 'sysadmin')) {
       pushItem('widget_tuitionStatus', 'widget_tuitionStatus', <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0"><TuitionStatusSummaryWidget /></motion.div>);
     }
+    if (isEnabled('widget_academicDashboard') && hasRole('admin', 'sysadmin')) {
+      pushItem(
+        'widget_academicDashboard',
+        'widget_academicDashboard',
+        <motion.div variants={item} className="min-w-0 w-full flex h-full [&>*]:flex-1 [&>*]:min-w-0 sm:col-span-2 lg:col-span-3 xl:col-span-4">
+          <AcademicDashboardWidget />
+        </motion.div>,
+      );
+    }
 
     return items.sort((a, b) => a.order - b.order);
   }, [getOrder, hasRole, isEnabled]);
 
+  const isStudentCarousel = role === 'student';
+
   return (
-    <div className="flex flex-col gap-4 min-w-0">
+    <div
+      className={cn(
+        'flex flex-col gap-4 min-w-0',
+        isStudentCarousel && 'h-[calc(100dvh-4.25rem)] overflow-hidden sm:h-auto sm:overflow-visible',
+      )}
+    >
       <motion.div
         variants={container}
         initial="hidden"
         animate="show"
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 items-stretch"
+        className={cn(
+          isStudentCarousel
+            ? 'flex flex-1 min-h-0 gap-3 overflow-x-auto touch-pan-x overscroll-contain snap-x snap-mandatory scrollbar-hide pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:pb-0 lg:grid-cols-3 xl:grid-cols-4'
+            : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3',
+          'items-stretch',
+        )}
       >
         {widgetItems.map((widget) => (
-          <div key={widget.key} className="contents">{widget.node}</div>
+          <div
+            key={widget.key}
+            className={isStudentCarousel ? 'w-full shrink-0 snap-center sm:contents' : 'contents'}
+          >
+            {widget.node}
+          </div>
         ))}
       </motion.div>
     </div>
@@ -401,20 +448,23 @@ export default function HomePage() {
           )}
         >
           {/* Main Category Groups Rendered Directly */}
-          <div className="flex-grow flex flex-col gap-8 w-full max-w-7xl mx-auto py-6 px-4 overflow-y-auto max-h-full">
+          <div className="mx-auto flex w-full max-w-7xl flex-grow flex-col gap-8 overflow-y-auto px-4 py-3 max-h-full lg:gap-8 lg:px-4 lg:py-6">
             {groupedCategories.map((cat) => (
-              <div key={cat.id} className="flex flex-col min-h-0">
+              <div key={cat.id} className="flex min-h-0 flex-col">
                 {/* Category Header */}
-                <div className="flex items-center mb-3.5 select-none">
-                  <span className="text-[13.5px] font-black text-slate-800 tracking-wide font-sukhumvit uppercase">
-                    {cat.name}
+                <div className="mb-3 flex select-none flex-col gap-0.5 lg:mb-3.5">
+                  <span className="text-[12px] font-black text-foreground font-sukhumvit lg:text-[13.5px]">
+                    {cat.nameTh}
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground font-sukhumvit lg:text-[11px]">
+                    {cat.nameEn}
                   </span>
                 </div>
 
-                {/* Grid of Apple Music Cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 pb-4">
+                {/* iOS icon grid (mobile) · Apple Music tiles (desktop) */}
+                <div className="grid grid-cols-4 justify-items-center gap-x-4 gap-y-6 lg:grid-cols-6 lg:justify-items-stretch lg:gap-4 lg:pb-4 xl:grid-cols-8">
                   {cat.items.map((menuItem) => (
-                    <AppleMusicCard
+                    <PortalMenuIcon
                       key={menuItem.id}
                       item={menuItem}
                       onClick={() => handleMenuNavigate(menuItem.path)}

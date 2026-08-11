@@ -63,6 +63,7 @@ export const FEATURE_LIST: FeaturePermission[] = [
 
   // ── ครูเวร ──
   { featureKey: 'dutySchedule', label: 'ตารางครูเวร', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'edit' },
+  { featureKey: 'substituteTeaching', label: 'มอบหมายการสอนแทน', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'edit' },
   { featureKey: 'reports', label: 'รายงานผู้บริหาร', category: 'เกรดและการเข้าเรียน', enabled: false, accessLevel: 'view-only' },
 
   // ── การศึกษาต่อ ──
@@ -72,10 +73,7 @@ export const FEATURE_LIST: FeaturePermission[] = [
   { featureKey: 'tuition', label: 'จัดการค่าเทอม', category: 'การเงิน', enabled: true, accessLevel: 'full' },
   { featureKey: 'widget_tuitionFee', label: 'วิดเจ็ตค่าเทอมของฉัน', category: 'วิดเจ็ต', enabled: true, accessLevel: 'view-only' },
   { featureKey: 'widget_tuitionStatus', label: 'วิดเจ็ตสรุปสถานะค่าเทอม (ผู้บริหาร)', category: 'วิดเจ็ต', enabled: true, accessLevel: 'view-only' },
-
-  // ── เกม ──
-  { featureKey: 'wordGame', label: 'เกมทายคำ Multiplayer', category: 'เมนู', enabled: true, accessLevel: 'view-only' },
-  { featureKey: 'widget_wordGame', label: 'วิดเจ็ตเกมทายคำ', category: 'วิดเจ็ต', enabled: true, accessLevel: 'view-only' },
+  { featureKey: 'widget_academicDashboard', label: 'วิดเจ็ต Dashboard งานวิชาการ (ผู้บริหาร)', category: 'วิดเจ็ต', enabled: true, accessLevel: 'view-only' },
 
   // ── มอบหมายงาน ──
   { featureKey: 'tasks',         label: 'มอบหมายงาน',           category: 'เมนู',                   enabled: true, accessLevel: 'edit' },
@@ -100,11 +98,11 @@ export const FEATURE_LIST: FeaturePermission[] = [
   { featureKey: 'widget_teacherLiveStatus',      label: 'วิดเจ็ตสถานะครูกำลังสอน/พัก',  category: 'เมนู', enabled: true,  accessLevel: 'view-only' },
   { featureKey: 'widget_studentSummary',         label: 'วิดเจ็ตสรุปจำนวนนักเรียน',    category: 'เมนู', enabled: false, accessLevel: 'view-only' },
   { featureKey: 'widget_studentLeave',           label: 'วิดเจ็ตยื่นคำลา (นักเรียน)',    category: 'เมนู', enabled: false, accessLevel: 'view-only' },
-  { featureKey: 'widget_studentExamScore',       label: 'วิดเจ็ตผลการสอบของนักเรียน',   category: 'เมนู', enabled: false, accessLevel: 'view-only' },
   { featureKey: 'widget_futurePlan',             label: 'วิดเจ็ตแผนการศึกษาต่อ',         category: 'เมนู', enabled: true,  accessLevel: 'view-only' },
   { featureKey: 'widget_horoscope',              label: 'วิดเจ็ตดวงรายวัน',              category: 'วิดเจ็ต', enabled: true,  accessLevel: 'view-only' },
   { featureKey: 'widget_behaviorScore',          label: 'วิดเจ็ตบันทึกคะแนนพฤติกรรม',     category: 'วิดเจ็ต', enabled: true,  accessLevel: 'edit' },
   { featureKey: 'widget_studentBehaviorScore',   label: 'วิดเจ็ตคะแนนพฤติกรรมนักเรียน',   category: 'วิดเจ็ต', enabled: true,  accessLevel: 'view-only' },
+  { featureKey: 'widget_studentAvatar',          label: 'วิดเจ็ตอวตารนักเรียน',           category: 'วิดเจ็ต', enabled: true,  accessLevel: 'view-only' },
 ];
 
 export const SYSADMIN_EMAIL = 'sysadmin@pmv.com';

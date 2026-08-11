@@ -173,15 +173,26 @@ export function PickerCoverflow({
 /** Coverflow department cards — canonical = micro syllabus admin plan browser. */
 export function DepartmentPickerCoverflow({
   onSelect,
+  departments = DEPARTMENTS,
 }: {
   onSelect: (dept: Department) => void;
+  /** Default: all departments. Pass subset for teacher home dept only. */
+  departments?: Department[];
 }) {
+  if (departments.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-border px-4 py-10 text-center text-[12px] font-bold text-muted-foreground">
+        ไม่พบแผนกสังกัดของคุณ
+      </div>
+    );
+  }
+
   return (
     <PickerCoverflow
       ariaLabel="แผนก"
-      initialActive={1}
+      initialActive={departments.length === 1 ? 0 : Math.min(1, departments.length - 1)}
       onSelect={(id) => onSelect(id as Department)}
-      items={DEPARTMENTS.map((dept) => ({
+      items={departments.map((dept) => ({
         id: dept,
         label: DEPARTMENT_CONFIG[dept].label,
         subtitle: DEPT_LABEL_EN[dept],

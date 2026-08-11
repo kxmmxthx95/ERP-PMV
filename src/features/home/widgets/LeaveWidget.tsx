@@ -92,8 +92,6 @@ function ApproverLeaveWidgetContent({ requests }: { requests: LeaveRequest[] }) 
   const navigate = useNavigate();
 
   const pending = requests.filter(r => r.status === 'pending');
-  const approved = requests.filter(r => r.status === 'approved').length;
-  const rejected = requests.filter(r => r.status === 'rejected').length;
 
   return (
     <div style={WIDGET_GLASS} className={WIDGET_CARD}>
@@ -112,13 +110,12 @@ function ApproverLeaveWidgetContent({ requests }: { requests: LeaveRequest[] }) 
         )}
       </div>
 
-      <StatGrid
-        items={[
-          { label: 'รอพิจารณา', value: pending.length, color: 'text-amber-500' },
-          { label: 'อนุมัติ', value: approved, color: 'text-emerald-600' },
-          { label: 'ปฏิเสธ', value: rejected, color: 'text-red-500' },
-        ]}
-      />
+      <div className="flex flex-1 min-h-0 items-center justify-center">
+        <div className={WIDGET_STAT_CELL}>
+          <span className={`${WIDGET_STAT_VALUE} text-amber-500`}>{pending.length}</span>
+          <span className={WIDGET_STAT_LABEL}>รอพิจารณา</span>
+        </div>
+      </div>
 
       <button
         type="button"

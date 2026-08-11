@@ -23,7 +23,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
 import type { AttendanceRecord, AttendanceStatus, NewAttendanceRecord } from '@/types/teaching';
 import type { LeaveRequest } from '@/types/leave';
-import { GRADE_LEVEL_ORDER, type ClassRoom } from '@/types/class';
+import { GRADE_LEVEL_ORDER, type ClassRoom, type ClassRoomCard } from '@/types/class';
 import type { Department, Subject } from '@/types/curriculum';
 import type { TeacherProfile } from '@/types/teacher';
 import { useSchedule } from '@/hooks/useSchedule';
@@ -31,9 +31,11 @@ import { useSoundEffects } from '@/hooks/useSoundEffects';
 import {
   DAY_LABELS,
   SCHOOL_DAYS,
-  type ScheduleEntry
+  type ScheduleEntry,
+  type SchoolDay
 } from '@/types/schedule';
 import { useScheduleSettings } from '@/hooks/useScheduleSettings';
+import { useSubstitutionsForDate } from '@/lib/attendance/substituteAssignments';
 import { subjectColorByName, subjectGradient, withAlpha } from '../../schedule/constants/colors';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import {
@@ -43,6 +45,7 @@ import {
 } from '@/components/school/ClassSelectionFlow';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import ClassMobileBrowse from '@/features/classes/components/ClassMobileBrowse';
 import {
   TeacherAttendanceMonthCalendar,
   TeacherDaySubjectsDrawer,
@@ -51,6 +54,7 @@ import {
 import { toDateStr } from '@/features/calendar/utils';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
+import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { resolveSemesterDateRange } from '@/features/microSyllabus/utils/teachingPlanCalendar';
 import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
 import { departmentToSemesterKey } from '@/lib/teacherKpi/semesterDates';
@@ -67,6 +71,7 @@ import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawe
 import { HiArrowLeft, HiBookOpen, HiPencilSquare } from 'react-icons/hi2';
 import { SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
 import { useAuth } from '@/hooks/useAuth';
+import { useBrowseVisibleDepartments } from '@/hooks/useBrowseVisibleDepartments';
 import {
   buildTeacherIdentityKeys,
   matchesTeacherIdentity,
@@ -962,8 +967,11 @@ export default function AttendanceSheet({
 }: AttendanceSheetProps) {
   const [searchParams] = useSearchParams();
   const { role } = useAuth();
+  const { browseVisibleDepartments } = useBrowseVisibleDepartments();
+  const isDesktop = useIsDesktop();
   const isTeacherPicker = role === 'teacher';
   const isAdminOverview = role === 'admin' || role === 'sysadmin';
+  const isMdOrBelow = !isDesktop;
   const { activeYear } = useActiveAcademicYear();
   const { events: calendarEvents } = useAcademicCalendar(role ?? undefined);
   const { entries: scheduleEntries } = useSchedule();
@@ -1178,6 +1186,33 @@ export default function AttendanceSheet({
       );
   }, [classes, selectedDept, selectedLevel]);
 
+  const browseClassCards = useMemo<ClassRoomCard[]>(
+    () =>
+      classes.map((classRoom) => ({
+        classRoom,
+        homeroomTeacher: null,
+        homeroomTeachers: [],
+        scheduledPeriods: 0,
+        totalPeriods: 0,
+        fillPct: 0,
+        isFull: false,
+      })),
+    [classes],
+  );
+
+  const classCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    for (const cls of classes) {
+      const dept = cls.departmentId as Department;
+      if (dept === 'early' || dept === 'primary' || dept === 'secondary') {
+        counts[dept] = (counts[dept] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [classes]);
+
+  const showMobileClassBrowse = isMdOrBelow && isAdminOverview && !selectedClassId;
+
   const teacherIdentityKeys = useMemo(() => {
     if (!isTeacherPicker) return new Set<string>();
     const profile = resolveTeacherFromAuth(teacherId, teachers);
@@ -1264,13 +1299,54 @@ export default function AttendanceSheet({
     ],
   );
 
+  const selectedDateStr = useMemo(
+    () => (selectedCalendarDate ? toDateStr(selectedCalendarDate) : undefined),
+    [selectedCalendarDate],
+  );
+
+  // มอบหมายสอนแทนของวันที่เลือก — เฉพาะครู (ไม่ใช่ admin overview) และเฉพาะวันที่เลือกจริง
+  // ไม่ใช่ recurring รายสัปดาห์ ต่างจาก teacherScheduleEntries
+  const substitutionsForSelectedDate = useSubstitutionsForDate(
+    isTeacherPicker ? academicYearId : undefined,
+    isTeacherPicker ? semester : undefined,
+    isTeacherPicker ? selectedDateStr : undefined,
+  );
+
   const selectedDayEntries = useMemo(() => {
     if (!selectedCalendarDate) return [];
     const schoolDay = toSchoolDay(selectedCalendarDate);
-    return teacherScheduleEntries
-      .filter((entry) => entry.day === schoolDay)
-      .sort((a, b) => a.period - b.period || a.classId.localeCompare(b.classId));
-  }, [selectedCalendarDate, teacherScheduleEntries]);
+    const own = teacherScheduleEntries.filter((entry) => entry.day === schoolDay);
+
+    if (!isTeacherPicker || !selectedDateStr) {
+      return own.sort((a, b) => a.period - b.period || a.classId.localeCompare(b.classId));
+    }
+
+    const ownKeys = new Set(own.map((entry) => `${entry.classId}|${entry.period}`));
+    const teacherName = teachers.find((t) => t.id === teacherId || t.userId === teacherId)?.name ?? teacherId;
+    const substituteEntries: ScheduleEntry[] = substitutionsForSelectedDate
+      .filter((s) =>
+        s.scope === 'period'
+        && s.date === selectedDateStr
+        && s.period != null
+        && s.substituteTeacherId === teacherId
+        && !ownKeys.has(`${s.classId}|${s.period}`),
+      )
+      .map((s) => ({
+        id: `sub-${s.id}`,
+        classId: s.classId,
+        subjectId: s.subjectId ?? '',
+        subjectName: s.subjectName ?? '',
+        subjectCode: s.subjectCode ?? '',
+        teacherId, // สะกดเป็นของฉันเอง — ให้ผ่านเช็ค matchesTeacherIdentity เดิมโดยไม่ต้องแก้ logic
+        teacherName,
+        day: schoolDay as SchoolDay,
+        period: s.period as number,
+        year: academicYearId,
+        semester,
+      }));
+
+    return [...own, ...substituteEntries].sort((a, b) => a.period - b.period || a.classId.localeCompare(b.classId));
+  }, [selectedCalendarDate, teacherScheduleEntries, isTeacherPicker, selectedDateStr, substitutionsForSelectedDate, teacherId, teachers, academicYearId, semester]);
 
   const classNameById = useMemo(
     () => Object.fromEntries(classes.map((c) => [c.id, c.className])),
@@ -1459,7 +1535,7 @@ export default function AttendanceSheet({
 
     const currentRows = rowsRef.current;
     const hasCountChanged = freshRows.length !== currentRows.length;
-    const hasStatusFromServer = freshRows.some((fr) => fr.status != null);
+    const hasStatusFromServer = freshRows.some((fr) => fr.status != null && !fr.autoFilledLeave);
     const currentAllUnchecked = currentRows.every((r) => r.status == null);
 
     // ตรวจสอบว่ามีการลาที่เพิ่งได้รับอนุมัติ แต่ยังไม่ถูก reflect ใน rows ปัจจุบัน
@@ -1974,11 +2050,30 @@ export default function AttendanceSheet({
                 </div>
               ) : isAdminOverview ? (
                 <div className="flex min-h-0 flex-1 basis-0 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+                  {showMobileClassBrowse ? (
+                    !classesReady ? (
+                      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3">
+                        <ClassPickerSkeleton />
+                      </div>
+                    ) : (
+                      <ClassMobileBrowse
+                        selectedDept={selectedDept === 'all' ? '' : selectedDept}
+                        gradeOptions={gradeOptions}
+                        classCards={browseClassCards}
+                        classCountsByDept={classCountsByDept}
+                        departments={browseVisibleDepartments}
+                        onSelectDept={(dept) => handleDeptSelect(dept)}
+                        onSelectClass={handleAdminSelectClass}
+                        coverTitle="บันทึกเวลาเรียน"
+                        coverSubtitle="เลือกแผนกวิชาเพื่อดูและสรุปการเข้าเรียนในแต่ละห้อง"
+                      />
+                    )
+                  ) : null}
+
                   <div
                     className={cn(
-                      'flex h-full min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden',
+                      'hidden min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden lg:flex lg:h-auto lg:max-h-full',
                       sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
-                      adminSummary ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
                     )}
                   >
                     {!classesReady ? (
@@ -1994,6 +2089,7 @@ export default function AttendanceSheet({
                         selectedClassId={selectedClassId}
                         gradeOptions={gradeOptions}
                         classOptions={adminClassOptions}
+                        departments={browseVisibleDepartments}
                         onSelectDept={(dept: Department) => handleDeptSelect(dept)}
                         onSelectGrade={handleLevelSelect}
                         onSelectClass={handleAdminSelectClass}
@@ -2005,7 +2101,7 @@ export default function AttendanceSheet({
                           />
                         )}
                       >
-                        {/* Subject list — shown when a room is selected */}
+                        {/* Subject list — desktop sidebar when a room is selected */}
                         <AnimatePresence initial={false}>
                           {selectedClassId && scheduleReady && adminSubjectCards.length > 0 && (
                             <motion.section
@@ -2082,7 +2178,9 @@ export default function AttendanceSheet({
                   <div
                     className={cn(
                       'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
-                      !adminSummary && 'hidden lg:flex',
+                      !selectedClassId && 'hidden lg:flex',
+                      showMobileClassBrowse && 'hidden',
+                      isMdOrBelow && selectedClassId && !adminSummary && 'border-0 bg-transparent px-0 pb-0 sm:px-0 sm:pb-0',
                     )}
                   >
                     {adminSummary ? (
@@ -2099,6 +2197,74 @@ export default function AttendanceSheet({
                           rangeStart={academicYearRange.start}
                           rangeEnd={academicYearRange.end}
                         />
+                      </div>
+                    ) : selectedClassId && isMdOrBelow ? (
+                      <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain scrollbar-hide px-4 pb-6 pt-2">
+                        <div className="mb-3 text-center">
+                          <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                            {selectedClass?.className || 'ห้องเรียน'}
+                          </p>
+                          <h2 className="mt-1 text-lg font-black tracking-tight text-foreground">
+                            เลือกรายวิชา
+                          </h2>
+                        </div>
+                        {!scheduleReady ? (
+                          <div className="flex flex-col gap-2">
+                            {Array.from({ length: 4 }).map((_, i) => (
+                              <Skeleton key={i} className="h-14 w-full rounded-xl" />
+                            ))}
+                          </div>
+                        ) : adminSubjectCards.length === 0 ? (
+                          <div className="rounded-2xl border border-dashed border-border px-4 py-10 text-center text-[12px] font-bold text-muted-foreground">
+                            ห้องนี้ยังไม่มีรายวิชาในตารางสอน
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            {adminSubjectCards.map((card) => {
+                              const uniqKey = `${card.subjectId}_${card.classId}`;
+                              const color = subjectColorByName(card.subjectName, card.subjectGroup);
+                              return (
+                                <button
+                                  key={uniqKey}
+                                  type="button"
+                                  onClick={() =>
+                                    setAdminSummary({ subjectId: card.subjectId, classId: card.classId })
+                                  }
+                                  className="flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left shadow-sm transition-all"
+                                  style={{
+                                    backgroundColor: color.bg,
+                                    borderColor: color.border,
+                                  }}
+                                >
+                                  <span
+                                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm"
+                                    style={{ color: color.text }}
+                                  >
+                                    <SubjectIcon
+                                      subjectGroup={card.subjectGroup}
+                                      size={18}
+                                      className="text-current"
+                                    />
+                                  </span>
+                                  <span className="min-w-0 flex-1">
+                                    <span
+                                      className="block truncate text-[13px] font-black font-sukhumvit"
+                                      style={{ color: color.text }}
+                                    >
+                                      {card.subjectName}
+                                    </span>
+                                    <span
+                                      className="block text-[10px] font-bold opacity-75"
+                                      style={{ color: color.text }}
+                                    >
+                                      {card.subjectCode}
+                                    </span>
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
@@ -2128,6 +2294,7 @@ export default function AttendanceSheet({
                       selectedLevel={selectedLevel}
                       gradeOptions={gradeOptions}
                       roomOptions={roomOptions}
+                      departments={browseVisibleDepartments}
                       onSelectDept={(dept) => handleDeptSelect(dept)}
                       onSelectLevel={handleLevelSelect}
                       onSelectRoom={handleRoomSelect}

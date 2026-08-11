@@ -345,158 +345,182 @@ export default function ClassStudentPanel({
 
       {/* ── Class info bar (desktop → right header; mobile → inline) ── */}
       {(() => {
-        const infoBar = (
-      <div className="relative flex h-10 w-full shrink-0 items-center justify-between gap-3">
-          {/* Left: tabs + teachers */}
-          <div className="flex min-w-0 items-center gap-3 md:gap-4">
-            {switcherElement}
-
-            <div className="relative z-30 flex shrink-0 items-center gap-2" ref={teacherPickerRef}>
-              <div className="flex items-center gap-1.5 rounded-xl bg-slate-50 p-1.5 transition-all">
-                {selectedTeachers.length === 0 ? (
-                  <span className="px-2 py-0.5 text-[10px] font-black text-slate-400">ยังไม่มีครูประจำชั้น</span>
-                ) : (
-                  <div className="flex items-center gap-2 px-1">
-                    <div className="flex -space-x-1.5 overflow-hidden">
-                      {selectedTeachers.map(t => (
-                        <div
-                          key={t.id}
-                          {...bindTeacherLongPress(t)}
-                          className="flex h-6 w-6 shrink-0 cursor-pointer touch-none select-none items-center justify-center overflow-hidden rounded-full bg-slate-200"
-                          title={`${t.name} — กดค้างเพื่อถอดครูประจำชั้น`}
-                        >
-                          {t.photoURL ? (
-                            <img src={t.photoURL} alt={t.name} className="h-full w-full object-cover" />
-                          ) : (
-                            <span className="text-[8px] font-black text-slate-600">{t.name.charAt(0)}</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="max-w-[120px] truncate text-[9.5px] font-black leading-none text-slate-700">
-                        {selectedTeachers.map(t => t.name.replace(/^(นาย|นางสาว|นาง|ครู|ครูประจำชั้น)/, '').trim().split(' ')[0]).join(', ')}
-                      </span>
-                      <span className="mt-0.5 text-[7.5px] font-bold leading-none text-slate-400">ครูประจำชั้น</span>
-                    </div>
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setShowTeacherPicker(!showTeacherPicker)}
-                  className="flex h-6.5 w-6.5 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-slate-900 text-white transition-all hover:bg-slate-800 active:scale-95"
-                  title="จัดการครูประจำชั้น"
-                >
-                  <HiPlus className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              <AnimatePresence>
-                {showTeacherPicker && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    transition={{ duration: 0.15 }}
-                    className="absolute left-0 top-full z-50 mt-2 flex max-h-[300px] w-72 flex-col gap-2 overflow-hidden rounded-2xl border border-slate-200/60 bg-white/95 p-3 shadow-xl backdrop-blur-md"
-                  >
-                    <div className="flex shrink-0 items-center justify-between px-1 pt-0.5">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">เลือกครูประจำชั้น (สูงสุด 2 คน)</span>
-                      <button
-                        type="button"
-                        onClick={() => { setShowTeacherPicker(false); setTeacherQuery(''); }}
-                        className="cursor-pointer text-slate-400 hover:text-slate-600"
+        const teacherPickerBlock = (
+          <div className="relative z-30 flex w-full shrink-0 items-center gap-2 md:w-auto" ref={teacherPickerRef}>
+            <div className="flex h-11 min-h-11 w-full items-center gap-2 rounded-xl bg-slate-50 px-2 py-2 transition-all md:h-10 md:min-h-10 md:w-auto md:gap-1.5 md:px-1.5 md:py-1.5">
+              {selectedTeachers.length === 0 ? (
+                <span className="px-2 py-0.5 text-[10px] font-black text-slate-400 md:py-0">ยังไม่มีครูประจำชั้น</span>
+              ) : (
+                <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
+                  <div className="flex -space-x-1.5 overflow-hidden">
+                    {selectedTeachers.map(t => (
+                      <div
+                        key={t.id}
+                        {...bindTeacherLongPress(t)}
+                        className="flex h-8 w-8 shrink-0 cursor-pointer touch-none select-none items-center justify-center overflow-hidden rounded-full bg-slate-200 md:h-6 md:w-6"
+                        title={`${t.name} — กดค้างเพื่อถอดครูประจำชั้น`}
                       >
-                        <HiXMark className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+                        {t.photoURL ? (
+                          <img src={t.photoURL} alt={t.name} className="h-full w-full object-cover" />
+                        ) : (
+                          <span className="text-[8px] font-black text-slate-600">{t.name.charAt(0)}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex min-w-0 flex-1 flex-col justify-center">
+                    <span className="truncate text-[10px] font-black leading-none text-slate-700 md:max-w-[120px] md:text-[9.5px]">
+                      {selectedTeachers.map(t => t.name.replace(/^(นาย|นางสาว|นาง|ครู|ครูประจำชั้น)/, '').trim().split(' ')[0]).join(', ')}
+                    </span>
+                    <span className="mt-0.5 text-[8px] font-bold leading-none text-slate-400 md:text-[7.5px]">ครูประจำชั้น</span>
+                  </div>
+                </div>
+              )}
 
-                    <div className="relative shrink-0">
-                      <input
-                        type="text"
-                        value={teacherQuery}
-                        onChange={e => setTeacherQuery(e.target.value)}
-                        placeholder="ค้นหาชื่อครู..."
-                        className="w-full rounded-xl border border-black/5 bg-slate-50 py-1.5 pl-3 pr-8 text-[11px] font-bold text-slate-800 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                    </div>
-
-                    <div className="flex-1 space-y-1 overflow-y-auto pr-0.5 scrollbar-thin scrollbar-thumb-slate-200">
-                      {filteredTeachers.length === 0 ? (
-                        <div className="py-6 text-center text-[10px] font-bold text-slate-400">
-                          ไม่พบรายชื่อครู
-                        </div>
-                      ) : (
-                        filteredTeachers.map(t => {
-                          const isSelected = isHomeroomTeacherSelected(t, currentClassRoom, activeTeachers);
-                          return (
-                            <div
-                              key={t.id}
-                              onClick={() => toggleHomeroomTeacher(t.id)}
-                              className={`flex cursor-pointer items-center justify-between rounded-xl p-1.5 transition-all ${
-                                isSelected
-                                  ? 'bg-blue-50 font-black text-blue-600'
-                                  : 'font-bold text-slate-700 hover:bg-slate-50'
-                              }`}
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                <div
-                                  {...(isSelected ? bindTeacherLongPress(t) : {})}
-                                  onClick={isSelected ? (e) => e.stopPropagation() : undefined}
-                                  className={`flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-black/[0.04] bg-slate-100 ${
-                                    isSelected ? 'cursor-pointer touch-none select-none' : ''
-                                  }`}
-                                  title={isSelected ? `${t.name} — กดค้างเพื่อถอดครูประจำชั้น` : t.name}
-                                >
-                                  {t.photoURL ? (
-                                    <img src={t.photoURL} alt={t.name} className="h-full w-full object-cover" />
-                                  ) : (
-                                    <span className="text-[9px] font-black text-slate-500">{t.name.charAt(0)}</span>
-                                  )}
-                                </div>
-                                <div className="min-w-0">
-                                  <p className="truncate text-[11px] leading-tight">{t.name}</p>
-                                  <p className="mt-0.5 truncate text-[8.5px] text-slate-400">
-                                    {t.position || 'ครูผู้สอน'}
-                                  </p>
-                                </div>
-                              </div>
-
-                              {isSelected ? (
-                                <HiCheck className="mr-1 h-3.5 w-3.5 shrink-0 text-blue-600" />
-                              ) : (
-                                <div className="mr-1 h-3.5 w-3.5 shrink-0 rounded-full border border-slate-200" />
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              <button
+                type="button"
+                onClick={() => setShowTeacherPicker(!showTeacherPicker)}
+                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-slate-900 text-white transition-all hover:bg-slate-800 active:scale-95 md:h-7 md:w-7"
+                title="จัดการครูประจำชั้น"
+              >
+                <HiPlus className="h-3.5 w-3.5" />
+              </button>
             </div>
-          </div>
 
-          {/* Right: roster stats (courses controls portal stays mounted) */}
-          <div className="relative flex h-10 shrink-0 items-center justify-end">
+            <AnimatePresence>
+              {showTeacherPicker && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute left-0 top-full z-50 mt-2 flex max-h-[300px] w-72 flex-col gap-2 overflow-hidden rounded-2xl border border-slate-200/60 bg-white/95 p-3 shadow-xl backdrop-blur-md"
+                >
+                  <div className="flex shrink-0 items-center justify-between px-1 pt-0.5">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">เลือกครูประจำชั้น (สูงสุด 2 คน)</span>
+                    <button
+                      type="button"
+                      onClick={() => { setShowTeacherPicker(false); setTeacherQuery(''); }}
+                      className="cursor-pointer text-slate-400 hover:text-slate-600"
+                    >
+                      <HiXMark className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="relative shrink-0">
+                    <input
+                      type="text"
+                      value={teacherQuery}
+                      onChange={e => setTeacherQuery(e.target.value)}
+                      placeholder="ค้นหาชื่อครู..."
+                      className="w-full rounded-xl border border-black/5 bg-slate-50 py-1.5 pl-3 pr-8 text-[11px] font-bold text-slate-800 placeholder-slate-400 transition-all focus:border-transparent focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="flex-1 space-y-1 overflow-y-auto pr-0.5 scrollbar-thin scrollbar-thumb-slate-200">
+                    {filteredTeachers.length === 0 ? (
+                      <div className="py-6 text-center text-[10px] font-bold text-slate-400">
+                        ไม่พบรายชื่อครู
+                      </div>
+                    ) : (
+                      filteredTeachers.map(t => {
+                        const isSelected = isHomeroomTeacherSelected(t, currentClassRoom, activeTeachers);
+                        return (
+                          <div
+                            key={t.id}
+                            onClick={() => toggleHomeroomTeacher(t.id)}
+                            className={`flex cursor-pointer items-center justify-between rounded-xl p-1.5 transition-all ${
+                              isSelected
+                                ? 'bg-blue-50 font-black text-blue-600'
+                                : 'font-bold text-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              <div
+                                {...(isSelected ? bindTeacherLongPress(t) : {})}
+                                onClick={isSelected ? (e) => e.stopPropagation() : undefined}
+                                className={`flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-black/[0.04] bg-slate-100 ${
+                                  isSelected ? 'cursor-pointer touch-none select-none' : ''
+                                }`}
+                                title={isSelected ? `${t.name} — กดค้างเพื่อถอดครูประจำชั้น` : t.name}
+                              >
+                                {t.photoURL ? (
+                                  <img src={t.photoURL} alt={t.name} className="h-full w-full object-cover" />
+                                ) : (
+                                  <span className="text-[9px] font-black text-slate-500">{t.name.charAt(0)}</span>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="truncate text-[11px] leading-tight">{t.name}</p>
+                                <p className="mt-0.5 truncate text-[8.5px] text-slate-400">
+                                  {t.position || 'ครูผู้สอน'}
+                                </p>
+                              </div>
+                            </div>
+
+                            {isSelected ? (
+                              <HiCheck className="mr-1 h-3.5 w-3.5 shrink-0 text-blue-600" />
+                            ) : (
+                              <div className="mr-1 h-3.5 w-3.5 shrink-0 rounded-full border border-slate-200" />
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        );
+
+        const statsBlock = (
+          <div className={cn(
+            'relative flex shrink-0 items-center',
+            isMdOrBelow ? 'w-full' : 'h-10 justify-end',
+          )}>
             <div
               className={cn(
-                'flex items-center gap-3',
+                isMdOrBelow
+                  ? 'grid w-full grid-cols-3 gap-2'
+                  : 'flex items-center gap-3',
                 activeTab !== 'roster' && 'invisible pointer-events-none absolute',
               )}
             >
-              <div className="flex items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2">
-                <span className="text-[11px] font-black text-slate-700">{totalCount} นักเรียน</span>
+              <div className={cn(
+                'flex items-center justify-center gap-1 rounded-xl bg-white',
+                isMdOrBelow ? 'px-2 py-1.5' : 'gap-1.5 px-3 py-2',
+              )}>
+                <span className={cn(
+                  'font-black text-slate-700',
+                  isMdOrBelow ? 'text-[10px] leading-tight' : 'text-[11px]',
+                )}>
+                  {totalCount} นักเรียน
+                </span>
               </div>
-              <div className="flex items-center justify-center gap-1.5 rounded-xl bg-sky-50 px-3 py-2">
+              <div className={cn(
+                'flex items-center justify-center gap-1 rounded-xl bg-sky-50',
+                isMdOrBelow ? 'px-2 py-1.5' : 'gap-1.5 px-3 py-2',
+              )}>
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />
-                <span className="text-[11px] font-black text-sky-600">{maleCount} ชาย</span>
+                <span className={cn(
+                  'font-black text-sky-600',
+                  isMdOrBelow ? 'text-[10px] leading-tight' : 'text-[11px]',
+                )}>
+                  {maleCount} ชาย
+                </span>
               </div>
-              <div className="flex items-center justify-center gap-1.5 rounded-xl bg-pink-50 px-3 py-2">
+              <div className={cn(
+                'flex items-center justify-center gap-1 rounded-xl bg-pink-50',
+                isMdOrBelow ? 'px-2 py-1.5' : 'gap-1.5 px-3 py-2',
+              )}>
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-pink-400" />
-                <span className="text-[11px] font-black text-pink-500">{femaleCount} หญิง</span>
+                <span className={cn(
+                  'font-black text-pink-500',
+                  isMdOrBelow ? 'text-[10px] leading-tight' : 'text-[11px]',
+                )}>
+                  {femaleCount} หญิง
+                </span>
               </div>
             </div>
             <div
@@ -507,7 +531,22 @@ export default function ClassStudentPanel({
               )}
             />
           </div>
-      </div>
+        );
+
+        const infoBar = isMdOrBelow ? (
+          <div className="relative flex w-full shrink-0 flex-col gap-2">
+            <div className="flex h-10 w-full items-center">{switcherElement}</div>
+            {teacherPickerBlock}
+            {statsBlock}
+          </div>
+        ) : (
+          <div className="relative flex h-10 w-full shrink-0 items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3 md:gap-4">
+              {switcherElement}
+              {teacherPickerBlock}
+            </div>
+            {statsBlock}
+          </div>
         );
         if (!isMdOrBelow) {
           return desktopHeaderHost

@@ -85,6 +85,7 @@ async function fetchStudentAnalytics(classId: string, academicYearId: string, cl
       ? Math.round((gpaPoints.reduce((a, b) => a + b, 0) / gpaPoints.length) * 100) / 100
       : null;
     const failingSubjects = grades.filter((g) => g.grade === 'F').length;
+    const gradedSubjects = grades.filter((g) => g.grade != null).length;
 
     const attendanceRate = tallyRate(attendanceByStudent.get(student.id) ?? []);
     const rollCallRate = tallyRate(rollCallByStudent.get(student.id) ?? []);
@@ -105,7 +106,7 @@ async function fetchStudentAnalytics(classId: string, academicYearId: string, cl
       className,
       gpa,
       failingSubjects,
-      gradedSubjects: grades.length,
+      gradedSubjects,
       attendanceRate,
       rollCallRate,
       riskLevel,

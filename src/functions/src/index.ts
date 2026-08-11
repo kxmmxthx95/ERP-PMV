@@ -10,6 +10,8 @@ const db = getAdminFirestore();
 
 export { sendLineReport } from "./sendLineReport";
 export { notifyHomeroomOnStudentLeave } from "./notifyHomeroomOnStudentLeave";
+export { notifySubstituteAssignment } from "./notifySubstituteAssignment";
+export { notifySubstitutionApproved } from "./notifySubstitutionApproved";
 export { reportDailyScheduled } from "./reportDailyScheduled";
 export { examRoomAutoClose } from "./examRoomAutoClose";
 export { processLineLinkRequest } from "./processLineLinkRequest";
@@ -27,13 +29,7 @@ export { qbAnalystChat } from "./qbAnalystChat";
 export { deviceFingerprintAttendance } from "./deviceFingerprintAttendance";
 export { horoscopeDaily } from "./horoscopeDaily";
 export { examPdfBytes } from "./examPdfBytes";
-export {
-  wordGameCreateRoom,
-  wordGameJoinRoom,
-  wordGameStart,
-  wordGameSubmitGuess,
-  wordGameLeaveRoom,
-} from "./wordGame";
+export { rebuildAcademicStats, onExamRoomAcademicStats } from "./rebuildAcademicStats";
 
 const STAFF_MIGRATION_BATCH_LIMIT = 450;
 
@@ -299,12 +295,37 @@ function resolveStudentAnswer(
   return "";
 }
 
+/**
+ * Per-set question cache, shared across every attempt graded within the same
+ * finalizeExamRoundOnClose invocation — a room's attempts almost always share the
+ * same question set(s), so without this the same `question_sets/{setId}/questions`
+ * subcollection gets re-read once per student instead of once per room-close.
+ */
+type QuestionSetCache = Map<string, Map<string, QuestionDoc>>;
+
+async function loadQuestionSet(
+  db: FirebaseFirestore.Firestore,
+  setId: string,
+  cache: QuestionSetCache,
+): Promise<Map<string, QuestionDoc>> {
+  const cached = cache.get(setId);
+  if (cached) return cached;
+  const snap = await db.collection("question_sets").doc(setId).collection("questions").get();
+  const questions = new Map<string, QuestionDoc>();
+  snap.forEach((docSnap) => {
+    questions.set(docSnap.id, docSnap.data() as QuestionDoc);
+  });
+  cache.set(setId, questions);
+  return questions;
+}
+
 async function autoGradeAttempt(
   db: FirebaseFirestore.Firestore,
   attemptRef: FirebaseFirestore.DocumentReference,
   attemptData: ExamAttemptDoc,
   roomData: ExamRoomDoc,
   attemptId: string,
+  questionSetCache: QuestionSetCache = new Map(),
 ): Promise<"graded" | "partial_graded" | "skipped_no_questions" | "skipped_no_set_ids"> {
   const roomId = typeof attemptData.roomId === "string" ? attemptData.roomId.trim() : "";
   const round = normalizeRound(attemptData.round);
@@ -329,10 +350,8 @@ async function autoGradeAttempt(
   const questionMap = new Map<string, QuestionDoc>();
   await Promise.all(
     Array.from(candidateSetIds).map(async (setId) => {
-      const snap = await db.collection("question_sets").doc(setId).collection("questions").get();
-      snap.forEach((docSnap) => {
-        questionMap.set(docSnap.id, docSnap.data() as QuestionDoc);
-      });
+      const setQuestions = await loadQuestionSet(db, setId, questionSetCache);
+      setQuestions.forEach((question, qid) => questionMap.set(qid, question));
     }),
   );
 
@@ -575,6 +594,11 @@ export const finalizeExamRoundOnClose = onDocumentUpdated(
 
     if (attemptsSnap.empty) return;
 
+    // Shared across the whole round — students in the same room/round grade against
+    // the same question set(s), so this turns N re-reads of question_sets/*/questions
+    // (one per student) into a single read per distinct set for this close event.
+    const questionSetCache: QuestionSetCache = new Map();
+
     for (const attemptDoc of attemptsSnap.docs) {
       const data = attemptDoc.data() as ExamAttemptDoc;
       const status = String(data.status || "");
@@ -594,7 +618,7 @@ export const finalizeExamRoundOnClose = onDocumentUpdated(
       if (String(data.status || "") !== "submitted") continue;
       if (typeof data.score === "number") continue;
 
-      await autoGradeAttempt(db, attemptDoc.ref, data, after, attemptDoc.id);
+      await autoGradeAttempt(db, attemptDoc.ref, data, after, attemptDoc.id, questionSetCache);
     }
   },
 );

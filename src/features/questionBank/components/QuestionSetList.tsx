@@ -319,10 +319,16 @@ export default function QuestionSetList({
                 title={set.title}
                 subtitle={subtitle}
                 meta={(
-                  <p className="pt-0.5 text-[11px] font-black text-muted-foreground">
-                    {qCount.toLocaleString('th-TH')} ข้อ
-                    {set.gradeLevel ? ` · ${set.gradeLevel}` : ''}
-                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-1 pt-0.5">
+                    <span className="inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary font-sukhumvit">
+                      {qCount.toLocaleString('th-TH')} ข้อ
+                    </span>
+                    {set.gradeLevel ? (
+                      <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold text-muted-foreground font-sukhumvit">
+                        {set.gradeLevel}
+                      </span>
+                    ) : null}
+                  </div>
                 )}
                 colorId={folderColors[colorKey] ?? folderColorForSubjectGroup(set.subjectGroup)}
                 onColorChange={(id) => setFolderColor(colorKey, id)}

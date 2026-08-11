@@ -1,9 +1,11 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { HiAcademicCap, HiArrowLeft, HiHomeModern, HiOutlineUserGroup } from 'react-icons/hi2';
+import { HiAcademicCap, HiArrowLeft, HiChevronLeft, HiHomeModern, HiOutlineUserGroup } from 'react-icons/hi2';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
 import { Button } from '@/components/ui/button';
+import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { buildTeacherIdentityKeys } from '@/lib/teachers/teacherIdentity';
 import { cn } from '@/lib/utils';
 import { DEPARTMENT_CONFIG, type Department, type SubjectCategory } from '@/types/curriculum';
@@ -16,6 +18,7 @@ import type { CalendarEvent } from '@/types/calendar';
 import type { ClassSettingsMap } from '@/lib/firestoreShared/classSettingsStore';
 import type { DeptSemesterSettings } from '@/lib/firestoreShared/deptSemestersStore';
 import { computeSyllabusPct, type SyllabusProgressContext } from '../utils/teachingPlanCalendar';
+import AdminPlanMobileBrowse from './AdminPlanMobileBrowse';
 import AdminProgressView from './AdminProgressView';
 import WeeklyTopicGrid from './WeeklyTopicGrid';
 
@@ -200,6 +203,7 @@ export default function AdminTeacherPlanBrowser({
   semester,
   academicYear,
 }: Props) {
+  const isDesktop = useIsDesktop();
   const [filterDepartment, setFilterDepartment] = useState('');
   const [browseMode, setBrowseMode] = useState<BrowseMode>('class');
   const [filterGradeLevel, setFilterGradeLevel] = useState('');
@@ -207,8 +211,31 @@ export default function AdminTeacherPlanBrowser({
   const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
   const [selectedSyllabusId, setSelectedSyllabusId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
+  }, []);
 
   const yearClasses = useMemo(() => Array.from(classesById.values()), [classesById]);
+
+  const planCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    for (const s of syllabi) {
+      let dept: Department | undefined =
+        s.departmentId && s.departmentId in DEPARTMENT_CONFIG
+          ? (s.departmentId as Department)
+          : undefined;
+      if (!dept) {
+        dept = (Object.keys(DEPARTMENT_CONFIG) as Department[]).find((d) =>
+          DEPARTMENT_CONFIG[d].grades.includes(s.gradeLevel),
+        );
+      }
+      if (!dept) continue;
+      counts[dept] = (counts[dept] ?? 0) + 1;
+    }
+    return counts;
+  }, [syllabi]);
 
   const availableGrades = useMemo(() => {
     if (!filterDepartment) return [];
@@ -271,6 +298,18 @@ export default function AdminTeacherPlanBrowser({
     return buildTeacherEntries(deptTeachers, deptSyllabi, progressCtx);
   }, [teachers, syllabi, filterDepartment, browseMode, progressCtx]);
 
+  const mobileTeacherEntries = useMemo(
+    () =>
+      teacherEntries.map((e) => ({
+        id: e.id,
+        name: e.name,
+        photoURL: e.photoURL,
+        planCount: e.syllabi.length,
+        avgPct: e.avgPct,
+      })),
+    [teacherEntries],
+  );
+
   const selectedTeacher = useMemo(
     () => teacherEntries.find((e) => e.id === selectedTeacherId) ?? null,
     [teacherEntries, selectedTeacherId],
@@ -317,6 +356,38 @@ export default function AdminTeacherPlanBrowser({
     setSelectedClassId(classId);
     setSelectedSyllabusId(null);
   };
+
+  const handleMobileSelectClass = useCallback((classId: string, gradeLevel: string) => {
+    setFilterGradeLevel(gradeLevel);
+    setSelectedClassId(classId);
+    setSelectedSyllabusId(null);
+  }, []);
+
+  const handleMobileSelectTeacher = useCallback((teacherId: string) => {
+    setSelectedTeacherId(teacherId);
+    setSelectedSyllabusId(null);
+  }, []);
+
+  const handleMobileBack = useCallback(() => {
+    if (selectedSyllabusId) {
+      setSelectedSyllabusId(null);
+      return;
+    }
+    if (selectedClassId || selectedTeacherId) {
+      setSelectedClassId('');
+      setSelectedTeacherId(null);
+      return;
+    }
+    setFilterDepartment('');
+    setFilterGradeLevel('');
+    setSelectedClassId('');
+    setSelectedTeacherId(null);
+    setSelectedSyllabusId(null);
+  }, [selectedSyllabusId, selectedClassId, selectedTeacherId]);
+
+  const showMobileBrowse = !isDesktop && !hasRightSelection;
+  const needsCustomMobileBack =
+    !isDesktop && Boolean(filterDepartment || hasRightSelection || selectedSyllabusId);
 
   const modeToggle = filterDepartment ? (
     <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-border bg-muted/40 p-1">
@@ -503,12 +574,60 @@ export default function AdminTeacherPlanBrowser({
 
   return (
     <div className="flex h-full min-h-0 max-h-full w-full flex-1 flex-col overflow-hidden">
+      {needsCustomMobileBack && headerMobileBackEl
+        ? createPortal(
+            <button
+              type="button"
+              onClick={handleMobileBack}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100"
+              title={
+                selectedSyllabusId
+                  ? 'กลับเลือกรายวิชา'
+                  : hasRightSelection
+                    ? browseMode === 'class'
+                      ? 'กลับเลือกห้องเรียน'
+                      : 'กลับเลือกครู'
+                    : 'กลับเลือกแผนก'
+              }
+              aria-label={
+                selectedSyllabusId
+                  ? 'กลับเลือกรายวิชา'
+                  : hasRightSelection
+                    ? browseMode === 'class'
+                      ? 'กลับเลือกห้องเรียน'
+                      : 'กลับเลือกครู'
+                    : 'กลับเลือกแผนก'
+              }
+            >
+              <HiChevronLeft size={16} />
+            </button>,
+            headerMobileBackEl,
+          )
+        : null}
+
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+        {showMobileBrowse ? (
+          <AdminPlanMobileBrowse
+            selectedDept={filterDepartment}
+            browseMode={browseMode}
+            gradeOptions={availableGrades}
+            yearClasses={yearClasses}
+            teacherEntries={mobileTeacherEntries}
+            planCountsByDept={planCountsByDept}
+            onSelectDept={handleSelectDept}
+            onBrowseMode={handleBrowseMode}
+            onSelectClass={handleMobileSelectClass}
+            onSelectTeacher={handleMobileSelectTeacher}
+          />
+        ) : null}
+
         <div
           className={cn(
             'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
             sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
-            hasRightSelection ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+            hasRightSelection
+              ? 'hidden lg:flex'
+              : 'hidden min-h-0 flex-1 lg:flex lg:flex-none',
           )}
         >
           <GradeBookClassSidebar
@@ -542,7 +661,7 @@ export default function AdminTeacherPlanBrowser({
           )}
         >
           {selectedSyllabus && (
-            <div className="relative mb-3 flex min-h-[3.25rem] shrink-0 items-center justify-center border-b border-border px-0 pb-3 pt-2 sm:pt-2.5">
+            <div className="relative mb-3 hidden min-h-[3.25rem] shrink-0 items-center justify-center border-b border-border px-0 pb-3 pt-2 sm:pt-2.5 lg:flex">
               <div className="absolute left-0">
                 <Button
                   type="button"

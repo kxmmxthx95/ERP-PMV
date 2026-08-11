@@ -233,7 +233,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => setShowForgotModal(true)}
-                className="text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors"
+                className="text-xs font-bold text-muted-foreground transition-colors hover:text-foreground"
               >
                 ลืมรหัสผ่าน?
               </button>

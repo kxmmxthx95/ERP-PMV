@@ -29,6 +29,7 @@ export function ClassSelectionFlow({
   onSelectDept,
   onSelectLevel,
   onSelectRoom,
+  departments,
 }: {
   selectedDept: DepartmentFilter;
   selectedLevel: string | null;
@@ -37,6 +38,8 @@ export function ClassSelectionFlow({
   onSelectDept: (dept: Department) => void;
   onSelectLevel: (level: string) => void;
   onSelectRoom: (room: string) => void;
+  /** Default: all departments */
+  departments?: Department[];
 }) {
   const step = selectedDept === 'all' ? 'dept' : !selectedLevel ? 'grade' : 'room';
   const dept = selectedDept === 'all' ? null : selectedDept;
@@ -46,7 +49,7 @@ export function ClassSelectionFlow({
     <div className="flex min-h-[calc(100dvh-8.5rem)] flex-1 flex-col items-center justify-center px-3 py-2 md:px-6">
       {step === 'dept' && (
         <div className="flex w-full flex-col items-center justify-center">
-          <DepartmentPickerCoverflow onSelect={onSelectDept} />
+          <DepartmentPickerCoverflow onSelect={onSelectDept} departments={departments} />
         </div>
       )}
 

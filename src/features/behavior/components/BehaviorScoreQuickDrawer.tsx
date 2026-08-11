@@ -22,6 +22,8 @@ import {
   BEHAVIOR_DEPARTMENT_OPTIONS,
   BEHAVIOR_GRADES_BY_DEPARTMENT,
   BEHAVIOR_MIN_SEARCH_LENGTH,
+  isBehaviorBrowseFilterReady,
+  isBehaviorBrowseFilterTouched,
 } from '../utils/behaviorStudentFilters';
 
 const StudentQuickTapModal = lazy(() => import('./StudentQuickTapModal'));
@@ -134,18 +136,17 @@ export default function BehaviorScoreQuickDrawer({
   );
 
   const gradeSelectOptions = useMemo(() => [
-    { value: '', label: filter.department ? 'ทุกชั้น' : 'เลือกแผนกก่อน' },
+    { value: '', label: filter.department ? 'เลือกชั้น' : 'เลือกแผนกก่อน' },
     ...gradeOptions.map((grade) => ({ value: grade, label: grade })),
   ], [filter.department, gradeOptions]);
 
   const classSelectOptions = useMemo(() => [
-    { value: '', label: filter.gradeLevel ? 'ทุกห้อง' : 'เลือกชั้นก่อน' },
+    { value: '', label: filter.gradeLevel ? 'เลือกห้อง' : 'เลือกชั้นก่อน' },
     ...availableClasses.map((c) => ({ value: c.classId, label: c.className })),
   ], [availableClasses, filter.gradeLevel]);
 
-  const hasAppliedFilter = Boolean(
-    filter.department || filter.gradeLevel || filter.classId || filter.searchText,
-  );
+  const isFilterTouched = isBehaviorBrowseFilterTouched(filter);
+  const canShowStudentList = isBehaviorBrowseFilterReady(filter);
 
   const clearFilters = () => {
     setSearchInput('');
@@ -194,7 +195,7 @@ export default function BehaviorScoreQuickDrawer({
                     บันทึกคะแนนพฤติกรรม
                   </DrawerTitle>
                   <DrawerDescription className="text-xs font-bold text-slate-400">
-                    เลือกแผนก ชั้น ห้อง หรือค้นหานักเรียน
+                    เลือกแผนก ชั้น และห้องให้ครบ หรือค้นหานักเรียน
                   </DrawerDescription>
                 </div>
                 <button
@@ -255,7 +256,7 @@ export default function BehaviorScoreQuickDrawer({
                 </p>
               )}
 
-              {hasAppliedFilter && (
+              {isFilterTouched && (
                 <button
                   type="button"
                   onClick={clearFilters}
@@ -267,10 +268,10 @@ export default function BehaviorScoreQuickDrawer({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              {!hasAppliedFilter ? (
+              {!canShowStudentList ? (
                 <div className="flex h-full min-h-[240px] items-center justify-center px-4">
                   <p className="max-w-xs text-center text-sm font-bold text-slate-400">
-                    กรุณาเลือกแผนก ชั้น ห้อง หรือค้นหานักเรียนเพื่อแสดงรายชื่อ
+                    กรุณาเลือกแผนก ชั้น และห้องให้ครบ หรือค้นหานักเรียนเพื่อแสดงรายชื่อ
                   </p>
                 </div>
               ) : !isDataLoaded || loadingTotals ? (

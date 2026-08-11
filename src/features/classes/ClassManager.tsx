@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { HiAcademicCap, HiChevronLeft, HiHomeModern, HiPlus } from 'react-icons/hi2';
 import { cn } from '@/lib/utils';
@@ -8,8 +8,11 @@ import type { Department } from '@/types/curriculum';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
 import { useClassroomManager } from './hooks/useClassroomManager';
+import { useBrowseVisibleDepartments } from '@/hooks/useBrowseVisibleDepartments';
+import { shouldCountDepartment } from '@/lib/departments/homeDepartment';
 import ClassFormModal from './components/ClassFormModal';
 import ClassStudentPanel from './components/ClassStudentPanel';
+import ClassMobileBrowse from './components/ClassMobileBrowse';
 
 function shortRoomLabel(room: ClassRoom): string {
   const n = String(room.roomNumber ?? '').trim();
@@ -20,6 +23,7 @@ function shortRoomLabel(room: ClassRoom): string {
 
 export default function ClassManager() {
   const mgr = useClassroomManager();
+  const { homeDepartment, browseVisibleDepartments, isDeptScoped } = useBrowseVisibleDepartments();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingClass, setEditingClass] = useState<ClassRoom | null>(null);
@@ -29,13 +33,24 @@ export default function ClassManager() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [headerRightActionsEl, setHeaderRightActionsEl] = useState<HTMLElement | null>(null);
   const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
+  const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
   const [headerCenterMobilePortalEl, setHeaderCenterMobilePortalEl] = useState<HTMLElement | null>(null);
   const [desktopHeaderHost, setDesktopHeaderHost] = useState<HTMLDivElement | null>(null);
+  const [isLgOrBelow, setIsLgOrBelow] = useState(() => window.innerWidth < 1024);
 
   useEffect(() => {
     setHeaderRightActionsEl(document.getElementById('header-portal-right-actions'));
     setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
+    setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
     setHeaderCenterMobilePortalEl(document.getElementById('header-portal-center-mobile'));
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1023px)');
+    const onChange = () => setIsLgOrBelow(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
   }, []);
 
   const openAddModal = () => {
@@ -43,10 +58,25 @@ export default function ClassManager() {
     setModalOpen(true);
   };
 
+  const scopedClasses = useMemo(() => {
+    if (!isDeptScoped || !homeDepartment) return mgr.allClasses;
+    return mgr.allClasses.filter(
+      (c) => c.departmentId === homeDepartment || c.department === homeDepartment,
+    );
+  }, [mgr.allClasses, isDeptScoped, homeDepartment]);
+
+  const browseClassCards = useMemo(() => {
+    if (!isDeptScoped || !homeDepartment) return mgr.classCards;
+    return mgr.classCards.filter((card) => {
+      const dept = card.classRoom.departmentId || card.classRoom.department;
+      return dept === homeDepartment;
+    });
+  }, [mgr.classCards, isDeptScoped, homeDepartment]);
+
   const availableGrades = useMemo(() => {
     if (!filterDepartment) return [];
     const grades = new Set<string>();
-    mgr.allClasses
+    scopedClasses
       .filter((c) => c.departmentId === filterDepartment || c.department === filterDepartment)
       .forEach((c) => {
         if (c.gradeLevel) grades.add(c.gradeLevel);
@@ -54,11 +84,11 @@ export default function ClassManager() {
     return Array.from(grades).sort(
       (a, b) => (GRADE_LEVEL_ORDER[a] ?? 99) - (GRADE_LEVEL_ORDER[b] ?? 99),
     );
-  }, [mgr.allClasses, filterDepartment]);
+  }, [scopedClasses, filterDepartment]);
 
   const classOptions = useMemo(() => {
     if (!filterDepartment || !filterGradeLevel) return [];
-    return mgr.allClasses
+    return scopedClasses
       .filter(
         (c) =>
           (c.departmentId === filterDepartment || c.department === filterDepartment)
@@ -70,12 +100,12 @@ export default function ClassManager() {
           numeric: true,
         }),
       );
-  }, [mgr.allClasses, filterDepartment, filterGradeLevel]);
+  }, [scopedClasses, filterDepartment, filterGradeLevel]);
 
   const selectedClass = useMemo(() => {
     if (!selectedClassId) return null;
-    return mgr.allClasses.find((c) => c.id === selectedClassId) ?? null;
-  }, [mgr.allClasses, selectedClassId]);
+    return scopedClasses.find((c) => c.id === selectedClassId) ?? null;
+  }, [scopedClasses, selectedClassId]);
 
   const handleSelectDept = (dept: Department) => {
     setFilterDepartment(dept);
@@ -94,6 +124,51 @@ export default function ClassManager() {
   const handleSelectClass = (classId: string) => {
     setSelectedClassId(classId);
   };
+
+  const handleMobileSelectClass = (classId: string) => {
+    const room = scopedClasses.find((c) => c.id === classId);
+    if (room?.gradeLevel) {
+      setFilterGradeLevel(room.gradeLevel);
+      mgr.setFilterGrade(room.gradeLevel);
+    }
+    handleSelectClass(classId);
+  };
+
+  const showMobileClassBrowse = isLgOrBelow && !selectedClassId;
+  const needsCustomMobileBack = isLgOrBelow && Boolean(selectedClassId || filterDepartment);
+
+  const classCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    (['early', 'primary', 'secondary'] as Department[]).forEach((dept) => {
+      if (!shouldCountDepartment(dept, homeDepartment, isDeptScoped)) return;
+      const n = mgr.summary.byDept[dept] ?? 0;
+      if (n > 0) counts[dept] = n;
+    });
+    return counts;
+  }, [mgr.summary.byDept, homeDepartment, isDeptScoped]);
+
+  const handleMobileBack = useCallback(() => {
+    if (selectedClassId) {
+      setSelectedClassId('');
+      return;
+    }
+    setFilterDepartment('');
+    setFilterGradeLevel('');
+    setSelectedClassId('');
+    mgr.setFilterDept('all');
+    mgr.setFilterGrade('all');
+  }, [selectedClassId, mgr]);
+
+  useEffect(() => {
+    const defaultBack = document.getElementById('portal-default-mobile-back');
+    if (!defaultBack) return;
+    defaultBack.style.display = needsCustomMobileBack ? 'none' : '';
+  }, [needsCustomMobileBack]);
+
+  useEffect(() => {
+    if (!isLgOrBelow) return;
+    document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+  }, [isLgOrBelow, filterDepartment, selectedClassId]);
 
   const closeModal = () => {
     setModalOpen(false);
@@ -163,6 +238,19 @@ export default function ClassManager() {
 
   return (
     <div className="flex h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)] min-h-0 w-full flex-col overflow-hidden font-sukhumvit">
+      {needsCustomMobileBack && headerMobileBackEl && createPortal(
+        <button
+          type="button"
+          onClick={handleMobileBack}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100"
+          title={selectedClassId ? 'กลับเลือกห้องเรียน' : 'กลับเลือกแผนก'}
+          aria-label={selectedClassId ? 'กลับเลือกห้องเรียน' : 'กลับเลือกแผนก'}
+        >
+          <HiChevronLeft size={16} />
+        </button>,
+        headerMobileBackEl,
+      )}
+
       {!selectedClassId && headerCenterMobilePortalEl && createPortal(
         <div className="pointer-events-none flex items-center gap-1.5 lg:hidden">
           <HiAcademicCap className="h-4 w-4 shrink-0 text-black/80" />
@@ -175,17 +263,6 @@ export default function ClassManager() {
 
       {headerMobileActionsEl && createPortal(
         <div className={cn('pointer-events-auto relative flex lg:hidden', HEADER_ICON_BTN_GROUP)}>
-          {selectedClassId && (
-            <button
-              type="button"
-              onClick={() => setSelectedClassId('')}
-              className={HEADER_ICON_BTN}
-              title="กลับ"
-              aria-label="กลับ"
-            >
-              <HiChevronLeft size={16} />
-            </button>
-          )}
           <button
             type="button"
             onClick={openAddModal}
@@ -215,11 +292,23 @@ export default function ClassManager() {
       )}
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+        {showMobileClassBrowse ? (
+          <ClassMobileBrowse
+            selectedDept={filterDepartment}
+            gradeOptions={availableGrades}
+            classCards={browseClassCards}
+            classCountsByDept={classCountsByDept}
+            departments={browseVisibleDepartments}
+            onSelectDept={handleSelectDept}
+            onSelectClass={handleMobileSelectClass}
+          />
+        ) : null}
+
         <div
           className={cn(
             'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
             sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
-            selectedClassId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+            selectedClassId ? 'hidden lg:flex' : 'hidden min-h-0 flex-1 lg:flex lg:flex-none',
           )}
         >
           <GradeBookClassSidebar
@@ -228,6 +317,7 @@ export default function ClassManager() {
             selectedClassId={selectedClassId}
             gradeOptions={availableGrades}
             classOptions={classOptions}
+            departments={browseVisibleDepartments}
             onSelectDept={handleSelectDept}
             onSelectGrade={handleSelectGrade}
             onSelectClass={handleSelectClass}
@@ -246,6 +336,7 @@ export default function ClassManager() {
           className={cn(
             'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
             !selectedClassId && 'hidden lg:flex',
+            isLgOrBelow && selectedClassId && 'rounded-none border-0 bg-transparent px-3 pb-4 pt-2 sm:px-3',
           )}
         >
           {selectedClass && (
@@ -260,6 +351,7 @@ export default function ClassManager() {
           {selectedClass ? (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <ClassStudentPanel
+                key={selectedClassId}
                 classRoom={selectedClass}
                 desktopHeaderHost={desktopHeaderHost}
               />

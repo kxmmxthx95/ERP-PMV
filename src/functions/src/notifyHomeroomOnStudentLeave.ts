@@ -9,10 +9,66 @@ interface LeaveRequestDoc {
   requesterId?: string;
   requesterName?: string;
   requesterType?: "student" | "staff";
+  requesterStudentCode?: string | null;
   leaveType?: "sick" | "personal";
   startDate?: string;
   endDate?: string;
   reason?: string;
+}
+
+/**
+ * Resolve students/{docId} for a leave request's requesterId.
+ * Student docs use Firestore auto-generated IDs (addDoc), NOT the Firebase Auth UID —
+ * requesterId is always the auth UID, so a direct doc(requesterId) lookup misses almost
+ * every student. Mirrors the client-side fallback chain in resolveStudentProfile.ts.
+ */
+async function resolveStudentDoc(
+  requesterId: string,
+  studentCode?: string | null,
+): Promise<FirebaseFirestore.DocumentSnapshot | null> {
+  const directSnap = await db.collection("students").doc(requesterId).get();
+  if (directSnap.exists) return directSnap;
+
+  const byAuthUid = await db.collection("students").where("authUid", "==", requesterId).limit(1).get();
+  if (!byAuthUid.empty) return byAuthUid.docs[0];
+
+  const byUserId = await db.collection("students").where("userId", "==", requesterId).limit(1).get();
+  if (!byUserId.empty) return byUserId.docs[0];
+
+  const code = studentCode?.trim();
+  if (code) {
+    const byCode = await db.collection("students").where("studentCode", "==", code).limit(1).get();
+    if (!byCode.empty) return byCode.docs[0];
+  }
+
+  return null;
+}
+
+/**
+ * Resolve a student's current classroom ID.
+ * ClassroomAssignmentTab.tsx writes classroom membership to students/{id}.classroomId
+ * (NOT `classId` — that field never exists on the student doc). The authoritative,
+ * year-scoped source of truth is the `enrollments` collection (see classRoster.ts on
+ * the client). Check the denormalized student field first, then fall back to the
+ * student's active ("studying") enrollment.
+ */
+async function resolveStudentClassId(
+  studentSnap: FirebaseFirestore.DocumentSnapshot,
+): Promise<string | undefined> {
+  const data = studentSnap.data() as { classroomId?: string; classId?: string } | undefined;
+  const direct = data?.classroomId || data?.classId;
+  if (direct) return direct;
+
+  const enrollSnap = await db
+    .collection("enrollments")
+    .where("studentId", "==", studentSnap.id)
+    .where("status", "==", "studying")
+    .get();
+  if (enrollSnap.empty) return undefined;
+
+  const rows = enrollSnap.docs.map((d) => d.data() as { classId?: string; academicYearId?: string });
+  rows.sort((a, b) => String(b.academicYearId ?? "").localeCompare(String(a.academicYearId ?? "")));
+  return rows[0]?.classId;
 }
 
 const LEAVE_TYPE_LABEL: Record<string, string> = {
@@ -70,10 +126,14 @@ export const notifyHomeroomOnStudentLeave = onDocumentCreated(
     const requesterId = data.requesterId;
     if (!requesterId) return;
 
-    const studentSnap = await db.collection("students").doc(requesterId).get();
-    const classId = studentSnap.data()?.classId as string | undefined;
+    const studentSnap = await resolveStudentDoc(requesterId, data.requesterStudentCode);
+    if (!studentSnap) {
+      console.warn(`[notifyHomeroomOnStudentLeave] could not resolve student doc for requester ${requesterId}`);
+      return;
+    }
+    const classId = await resolveStudentClassId(studentSnap);
     if (!classId) {
-      console.warn(`[notifyHomeroomOnStudentLeave] student ${requesterId} has no classId`);
+      console.warn(`[notifyHomeroomOnStudentLeave] student ${studentSnap.id} has no classId`);
       return;
     }
 

@@ -18,7 +18,7 @@ import { th } from 'date-fns/locale';
 import { HiChevronLeft, HiChevronRight, HiXMark } from 'react-icons/hi2';
 import { cn } from '@/lib/utils';
 import { SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
-import { toDateStr, toThaiFullDate, formatEventDateRange } from '@/features/calendar/utils';
+import { toDateStr, toThaiFullDate } from '@/features/calendar/utils';
 import {
   Drawer,
   DrawerContent,
@@ -32,7 +32,6 @@ import { useAuth } from '@/hooks/useAuth';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import { useThaiHolidays } from '@/features/calendar/hooks/useThaiHolidays';
 import { EVENT_TYPE_CONFIG } from '@/types/calendar';
-import type { CalendarEvent } from '@/types/calendar';
 import type { ScheduleEntry } from '@/types/schedule';
 import { Button } from '@/components/ui/button';
 
@@ -56,14 +55,6 @@ const NO_ATTENDANCE_LABEL_CLASS: Record<'holiday' | 'exam' | 'activity', string>
   exam: 'text-amber-600',
   activity: 'text-blue-600',
 };
-
-const NO_ATTENDANCE_CARD_CLASS: Record<'holiday' | 'exam' | 'activity', string> = {
-  holiday: 'border-rose-200 bg-rose-50',
-  exam: 'border-amber-200 bg-amber-50',
-  activity: 'border-blue-200 bg-blue-50',
-};
-
-const NO_ATTENDANCE_TYPES = new Set(['holiday', 'exam', 'activity']);
 
 /** Mobile: fill cell instead of status dots (dots + white cell at lg+) */
 const MOBILE_STATUS_CELL_CLASS: Record<DayAttendanceDot, string> = {
@@ -158,7 +149,7 @@ export function TeacherAttendanceMonthCalendar({
   }, [minMonth, maxMonth]);
 
   const { holidays } = useThaiHolidays(month.getFullYear());
-  const { getEventsForDate, events: calendarEvents } = useAcademicCalendar(role ?? undefined, holidays);
+  const { getEventsForDate } = useAcademicCalendar(role ?? undefined, holidays);
 
   const days = useMemo(() => getMonthGridDays(month), [month]);
   const todayMonth = useMemo(
@@ -168,23 +159,6 @@ export function TeacherAttendanceMonthCalendar({
   const canGoPrev = isAfter(month, minMonth);
   const canGoNext = isBefore(month, maxMonth);
   const isViewingTodayMonth = isSameMonth(month, todayMonth);
-
-  const monthNoAttendanceEvents = useMemo(() => {
-    const monthStart = toDateStr(startOfMonth(month));
-    const monthEnd = toDateStr(endOfMonth(month));
-    const from = monthStart < rangeStart ? rangeStart : monthStart;
-    const to = monthEnd > rangeEnd ? rangeEnd : monthEnd;
-    if (from > to) return [] as CalendarEvent[];
-
-    return calendarEvents
-      .filter(
-        (e) =>
-          NO_ATTENDANCE_TYPES.has(e.type) &&
-          e.startDate <= to &&
-          e.endDate >= from,
-      )
-      .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.title.localeCompare(b.title));
-  }, [calendarEvents, month, rangeStart, rangeEnd]);
 
   const noAttendanceEventFor = (dateStr: string) => {
     const events = getEventsForDate(dateStr);
@@ -369,43 +343,6 @@ export function TeacherAttendanceMonthCalendar({
           );
         })}
       </div>
-
-      {monthNoAttendanceEvents.length > 0 && (
-        <div className="mt-2 shrink-0 space-y-2 px-1 pb-3 lg:hidden">
-          <p className="px-0.5 text-[10px] font-black uppercase tracking-wider text-slate-500 font-sukhumvit">
-            วันหยุด / สอบ / กิจกรรม
-          </p>
-          {monthNoAttendanceEvents.map((event) => {
-            const type = event.type as 'holiday' | 'exam' | 'activity';
-            return (
-              <div
-                key={event.id}
-                className={cn(
-                  'rounded-xl border px-3 py-2.5',
-                  NO_ATTENDANCE_CARD_CLASS[type],
-                )}
-              >
-                <div className="flex items-start gap-2">
-                  <span
-                    className={cn(
-                      'mt-0.5 shrink-0 text-[10px] font-black uppercase tracking-wide',
-                      NO_ATTENDANCE_LABEL_CLASS[type],
-                    )}
-                  >
-                    {EVENT_TYPE_CONFIG[type].label}
-                  </span>
-                  <p className="min-h-10 min-w-0 line-clamp-2 text-xs font-bold leading-5 text-slate-800 font-sarabun">
-                    {event.title?.trim() || EVENT_TYPE_CONFIG[type].label}
-                  </p>
-                </div>
-                <p className="mt-0.5 text-[10px] font-medium text-slate-500 font-sarabun">
-                  {formatEventDateRange(event.startDate, event.endDate)}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

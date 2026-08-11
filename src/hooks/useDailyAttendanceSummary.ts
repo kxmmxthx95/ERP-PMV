@@ -4,7 +4,15 @@ import { getLocalDateString } from '@/lib/dateUtils';
 import { getLeaveRequestsSinceStore } from '@/lib/firestoreShared/leaveRequestsStore';
 import { getStaffAttendanceDaysStore, refreshStaffAttendanceDaysStore } from '@/lib/firestoreShared/staffAttendanceDayEntriesStore';
 import { staffUsersStore, type StaffUserRow } from '@/lib/firestoreShared/staffUsersStore';
+import { timestampToLocalDate } from '@/hooks/useStaffAttendance';
 import type { LeaveRequest } from '@/types/leave';
+
+function formatCheckInLabel(ts: unknown): string | undefined {
+  if (!ts) return undefined;
+  const d = timestampToLocalDate(ts);
+  if (!d) return undefined;
+  return d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+}
 
 export interface DailySummary {
   date: string;        // "YYYY-MM-DD"
@@ -25,6 +33,8 @@ export interface DailyStaffRow {
   photoURL?: string;
   department?: string;
   status: DailyStaffStatus;
+  /** Formatted check-in time e.g. "08:15" when present/late */
+  checkInLabel?: string;
 }
 
 type AttendanceFetchResult = {
@@ -32,7 +42,7 @@ type AttendanceFetchResult = {
   staffUserIds: Set<string>;
   totalStaffCount: number;
   attendanceByDate: Record<string, { present: number; late: number; absent: number }>;
-  entriesByDate: Record<string, Map<string, { status: string; photoURL?: string; displayName?: string }>>;
+  entriesByDate: Record<string, Map<string, { status: string; photoURL?: string; displayName?: string; checkInTime?: unknown }>>;
   skeleton: DailySummary[];
 };
 
@@ -97,6 +107,7 @@ function buildSummariesFromData(
           photoURL: entry.photoURL || staff.photoURL,
           department: staff.department,
           status: entry.status as DailyStaffStatus,
+          checkInLabel: formatCheckInLabel(entry.checkInTime),
         };
       }
 
@@ -123,18 +134,18 @@ function buildSummariesFromData(
 
 function buildDayAttendanceMaps(
   dates: string[],
-  rawEntriesByDate: Record<string, { userId: string; status: string; photoURL?: string; displayName?: string }[]>,
+  rawEntriesByDate: Record<string, { userId: string; status: string; photoURL?: string; displayName?: string; checkInTime?: unknown }[]>,
   staffUserIds: Set<string>,
 ) {
   const attendanceByDate: Record<string, { present: number; late: number; absent: number }> = {};
   const entriesByDate: Record<
     string,
-    Map<string, { status: string; photoURL?: string; displayName?: string }>
+    Map<string, { status: string; photoURL?: string; displayName?: string; checkInTime?: unknown }>
   > = {};
 
   dates.forEach((date) => {
     const counts = { present: 0, late: 0, absent: 0 };
-    const byUser = new Map<string, { status: string; photoURL?: string; displayName?: string }>();
+    const byUser = new Map<string, { status: string; photoURL?: string; displayName?: string; checkInTime?: unknown }>();
 
     (rawEntriesByDate[date] ?? []).forEach((entry) => {
       if (!staffUserIds.has(entry.userId)) return;
@@ -142,6 +153,7 @@ function buildDayAttendanceMaps(
         status: entry.status,
         photoURL: entry.photoURL,
         displayName: entry.displayName,
+        checkInTime: entry.checkInTime,
       });
       if (entry.status === 'present') counts.present += 1;
       else if (entry.status === 'late') counts.late += 1;

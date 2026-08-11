@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import { approveScoreOverride, rejectScoreOverride } from '@/lib/exam/scoreOverride';
+import { formatScorePoints } from '@/lib/exam/examRoomScoring';
 import type { ExamScoreOverrideRequest } from '@/types/exam';
 import { WIDGET_CARD, WIDGET_GLASS } from '../widgetStyles';
 
@@ -88,10 +89,10 @@ export default function ScoreOverrideApprovalWidget() {
                   {req.studentName} — {req.roomTitle} (รอบ {req.round})
                 </p>
                 <p className="text-[15px] font-black font-sukhumvit tabular-nums">
-                  <span className="text-slate-400">{req.previousScore ?? '-'}</span>
+                  <span className="text-slate-400">{formatScorePoints(req.previousScore)}</span>
                   <span className="mx-1.5 text-slate-400">→</span>
-                  <span className="text-indigo-600">{req.requestedScore}</span>
-                  <span className="text-slate-400 text-[11px]"> / {req.maxPoints}</span>
+                  <span className="text-indigo-600">{formatScorePoints(req.requestedScore)}</span>
+                  <span className="text-slate-400 text-[11px]"> / {formatScorePoints(req.maxPoints)}</span>
                 </p>
                 <p className="text-[11px] text-slate-500 font-sarabun">เหตุผล: {req.reason}</p>
                 <p className="text-[10px] text-slate-400 font-sarabun">ขอโดย {req.requestedByName}</p>

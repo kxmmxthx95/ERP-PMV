@@ -18,9 +18,7 @@ export default function ExamLayout() {
 
   return (
     <ExamShellContext.Provider value={value}>
-      <div className="flex min-h-0 flex-col md:flex-1">
-        <Outlet />
-      </div>
+      <Outlet />
     </ExamShellContext.Provider>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useSyncExternalStore } from 'react';
+import { useState, useMemo, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -9,6 +9,7 @@ import {
   HiXMark,
   HiHomeModern,
   HiAcademicCap,
+  HiChevronLeft,
 } from 'react-icons/hi2';
 import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
 import { ROLL_CALL_OPTIONS } from '@/features/attendance/rollCallUi';
@@ -19,6 +20,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/hooks/useAuth';
+import { useBrowseVisibleDepartments } from '@/hooks/useBrowseVisibleDepartments';
+import { shouldCountDepartment } from '@/lib/departments/homeDepartment';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import { useClassroomManager } from '@/features/classes/hooks/useClassroomManager';
@@ -33,7 +36,8 @@ import { applyApprovedLeaveToMorningRollCallRows } from '@/lib/attendance/leaveR
 import type { RollCallStatus, StudentRollCall, MorningRollCallSession } from '@/types/morningRollCall';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import type { Department } from '@/types/curriculum';
-import { GRADE_LEVEL_ORDER, type ClassRoom } from '@/types/class';
+import { GRADE_LEVEL_ORDER, type ClassRoom, type ClassRoomCard } from '@/types/class';
+import ClassMobileBrowse from '@/features/classes/components/ClassMobileBrowse';
 
 function shortRoomLabel(room: ClassRoom): string {
   const n = String(room.roomNumber ?? '').trim();
@@ -192,6 +196,7 @@ function MonthCalendarSkeleton() {
 export default function MorningRollCallPage() {
   const navigate = useNavigate();
   const { user, userData, role } = useAuth();
+  const { homeDepartment, browseVisibleDepartments, isDeptScoped } = useBrowseVisibleDepartments();
   const isAdmin = role === 'admin' || role === 'sysadmin';
   const { year, activeSemester, activeYear, isLoaded } = useActiveAcademicYear();
   const classMgr = useClassroomManager();
@@ -229,9 +234,18 @@ export default function MorningRollCallPage() {
 
   const [headerRightPortalEl, setHeaderRightPortalEl] = useState<HTMLElement | null>(null);
   const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
+  const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
+  const [isLgOrBelow, setIsLgOrBelow] = useState(() => window.innerWidth < 1024);
   useEffect(() => {
     setHeaderRightPortalEl(document.getElementById('header-portal-right-actions'));
     setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
+    setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => setIsLgOrBelow(window.innerWidth < 1024);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   const today = getLocalDateString();
@@ -359,6 +373,84 @@ export default function MorningRollCallPage() {
         ),
       ) as ClassRoom[];
   }, [homeRoomClasses, filterDept, filterGradeLevel]);
+
+  const classCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    homeRoomClasses.forEach((cls: ClassRoom) => {
+      const dept = cls.departmentId as Department | undefined;
+      if (dept && shouldCountDepartment(dept, homeDepartment, isDeptScoped)) {
+        counts[dept] = (counts[dept] ?? 0) + 1;
+      }
+    });
+    return counts;
+  }, [homeRoomClasses, homeDepartment, isDeptScoped]);
+
+  const browseClassCards = useMemo((): ClassRoomCard[] => {
+    return homeRoomClasses.map((cls: ClassRoom) => {
+      const dept = (cls.departmentId || 'secondary') as Department;
+      const studentCount = cls.studentCount ?? 0;
+      const maxStudents = cls.maxStudents ?? 40;
+      return {
+        classRoom: {
+          id: cls.id,
+          className: cls.className,
+          gradeLevel: cls.gradeLevel,
+          roomNumber: cls.roomNumber,
+          departmentId: dept,
+          department: dept,
+          academicYearId: cls.academicYearId || String(year ?? ''),
+          semester: 1,
+          homeroomTeacherId: cls.homeroomTeacherIds?.[0] || '',
+          homeroomTeacherIds: cls.homeroomTeacherIds || [],
+          enrolledCourses: [],
+          studentCount,
+          maxStudents,
+          track: cls.track,
+          trackColor: cls.trackColor,
+          isActive: true,
+          createdAt: '',
+        },
+        homeroomTeacher: null,
+        homeroomTeachers: [],
+        scheduledPeriods: 0,
+        totalPeriods: 0,
+        fillPct: 0,
+        isFull: studentCount >= maxStudents,
+      };
+    });
+  }, [homeRoomClasses, year]);
+
+  const showMobileClassBrowse = isLgOrBelow && !selectedClassId;
+  const needsCustomMobileBack = isLgOrBelow && (filterDept !== 'all' || Boolean(selectedClassId));
+
+  const handleMobileBack = useCallback(() => {
+    if (selectedClassId) {
+      if (activeTab === 'report') {
+        setActiveTab('rollcall');
+        setReportFilterOpen(false);
+        return;
+      }
+      setSelectedClassId(null);
+      setEditMode(false);
+      setDayDrawerOpen(false);
+      setSelectedDateStr(null);
+      setActiveTab('rollcall');
+      return;
+    }
+    setFilterDept('all');
+    setFilterGradeLevel('');
+  }, [selectedClassId, activeTab]);
+
+  useEffect(() => {
+    const defaultBack = document.getElementById('portal-default-mobile-back');
+    if (!defaultBack) return;
+    defaultBack.style.display = needsCustomMobileBack ? 'none' : '';
+  }, [needsCustomMobileBack]);
+
+  useEffect(() => {
+    if (!isLgOrBelow) return;
+    document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+  }, [isLgOrBelow, filterDept, selectedClassId]);
 
   const selectClassForRollCall = (id: string) => {
     const cls = homeRoomClasses.find((c: any) => c.id === id) as ClassRoom | undefined;
@@ -583,40 +675,6 @@ export default function MorningRollCallPage() {
     };
   }, [selectedClassId, year, showSuccessModal]);
 
-  // ปุ่มกลับ header → รายงานกลับปฏิทิน / ปฏิทินกลับเลือกรูม
-  useEffect(() => {
-    if (!selectedClassId) return;
-
-    const isPortalBackButton = (target: EventTarget | null) => {
-      if (!(target instanceof Element)) return false;
-      const btn = target.closest('button');
-      if (!btn) return false;
-      if (btn.id === 'portal-default-mobile-back') return true;
-      const title = btn.getAttribute('title') ?? '';
-      const label = btn.getAttribute('aria-label') ?? '';
-      return title === 'กลับไปเมนู' || title === 'กลับเมนู' || label === 'กลับไปเมนู';
-    };
-
-    const onClick = (e: MouseEvent) => {
-      if (!isPortalBackButton(e.target)) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      if (activeTab === 'report') {
-        setActiveTab('rollcall');
-        setReportFilterOpen(false);
-        return;
-      }
-      setSelectedClassId(null);
-      setEditMode(false);
-      setDayDrawerOpen(false);
-      setSelectedDateStr(null);
-      setActiveTab('rollcall');
-    };
-
-    document.addEventListener('click', onClick, true);
-    return () => document.removeEventListener('click', onClick, true);
-  }, [selectedClassId, activeTab]);
-
   const filteredReportSessions = useMemo(() => {
     const from = reportFrom || '0000-01-01';
     const to = reportTo || '9999-12-31';
@@ -778,6 +836,30 @@ export default function MorningRollCallPage() {
         'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
       )}
     >
+      {needsCustomMobileBack && headerMobileBackEl && createPortal(
+        <button
+          type="button"
+          onClick={handleMobileBack}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100"
+          title={
+            selectedClassId
+              ? activeTab === 'report'
+                ? 'กลับปฏิทิน'
+                : 'กลับเลือกห้องเรียน'
+              : 'กลับเลือกแผนก'
+          }
+          aria-label={
+            selectedClassId
+              ? activeTab === 'report'
+                ? 'กลับปฏิทิน'
+                : 'กลับเลือกห้องเรียน'
+              : 'กลับเลือกแผนก'
+          }
+        >
+          <HiChevronLeft size={16} />
+        </button>,
+        headerMobileBackEl,
+      )}
       <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
         <div className="absolute -top-24 -left-16 w-72 h-72 rounded-full bg-sky-200/45 blur-3xl" />
         <div className="absolute top-24 -right-20 w-80 h-80 rounded-full bg-cyan-200/40 blur-3xl" />
@@ -833,12 +915,26 @@ export default function MorningRollCallPage() {
         </>
       )}
       <div className="flex min-h-0 flex-1 basis-0 flex-col gap-0 overflow-hidden lg:flex-row lg:items-stretch lg:gap-4">
+        {showMobileClassBrowse ? (
+          <ClassMobileBrowse
+            selectedDept={filterDept === 'all' ? '' : filterDept}
+            gradeOptions={sidebarGradeOptions}
+            classCards={browseClassCards}
+            classCountsByDept={classCountsByDept}
+            departments={browseVisibleDepartments}
+            coverTitle="เช็กชื่อเข้าแถว"
+            coverSubtitle="เลือกแผนกวิชาเพื่อเลือกห้องเรียน"
+            onSelectDept={handleSidebarSelectDept}
+            onSelectClass={selectClassForRollCall}
+          />
+        ) : null}
+
         <div
           className={cn(
             'flex h-full min-h-0 shrink-0 flex-col self-stretch overflow-hidden',
             'w-full lg:w-[280px] xl:w-[300px]',
             sidebarCollapsed && 'lg:w-20 xl:w-20',
-            selectedClassId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+            selectedClassId ? 'hidden lg:flex' : 'hidden min-h-0 flex-1 lg:flex lg:flex-none',
           )}
         >
           <GradeBookClassSidebar
@@ -847,6 +943,7 @@ export default function MorningRollCallPage() {
             selectedClassId={selectedClassId ?? ''}
             gradeOptions={sidebarGradeOptions}
             classOptions={sidebarClassOptions}
+            departments={browseVisibleDepartments}
             onSelectDept={handleSidebarSelectDept}
             onSelectGrade={handleSidebarSelectGrade}
             onSelectClass={selectClassForRollCall}

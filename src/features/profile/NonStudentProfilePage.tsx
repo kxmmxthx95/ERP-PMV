@@ -39,7 +39,7 @@ export default function NonStudentProfilePage() {
 
   return (
     <>
-      <div className="h-full w-full overflow-y-auto bg-white px-4 py-6 sm:px-6">
+      <div className="h-full w-full overflow-y-auto px-4 py-6 sm:px-6">
         <div className="mx-auto max-w-lg space-y-5">
           <header className="flex flex-col items-center text-center pt-2 pb-1">
             <div className="relative">

@@ -216,3 +216,25 @@
   }
 }
 
+/* ── Drawer mobile = การ์ดโค้งมนเหมือน desktop ──
+   กฎนี้อยู่นอก @layer จึงชนะคลาส mobile เดิมของแต่ละ feature
+   (p-0 / before:inset-0 / before:rounded-none / rounded-none) ที่ทำให้เต็มจอเหลี่ยม */
+@media (max-width: 639px) {
+  [data-slot='drawer-content'] {
+    padding: 0.5rem;
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+    background-color: transparent;
+  }
+
+  [data-slot='drawer-content']::before {
+    inset: 0.5rem;
+    border-radius: var(--radius-4xl);
+  }
+
+  /* พาเนลชั้นในตัวเดียว = ผิวการ์ดจริง → โค้งตามกรอบ */
+  [data-slot='drawer-content'] > .contents > :only-child {
+    border-radius: var(--radius-4xl);
+    overflow: hidden;
+  }
+}
+

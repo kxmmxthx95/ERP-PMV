@@ -7,18 +7,19 @@ import {
 } from 'lucide-react';
 import {
   HiBookOpen, HiAdjustmentsHorizontal, HiClipboardDocumentList, HiCalendarDays,
-  HiBars3, HiOutlineFunnel, HiChevronRight, HiArrowLeft,
-  HiAcademicCap,
+  HiBars3, HiOutlineFunnel, HiChevronRight, HiChevronLeft, HiArrowLeft,
+  HiAcademicCap, HiPlus, HiXMark,
 } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
 import { toast } from 'sonner';
-import { collection, doc, getDocs, query, updateDoc, where } from 'firebase/firestore';
+import { collection, collectionGroup, doc, getDocs, query, updateDoc, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { chunkIds } from '@/lib/firestoreShared/fetchStudentsByIds';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeachingManager } from '@/hooks/useTeachingManager';
 import { useGradeBook, mergeOnlineExamScores } from '@/hooks/useGradeBook';
-import { rawPointsToPercent, averagePercentScores } from '@/types/grades';
+import { rawPointsToPercent, averagePercentScores, isPassFailSubjectCategory } from '@/types/grades';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import GradeTable from './components/GradeTable';
@@ -31,6 +32,7 @@ import {
   SubjectFolderCardsGridSkeleton,
 } from '@/components/SubjectFolderCard';
 import GradeBookClassSidebar from './components/GradeBookClassSidebar';
+import { resolveExamRoomIconSrc } from '@/lib/exam/examRoomIcons';
 import SidebarCollapseButton from './components/SidebarCollapseButton';
 import {
   BreadcrumbItem,
@@ -39,6 +41,11 @@ import {
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
+import { SubSubjectGroupBadge } from '@/components/school/SubSubjectGroupBadge';
+import { SUBJECT_GROUP_CONFIG, type SubjectGroupId } from '@/types/curriculum';
 import { GLASS } from '@/components/layouts/PortalLayout';
 import { cn } from '@/lib/utils';
 import { getLocalDateString } from '@/lib/dateUtils';
@@ -59,7 +66,8 @@ import {
 } from '@/features/exam/components/ExamMobileFilterMenuButton';
 import type { GradeWeightConfig } from '@/types/grades';
 import { type Department, type Subject } from '@/types/curriculum';
-import { GRADE_LEVEL_ORDER } from '@/types/class';
+import { GRADE_LEVEL_ORDER, type ClassRoomCard } from '@/types/class';
+import ClassMobileBrowse from '@/features/classes/components/ClassMobileBrowse';
 import { matchesTeacherIdentity } from '@/lib/teachers/teacherIdentity';
 import {
   buildStudentIdentityLookup,
@@ -77,6 +85,31 @@ import type { ExamRoom, ExamAttempt } from '@/types/exam';
 type Tab = 'table' | 'config' | 'exams' | 'attendance';
 
 const GRADE_BOOK_FEATURE_TITLE = PORTAL_MENU_TITLES['/portal/grades'];
+
+const ADD_ROOM_PAGE_SIZE = 8;
+
+const ADD_ROOM_DRAWER_CONTENT_CLASS = cn(
+  'flex h-dvh flex-col bg-transparent p-0 before:hidden',
+  'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
+  'sm:h-full sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md sm:p-2',
+);
+
+const ADD_ROOM_DRAWER_PANEL_CLASS = cn(
+  'flex h-full min-h-0 flex-col overflow-hidden bg-card',
+  'sm:rounded-2xl sm:border sm:border-border sm:shadow-xl',
+);
+
+const TAB_TRIGGER_CLASS =
+  'rounded-lg hover:bg-transparent hover:text-foreground/60 data-active:bg-foreground data-active:text-background data-active:hover:bg-foreground data-active:hover:text-background dark:hover:text-muted-foreground';
+
+/** ไม่โชว์ subjectName ถ้าเป็น doc id / ค่าเดียวกับ subjectId */
+function displayExamRoomSubjectName(name?: string, subjectId?: string): string | null {
+  const label = name?.trim();
+  if (!label) return null;
+  if (subjectId?.trim() && label === subjectId.trim()) return null;
+  if (/^[A-Za-z0-9_-]{16,}$/.test(label)) return null;
+  return label;
+}
 
 const GRADE_BOOK_MENU = {
   label: GRADE_BOOK_FEATURE_TITLE,
@@ -224,6 +257,15 @@ const EXAM_TYPE_COLOR: Record<ExamType, { text: string; bg: string }> = {
   makeup: { text: '#059669', bg: '#d1fae5' },
 };
 
+function normalizeExamTs(val: unknown): number {
+  if (typeof val === 'number') return val;
+  if (val && typeof (val as { toMillis?: () => number }).toMillis === 'function')
+    return (val as { toMillis: () => number }).toMillis();
+  if (val && typeof (val as { seconds?: number }).seconds === 'number')
+    return (val as { seconds: number; nanoseconds?: number }).seconds * 1000 + ((val as { nanoseconds?: number }).nanoseconds ?? 0) / 1e6;
+  return 0;
+}
+
 export default function GradeBookPage() {
   const { user, role } = useAuth();
   const { year: academicYear, activeSemester, activeYear } = useActiveAcademicYear();
@@ -279,9 +321,15 @@ export default function GradeBookPage() {
 
   // ── Online exam rooms (exam_rooms collection) ─────────────────────────────
   const [onlineRooms, setOnlineRooms] = useState<ExamRoom[]>([]);
+  const [allGradeExamRooms, setAllGradeExamRooms] = useState<ExamRoom[]>([]);
   const [onlineAttemptsByRoomId, setOnlineAttemptsByRoomId] = useState<Record<string, ExamAttempt[]>>({});
   const [selectedOnlineRoomId, setSelectedOnlineRoomId] = useState('');
   const [togglingScoreLinkRoomId, setTogglingScoreLinkRoomId] = useState<string | null>(null);
+  const [showAddRoomDrawer, setShowAddRoomDrawer] = useState(false);
+  const [linkingRoomId, setLinkingRoomId] = useState<string | null>(null);
+  const [removingRoomId, setRemovingRoomId] = useState<string | null>(null);
+  const [addRoomPage, setAddRoomPage] = useState(1);
+  const [onlyMyRooms, setOnlyMyRooms] = useState(true);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false,
   );
@@ -361,12 +409,6 @@ export default function GradeBookPage() {
     setMobileTabMenuOpen(false);
   }, [activeTab, selectedSubjectId]);
 
-  useEffect(() => {
-    const defaultBack = document.getElementById('portal-default-mobile-back');
-    if (!defaultBack) return;
-    defaultBack.style.display = isMdOrBelow && showPersonalSubjectFolders && selectedSubjectId ? 'none' : '';
-  }, [isMdOrBelow, showPersonalSubjectFolders, selectedSubjectId]);
-
   // Preload versioned curriculum courses so subject names resolve on teacher cards
   useEffect(() => {
     const classSource = showPersonalSubjectFolders ? teachingMgr.yearClasses : teachingMgr.classes;
@@ -403,15 +445,29 @@ export default function GradeBookPage() {
 
   const availableClasses = useMemo(() => {
     const all = showPersonalSubjectFolders ? teachingMgr.yearClasses : teachingMgr.classes;
+    let scoped = all;
     if (showPersonalSubjectFolders && teachingMgr.teacherIdentityKeys.size > 0) {
-      return all.filter(c =>
+      scoped = all.filter(c =>
         (c.enrolledCourses ?? []).some(ec =>
           matchesTeacherIdentity(ec.teacherId, teachingMgr.teacherIdentityKeys),
         ),
       );
     }
-    return all;
-  }, [teachingMgr.classes, teachingMgr.yearClasses, teachingMgr.teacherIdentityKeys, showPersonalSubjectFolders]);
+    if (role === 'teacher') {
+      const homeDept = teachingMgr.currentTeacher?.department;
+      if (homeDept === 'early' || homeDept === 'primary' || homeDept === 'secondary') {
+        scoped = scoped.filter((c) => c.departmentId === homeDept);
+      }
+    }
+    return scoped;
+  }, [teachingMgr.classes, teachingMgr.yearClasses, teachingMgr.teacherIdentityKeys, teachingMgr.currentTeacher?.department, showPersonalSubjectFolders, role]);
+
+  const teacherVisibleDepartments = useMemo((): Department[] | undefined => {
+    if (role !== 'teacher') return undefined;
+    const dept = teachingMgr.currentTeacher?.department;
+    if (dept === 'early' || dept === 'primary' || dept === 'secondary') return [dept];
+    return undefined;
+  }, [role, teachingMgr.currentTeacher?.department]);
 
   const availableGrades = useMemo(() => {
     if (!filterDepartment) return [];
@@ -455,6 +511,65 @@ export default function GradeBookPage() {
     setSelectedExamId('');
     setSelectedOnlineRoomId('');
   }, []);
+
+  const browseClassCards = useMemo<ClassRoomCard[]>(
+    () => availableClasses.map((classRoom) => ({
+      classRoom,
+      homeroomTeacher: null,
+      homeroomTeachers: [],
+      scheduledPeriods: 0,
+      totalPeriods: 0,
+      fillPct: 0,
+      isFull: false,
+    })),
+    [availableClasses],
+  );
+
+  const classCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    for (const cls of availableClasses) {
+      const dept = cls.departmentId as Department;
+      if (dept) counts[dept] = (counts[dept] ?? 0) + 1;
+    }
+    return counts;
+  }, [availableClasses]);
+
+  const showMobileClassBrowse = isMdOrBelow && showAdminClassBrowser && !selectedClassId;
+  const needsCustomMobileBack = isMdOrBelow && showAdminClassBrowser && !selectedSubjectId
+    && Boolean(filterDepartment || selectedClassId);
+
+  const handleMobileSelectClass = useCallback((classId: string) => {
+    const room = availableClasses.find((c) => c.id === classId);
+    if (room?.departmentId) setFilterDepartment(room.departmentId);
+    if (room?.gradeLevel) setFilterGradeLevel(room.gradeLevel);
+    handleSelectClass(classId);
+  }, [availableClasses, handleSelectClass]);
+
+  const handleMobileBack = useCallback(() => {
+    if (selectedClassId) {
+      setSelectedClassId('');
+      setSelectedSubjectId('');
+      setSelectedExamId('');
+      setSelectedOnlineRoomId('');
+      return;
+    }
+    setFilterDepartment('');
+    setFilterGradeLevel('');
+  }, [selectedClassId]);
+
+  useEffect(() => {
+    const defaultBack = document.getElementById('portal-default-mobile-back');
+    if (!defaultBack) return;
+    const hideDefaultBack = isMdOrBelow && (
+      (showPersonalSubjectFolders && selectedSubjectId) || needsCustomMobileBack
+    );
+    defaultBack.style.display = hideDefaultBack ? 'none' : '';
+  }, [isMdOrBelow, showPersonalSubjectFolders, selectedSubjectId, needsCustomMobileBack]);
+
+  useEffect(() => {
+    if (!isMdOrBelow || !showAdminClassBrowser) return;
+    document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+  }, [isMdOrBelow, showAdminClassBrowser, filterDepartment, selectedClassId]);
 
   const selectedClass = useMemo(
     () => availableClasses.find(c => c.id === selectedClassId) ?? null,
@@ -520,6 +635,20 @@ export default function GradeBookPage() {
     () => availableSubjects.find(s => s.id === selectedSubjectId) ?? null,
     [availableSubjects, selectedSubjectId],
   );
+
+  const passFailMode = isPassFailSubjectCategory(selectedSubject?.category);
+
+  const visibleGradeBookTabs = useMemo(() => {
+    const entries = Object.entries(GRADE_BOOK_TAB_CONFIG) as [Tab, typeof GRADE_BOOK_TAB_CONFIG[Tab]][];
+    if (!passFailMode) return entries;
+    // วิชากิจกรรม: ไม่ตั้งค่าเกรด / ไม่ผูกห้องสอบ
+    return entries.filter(([key]) => key === 'table' || key === 'attendance');
+  }, [passFailMode]);
+
+  useEffect(() => {
+    if (!passFailMode) return;
+    if (activeTab === 'config' || activeTab === 'exams') setActiveTab('table');
+  }, [passFailMode, activeTab]);
 
   const breadcrumbSubjectLabel = selectedSubject && selectedClass
     ? `${selectedSubject.name} · ${selectedClass.className}`
@@ -800,6 +929,87 @@ export default function GradeBookPage() {
     }
   }, [selectedSubjectId]);
 
+  // ห้องสอบของระดับชั้น/ห้องนี้ที่ยังไม่ถูกผูกเข้าวิชาที่กำลังดูอยู่ — สำหรับ Drawer "+"
+  const unlinkedGradeRooms = useMemo(
+    () => allGradeExamRooms.filter(r => !onlineRooms.some(o => o.id === r.id)),
+    [allGradeExamRooms, onlineRooms],
+  );
+  const visibleUnlinkedGradeRooms = useMemo(
+    () => (onlyMyRooms ? unlinkedGradeRooms.filter(r => r.teacherId === user?.uid) : unlinkedGradeRooms),
+    [unlinkedGradeRooms, onlyMyRooms, user?.uid],
+  );
+  const addRoomTotalPages = Math.max(1, Math.ceil(visibleUnlinkedGradeRooms.length / ADD_ROOM_PAGE_SIZE));
+  const addRoomCurrentPage = Math.min(addRoomPage, addRoomTotalPages);
+  const pagedUnlinkedGradeRooms = visibleUnlinkedGradeRooms.slice(
+    (addRoomCurrentPage - 1) * ADD_ROOM_PAGE_SIZE,
+    addRoomCurrentPage * ADD_ROOM_PAGE_SIZE,
+  );
+
+  const handleLinkRoomToSubject = useCallback(async (room: ExamRoom) => {
+    if (!selectedSubjectId || !selectedSubject) return;
+
+    setLinkingRoomId(room.id);
+    try {
+      const nextSettings = {
+        ...(room.settings ?? {}),
+        gradeBookSubjectId: selectedSubjectId,
+        gradeBookSubjectName: selectedSubject.name,
+        gradeBookSubjectCode: selectedSubject.code ?? '',
+        scoreCollectionEnabled: true,
+        scoreCollectionLinked: true,
+        scoreCollectionType: room.settings?.scoreCollectionType ?? 'classwork',
+      };
+
+      await updateDoc(doc(db, 'exam_rooms', room.id), { settings: nextSettings });
+
+      const updatedRoom: ExamRoom = { ...room, settings: nextSettings };
+      setOnlineRooms(prev => [updatedRoom, ...prev]);
+
+      toast.success(`เพิ่ม "${room.title}" เข้าเก็บคะแนนวิชานี้แล้ว`);
+    } catch (err) {
+      console.error(err);
+      toast.error('ไม่สามารถเพิ่มห้องสอบได้');
+    } finally {
+      setLinkingRoomId(null);
+    }
+  }, [selectedSubjectId, selectedSubject]);
+
+  /** นำห้องสอบออกจากคะแนนการสอบของวิชานี้ — ยกเลิกการผูกวิชา ไม่ลบห้องสอบจริงออกจากฐานข้อมูล */
+  const handleRemoveRoomFromSubject = useCallback(async (room: ExamRoom, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!selectedSubjectId) return;
+    if (!window.confirm(`นำ "${room.title}" ออกจากคะแนนการสอบของวิชานี้?\n(ห้องสอบจริงจะไม่ถูกลบ)`)) return;
+
+    setRemovingRoomId(room.id);
+    try {
+      const { gradeBookSubjectId, gradeBookSubjectName, gradeBookSubjectCode, ...restSettings } = room.settings ?? {};
+      const keepDirectLink = gradeBookSubjectId && gradeBookSubjectId !== selectedSubjectId;
+      const nextGradeBookSubjects = (room.settings?.gradeBookSubjects ?? [])
+        .filter(link => link.subjectId !== selectedSubjectId);
+
+      const nextSettings = {
+        ...restSettings,
+        ...(keepDirectLink ? { gradeBookSubjectId, gradeBookSubjectName, gradeBookSubjectCode } : {}),
+        gradeBookSubjects: nextGradeBookSubjects,
+        ...(room.subjectId === selectedSubjectId
+          ? { scoreCollectionEnabled: false, scoreCollectionLinked: true }
+          : {}),
+      };
+
+      await updateDoc(doc(db, 'exam_rooms', room.id), { settings: nextSettings });
+
+      setOnlineRooms(prev => prev.filter(r => r.id !== room.id));
+      setAllGradeExamRooms(prev => prev.map(r => (r.id === room.id ? { ...r, settings: nextSettings } : r)));
+
+      toast.success(`นำ "${room.title}" ออกจากคะแนนการสอบแล้ว`);
+    } catch (err) {
+      console.error(err);
+      toast.error('ไม่สามารถนำห้องสอบออกได้');
+    } finally {
+      setRemovingRoomId(null);
+    }
+  }, [selectedSubjectId]);
+
   // Load versioned courses when a class with a curriculumPackageId is selected
   useEffect(() => {
     if (!selectedClass?.curriculumPackageId) return;
@@ -841,32 +1051,20 @@ export default function GradeBookPage() {
     classRosterKey,
   ]);
 
+  // ── 1. exam_rooms ของทั้งชั้น/ระดับชั้น ─────────────────────────────────
+  // แยก effect นี้ออกจากการกรองวิชา (เดิมรวมกัน ทำให้สลับวิชาในคลาสเดิมต้อง
+  // ยิง query ซ้ำข้อมูลเดิมทุกครั้ง — deps ที่นี่ไม่มี selectedSubjectId แล้ว)
   useEffect(() => {
     let cancelled = false;
 
-    const loadExams = async () => {
-      if (!selectedClassId || !selectedSubjectId || !academicYear) {
-        setSubjectExams([]);
-        setExamScoresByExamId({});
-        setSelectedExamId('');
-        setOnlineRooms([]);
-        setOnlineAttemptsByRoomId({});
-        setSelectedOnlineRoomId('');
-        setExamError(null);
+    const loadExamRoomsForClass = async () => {
+      if (!selectedClassId || !academicYear) {
+        setAllGradeExamRooms([]);
         return;
       }
 
-      setExamLoading(true);
-      setExamError(null);
-
       try {
-        const exams: Exam[] = [];
-        const scoresMap: Record<string, ExamScore[]> = {};
-
-
-        // ── 2. exam_rooms collection (online exam) ─────────────────────────
         // ยิง 2 query พร้อมกัน: by classId และ by gradeLevel (ห้องสอบอาจผูกแค่ระดับชั้น)
-        // กรองวิชาใน client เพราะ gradeBookSubjectId อยู่ใน nested settings field
         const selectedGradeLevel = selectedClass?.gradeLevel ?? '';
         const [roomsByClass, roomsByGrade] = await Promise.all([
           getDocs(query(
@@ -889,28 +1087,58 @@ export default function GradeBookPage() {
           ...roomsByClass.docs,
           ...(roomsByGrade?.docs.filter(d => !roomsByClass.docs.some(c => c.id === d.id)) ?? []),
         ];
-        const roomsSnap = { docs: roomsSnapDocs };
 
-        const normalizeTs = (val: unknown): number => {
-          if (typeof val === 'number') return val;
-          if (val && typeof (val as { toMillis?: () => number }).toMillis === 'function')
-            return (val as { toMillis: () => number }).toMillis();
-          if (val && typeof (val as { seconds?: number }).seconds === 'number')
-            return (val as { seconds: number; nanoseconds?: number }).seconds * 1000 + ((val as { nanoseconds?: number }).nanoseconds ?? 0) / 1e6;
-          return 0;
-        };
-
-        const rooms = roomsSnap.docs
+        const mappedRooms = roomsSnapDocs
           .map(d => {
             const raw = d.data();
             return {
               ...raw,
               id: d.id,
-              startTime: normalizeTs(raw.startTime),
-              endTime: normalizeTs(raw.endTime),
-              createdAt: normalizeTs(raw.createdAt),
+              startTime: normalizeExamTs(raw.startTime),
+              endTime: normalizeExamTs(raw.endTime),
+              createdAt: normalizeExamTs(raw.createdAt),
             } as ExamRoom;
           })
+          .sort((a, b) => b.createdAt - a.createdAt);
+
+        if (cancelled) return;
+        setAllGradeExamRooms(mappedRooms);
+      } catch (err) {
+        if (cancelled) return;
+        console.error(err);
+        setAllGradeExamRooms([]);
+      }
+    };
+
+    loadExamRoomsForClass();
+    return () => { cancelled = true; };
+  }, [selectedClassId, selectedClass?.gradeLevel, selectedSemester, academicYear]);
+
+  // ── 2. กรองห้องสอบตามวิชาที่เลือก + โหลด attempts ────────────────────────
+  // กรองวิชาใน client เพราะ gradeBookSubjectId อยู่ใน nested settings field
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadExamsForSubject = async () => {
+      if (!selectedClassId || !selectedSubjectId || !academicYear) {
+        setSubjectExams([]);
+        setExamScoresByExamId({});
+        setSelectedExamId('');
+        setOnlineRooms([]);
+        setOnlineAttemptsByRoomId({});
+        setSelectedOnlineRoomId('');
+        setExamError(null);
+        return;
+      }
+
+      setExamLoading(true);
+      setExamError(null);
+
+      try {
+        const exams: Exam[] = [];
+        const scoresMap: Record<string, ExamScore[]> = {};
+
+        const rooms = allGradeExamRooms
           .filter(r => {
             // ตรวจสอบการผูกวิชา (priority): gradeBookSubjects > gradeBookSubjectId > subjectId
             const linked = r.settings?.gradeBookSubjects ?? [];
@@ -929,30 +1157,37 @@ export default function GradeBookPage() {
                 || r.settings?.scoreCollectionLinked === false;
             }
             return false;
-          })
-          .sort((a, b) => b.createdAt - a.createdAt);
-
-        const attemptsMap: Record<string, ExamAttempt[]> = {};
-
-        await Promise.all(rooms.map(async (room) => {
-          const attSnap = await getDocs(query(
-            collection(db, 'exam_rooms', room.id, 'attempts'),
-            where('status', 'in', ['submitted', 'graded']),
-          ));
-          attSnap.docs.forEach(d => {
-            const raw = d.data();
-            const att = {
-              ...raw,
-              id: d.id,
-              roomId: room.id,
-              startedAt: normalizeTs(raw.startedAt),
-              submittedAt: raw.submittedAt ? normalizeTs(raw.submittedAt) : null,
-              lastSavedAt: normalizeTs(raw.lastSavedAt),
-            } as ExamAttempt;
-            if (!attemptsMap[room.id]) attemptsMap[room.id] = [];
-            attemptsMap[room.id].push(att);
           });
-        }));
+
+        // ยิง collectionGroup query ตาม roomId เป็น chunk แทนการวน getDocs ทีละห้อง (N+1)
+        // กรอง status ในหน่วยความจำเพราะ Firestore ใช้ 'in' ซ้อนกัน 2 field ในคำสั่งเดียวไม่ได้
+        const attemptsMap: Record<string, ExamAttempt[]> = {};
+        const roomIds = rooms.map(r => r.id);
+        if (roomIds.length > 0) {
+          const attemptSnaps = await Promise.all(
+            chunkIds(roomIds).map((group) => getDocs(query(
+              collectionGroup(db, 'attempts'),
+              where('roomId', 'in', group),
+            ))),
+          );
+          attemptSnaps.forEach((attSnap) => {
+            attSnap.docs.forEach(d => {
+              const raw = d.data();
+              if (raw.status !== 'submitted' && raw.status !== 'graded') return;
+              const roomId = raw.roomId as string;
+              const att = {
+                ...raw,
+                id: d.id,
+                roomId,
+                startedAt: normalizeExamTs(raw.startedAt),
+                submittedAt: raw.submittedAt ? normalizeExamTs(raw.submittedAt) : null,
+                lastSavedAt: normalizeExamTs(raw.lastSavedAt),
+              } as ExamAttempt;
+              if (!attemptsMap[roomId]) attemptsMap[roomId] = [];
+              attemptsMap[roomId].push(att);
+            });
+          });
+        }
 
         if (cancelled) return;
         setSubjectExams(exams);
@@ -976,9 +1211,9 @@ export default function GradeBookPage() {
       }
     };
 
-    loadExams();
+    loadExamsForSubject();
     return () => { cancelled = true; };
-  }, [selectedClassId, selectedSubjectId, selectedSemester, academicYear]);
+  }, [selectedClassId, selectedSubjectId, selectedSemester, academicYear, allGradeExamRooms]);
 
   const handleReload = () => {
     if (!selectedClass || !selectedSubject || !academicYear) return;
@@ -1015,6 +1250,7 @@ export default function GradeBookPage() {
 
   const activeTabConfig = GRADE_BOOK_TAB_CONFIG[activeTab];
   const ActiveTabIcon = activeTabConfig.icon;
+  const activeTabLabel = passFailMode && activeTab === 'table' ? 'ผลการเรียน' : activeTabConfig.label;
   const gradeBookMatchesSelection = Boolean(
     gradeBook.config
     && gradeBook.config.classId === selectedClassId
@@ -1065,16 +1301,28 @@ export default function GradeBookPage() {
     </button>
   );
 
-  const mobileBackPortal = isMdOrBelow && showPersonalSubjectFolders && selectedSubjectId && headerMobileBackEl && createPortal(
-    <button
-      type="button"
-      onClick={handleBackFromSubject}
-      className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50 lg:hidden"
-      title="กลับ"
-      aria-label="กลับ"
-    >
-      <ArrowLeft size={18} />
-    </button>,
+  const mobileBackPortal = isMdOrBelow && headerMobileBackEl && (needsCustomMobileBack || (showPersonalSubjectFolders && selectedSubjectId)) && createPortal(
+    needsCustomMobileBack ? (
+      <button
+        type="button"
+        onClick={handleMobileBack}
+        className="pointer-events-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100 lg:hidden"
+        title={selectedClassId ? 'กลับเลือกห้องเรียน' : 'กลับเลือกแผนก'}
+        aria-label={selectedClassId ? 'กลับเลือกห้องเรียน' : 'กลับเลือกแผนก'}
+      >
+        <HiChevronLeft size={16} />
+      </button>
+    ) : showPersonalSubjectFolders && selectedSubjectId ? (
+      <button
+        type="button"
+        onClick={handleBackFromSubject}
+        className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50 lg:hidden"
+        title="กลับ"
+        aria-label="กลับ"
+      >
+        <ArrowLeft size={18} />
+      </button>
+    ) : null,
     headerMobileBackEl,
   );
 
@@ -1123,7 +1371,7 @@ export default function GradeBookPage() {
                   <p className="px-3 py-1.5 font-sukhumvit text-[10px] font-black uppercase tracking-widest text-slate-400">
                     {GRADE_BOOK_MENU.label}
                   </p>
-                  {(Object.entries(GRADE_BOOK_TAB_CONFIG) as [Tab, typeof GRADE_BOOK_TAB_CONFIG[Tab]][]).map(([key, cfg]) => {
+                  {(visibleGradeBookTabs).map(([key, cfg]) => {
                     const Icon = cfg.icon;
                     const isActive = activeTab === key;
                     return (
@@ -1137,7 +1385,7 @@ export default function GradeBookPage() {
                         )}
                       >
                         <Icon className={cn('h-4 w-4 shrink-0', isActive ? 'text-white' : 'text-slate-400')} />
-                        <span>{cfg.label}</span>
+                        <span>{passFailMode && key === 'table' ? 'ผลการเรียน' : cfg.label}</span>
                       </button>
                     );
                   })}
@@ -1164,7 +1412,7 @@ export default function GradeBookPage() {
         <div className="flex min-w-0 items-center gap-1.5 text-black/80">
           <ActiveTabIcon className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate font-sukhumvit text-[12px] font-black">
-            {activeTabConfig.label}
+            {activeTabLabel}
           </span>
         </div>
       ) : (
@@ -1252,18 +1500,29 @@ export default function GradeBookPage() {
 
       <div
         className={cn(
-          'flex min-h-0 flex-1',
-          showAdminClassBrowser
-            ? 'flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch'
-            : 'flex-col overflow-hidden',
+          'flex min-h-0 flex-1 basis-0 flex-col overflow-hidden',
+          showAdminClassBrowser && 'gap-4 lg:flex-row lg:items-stretch',
         )}
       >
+        {showMobileClassBrowse ? (
+          <ClassMobileBrowse
+            selectedDept={filterDepartment}
+            gradeOptions={availableGrades}
+            classCards={browseClassCards}
+            classCountsByDept={classCountsByDept}
+            onSelectDept={handleSelectDept}
+            onSelectClass={handleMobileSelectClass}
+            coverTitle={GRADE_BOOK_FEATURE_TITLE}
+            coverSubtitle="เลือกแผนกวิชาเพื่อดูและบันทึกผลการเรียนในแต่ละห้อง"
+            departments={teacherVisibleDepartments}
+          />
+        ) : null}
+
         {showAdminClassBrowser && (
           <div
             className={cn(
-              'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
+              'hidden min-h-0 w-full shrink-0 flex-col overflow-hidden lg:flex lg:h-auto lg:max-h-full',
               sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
-              selectedClassId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
             )}
           >
             {!classesReady ? (
@@ -1282,6 +1541,7 @@ export default function GradeBookPage() {
                 onSelectDept={handleSelectDept}
                 onSelectGrade={handleSelectGrade}
                 onSelectClass={handleSelectClass}
+                departments={teacherVisibleDepartments}
                 collapsed={sidebarCollapsed}
                 headerAction={(
                   <SidebarCollapseButton
@@ -1300,6 +1560,7 @@ export default function GradeBookPage() {
             showAdminClassBrowser && 'px-2 pb-2 sm:px-2.5 sm:pb-2.5',
             showAdminClassBrowser && selectedSubjectId && 'rounded-2xl border border-border bg-card',
             showAdminClassBrowser && !selectedClassId && 'hidden lg:flex',
+            showMobileClassBrowse && 'hidden',
           )}
         >
           {selectedClassId && selectedSubjectId && (
@@ -1320,7 +1581,7 @@ export default function GradeBookPage() {
                 </button>
 
                 <div className="flex gap-1 rounded-xl bg-slate-100 p-0.5 border border-slate-200/50 shadow-[inset_0_1px_2px_rgba(0,0,0,0.02)]">
-                  {(Object.entries(GRADE_BOOK_TAB_CONFIG) as [Tab, typeof GRADE_BOOK_TAB_CONFIG[Tab]][]).map(([key, cfg]) => (
+                  {visibleGradeBookTabs.map(([key, cfg]) => (
                     <button
                       key={key}
                       type="button"
@@ -1332,7 +1593,7 @@ export default function GradeBookPage() {
                           : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/30',
                       )}
                     >
-                      {cfg.label}
+                      {passFailMode && key === 'table' ? 'ผลการเรียน' : cfg.label}
                     </button>
                   ))}
                 </div>
@@ -1420,30 +1681,50 @@ export default function GradeBookPage() {
                   <>
                     {/* ── ส่วน: ห้องสอบออนไลน์ ── */}
                     <div className="flex flex-col gap-3">
+                      <div className="flex items-center justify-between px-1.5">
+                        <p className="text-[11px] font-black uppercase tracking-wide text-slate-400 font-sukhumvit">
+                          ห้องสอบออนไลน์
+                        </p>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="outline"
+                          className="rounded-full"
+                          onClick={() => { setAddRoomPage(1); setShowAddRoomDrawer(true); }}
+                          title="เพิ่มห้องสอบ"
+                          aria-label="เพิ่มห้องสอบ"
+                        >
+                          <HiPlus size={14} />
+                        </Button>
+                      </div>
                       {onlineRoomCards.length === 0 ? (
                         <p className="text-[11px] text-slate-400 font-sarabun py-4 text-center">
                           ยังไม่มีห้องสอบออนไลน์สำหรับวิชานี้
                         </p>
                       ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 justify-items-center gap-2.5 sm:gap-3 px-1.5 pt-1.5 pb-4 sm:px-2">
                           {onlineRoomCards.map(room => {
                             const scoreEnabled = room.settings?.scoreCollectionEnabled === true;
                             const scoreTypeCfg: Record<string, { label: string; color: string; bg: string }> = {
-                              classwork: { label: 'เก็บคะแนน', color: '#d97706', bg: '#fef3c7' },
-                              quiz:      { label: 'ทดสอบย่อย', color: '#d97706', bg: '#fef3c7' },
-                              midterm:   { label: 'กลางภาค',   color: '#e11d48', bg: '#ffe4e6' },
-                              final:     { label: 'ปลายภาค',   color: '#7c3aed', bg: '#f3e8ff' },
+                              classwork: { label: 'เก็บคะแนน', color: '#0284c7', bg: '#e0f2fe' },
+                              quiz:      { label: 'ทดสอบย่อย', color: '#7c3aed', bg: '#ede9fe' },
+                              midterm:   { label: 'กลางภาค', color: '#d97706', bg: '#fef3c7' },
+                              final:     { label: 'ปลายภาค', color: '#e11d48', bg: '#ffe4e6' },
                             };
                             const scoreType = room.settings?.scoreCollectionType ?? 'classwork';
                             const typeCfg = scoreTypeCfg[scoreType] ?? scoreTypeCfg.classwork;
                             const isTogglingScoreLink = togglingScoreLinkRoomId === room.id;
                             const isScoreLinked = room.settings?.scoreCollectionLinked !== false;
+                            const roundsLabel = `${room.maxScore} คะแนน · รอบที่ ${room.completedRounds}/${room.settings?.maxAttempts === 0 ? '∞' : (room.settings?.maxAttempts ?? 1)}`;
+                            const tileTitle = scoreEnabled
+                              ? `${typeCfg.label} · ${room.title} · ${roundsLabel}`
+                              : `${room.title} · เปิด "นำคะแนนไปใช้" ในห้องสอบเพื่อแสดงผลที่นี่`;
                             return (
-                              <div key={room.id} className="relative">
                               <motion.div
+                                key={room.id}
                                 role={scoreEnabled ? 'button' : undefined}
                                 tabIndex={scoreEnabled ? 0 : undefined}
-                                whileHover={{ scale: scoreEnabled ? 1.01 : 1 }}
+                                whileHover={{ scale: scoreEnabled ? 1.02 : 1 }}
                                 whileTap={{ scale: scoreEnabled ? 0.98 : 1 }}
                                 onClick={() => scoreEnabled && setSelectedOnlineRoomId(room.id)}
                                 onKeyDown={(e) => {
@@ -1453,71 +1734,67 @@ export default function GradeBookPage() {
                                     setSelectedOnlineRoomId(room.id);
                                   }
                                 }}
-                                className="w-full text-left rounded-2xl p-4 border transition-all flex flex-col gap-2"
-                                style={{
-                                  background: scoreEnabled ? 'rgba(255,255,255,0.92)' : 'rgba(248,250,252,0.7)',
-                                  borderColor: scoreEnabled ? 'rgba(226,232,240,0.9)' : 'rgba(226,232,240,0.5)',
-                                  cursor: scoreEnabled ? 'pointer' : 'default',
-                                  opacity: scoreEnabled ? 1 : 0.72,
-                                }}
+                                title={tileTitle}
+                                aria-label={tileTitle}
+                                className="flex w-48 flex-col items-center gap-1.5 text-center transition-all"
+                                style={{ cursor: scoreEnabled ? 'pointer' : 'default', opacity: scoreEnabled ? 1 : 0.65 }}
                               >
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  {scoreEnabled ? (
-                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg font-sukhumvit"
-                                      style={{ background: typeCfg.bg, color: typeCfg.color }}>
-                                      {typeCfg.label}
-                                    </span>
-                                  ) : (
-                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg font-sukhumvit"
-                                      style={{ background: 'rgba(148,163,184,0.12)', color: '#94a3b8' }}>
-                                      ยังไม่เปิดเก็บคะแนน
-                                    </span>
+                                <div className="relative shrink-0">
+                                  <img
+                                    src={resolveExamRoomIconSrc(room)}
+                                    alt=""
+                                    draggable={false}
+                                    className={cn('h-48 w-48 object-contain', !scoreEnabled && 'grayscale')}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleRemoveRoomFromSubject(room, e)}
+                                    disabled={removingRoomId === room.id}
+                                    title="นำออกจากคะแนนการสอบ"
+                                    aria-label="นำออกจากคะแนนการสอบ"
+                                    className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-slate-500 text-white transition-all hover:bg-slate-600 disabled:opacity-40"
+                                  >
+                                    {removingRoomId === room.id ? (
+                                      <div className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                                    ) : (
+                                      <HiXMark size={12} />
+                                    )}
+                                  </button>
+                                  {scoreEnabled && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => handleToggleOnlineRoomScoreLink(room, e)}
+                                      disabled={isTogglingScoreLink}
+                                      title={isScoreLinked
+                                        ? 'ยกเลิกการเชื่อมต่อคะแนนจากห้องสอบนี้'
+                                        : 'เชื่อมต่อคะแนนกับห้องสอบนี้'}
+                                      className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center border-2 border-white transition-all hover:opacity-80 disabled:opacity-40"
+                                      style={isScoreLinked
+                                        ? { background: '#e11d48', color: '#fff' }
+                                        : { background: '#059669', color: '#fff' }}
+                                    >
+                                      {isTogglingScoreLink ? (
+                                        <div className="w-2.5 h-2.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                      ) : isScoreLinked ? (
+                                        <Link2Off size={10} strokeWidth={3} />
+                                      ) : (
+                                        <Link2 size={10} strokeWidth={3} />
+                                      )}
+                                    </button>
                                   )}
                                 </div>
-                                <p className="text-[13px] font-black text-slate-800 font-sukhumvit line-clamp-2">{room.title}</p>
-                                {scoreEnabled ? (
-                                  <>
-                                    <p className="text-[10px] text-slate-400 font-sarabun">
-                                      {room.maxScore} คะแนน · รอบที่ {room.completedRounds}/{room.settings?.maxAttempts === 0 ? '∞' : (room.settings?.maxAttempts ?? 1)}
-                                    </p>
-                                    <div className="flex items-center justify-end pt-1 border-t border-slate-100">
-                                      <button
-                                        type="button"
-                                        onClick={(e) => handleToggleOnlineRoomScoreLink(room, e)}
-                                        disabled={isTogglingScoreLink}
-                                        title={isScoreLinked
-                                          ? 'ยกเลิกการเชื่อมต่อคะแนนจากห้องสอบนี้'
-                                          : 'เชื่อมต่อคะแนนกับห้องสอบนี้'}
-                                        className="w-8 h-8 shrink-0 rounded-xl flex items-center justify-center border transition-all hover:opacity-80 disabled:opacity-40"
-                                        style={isScoreLinked
-                                          ? {
-                                              background: 'rgba(225,29,72,0.08)',
-                                              borderColor: 'rgba(225,29,72,0.22)',
-                                              color: '#e11d48',
-                                            }
-                                          : {
-                                              background: 'rgba(5,150,105,0.1)',
-                                              borderColor: 'rgba(5,150,105,0.25)',
-                                              color: '#059669',
-                                            }}
-                                      >
-                                        {isTogglingScoreLink ? (
-                                          <div className={`w-3.5 h-3.5 border-2 rounded-full animate-spin ${isScoreLinked ? 'border-rose-300 border-t-rose-600' : 'border-emerald-300 border-t-emerald-600'}`} />
-                                        ) : isScoreLinked ? (
-                                          <Link2Off size={14} strokeWidth={2.5} />
-                                        ) : (
-                                          <Link2 size={14} strokeWidth={2.5} />
-                                        )}
-                                      </button>
-                                    </div>
-                                  </>
-                                ) : (
-                                  <p className="text-[10px] text-slate-400 font-sarabun">
-                                    เปิด "นำคะแนนไปใช้" ในห้องสอบเพื่อแสดงผลที่นี่
-                                  </p>
+                                <span className="w-full text-center text-[12px] font-black text-slate-700 font-sukhumvit line-clamp-2">
+                                  {room.title}
+                                </span>
+                                {scoreEnabled && (
+                                  <span
+                                    className="inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-bold"
+                                    style={{ color: typeCfg.color, backgroundColor: typeCfg.bg }}
+                                  >
+                                    {typeCfg.label}
+                                  </span>
                                 )}
                               </motion.div>
-                              </div>
                             );
                           })}
                         </div>
@@ -1671,6 +1948,33 @@ export default function GradeBookPage() {
                         summaries={displaySummaries}
                         config={gradeBook.config}
                         showAsPercentage
+                        passFailMode={passFailMode}
+                        editable={passFailMode}
+                        onUpdatePassFail={
+                          passFailMode
+                            ? (studentId, result) => {
+                                if (!selectedClass || !selectedSubject || !academicYear) return;
+                                void gradeBook.savePassFailResult(
+                                  {
+                                    subjectId: selectedSubjectId,
+                                    subjectName: selectedSubject.name,
+                                    subjectCode: selectedSubject.code ?? '',
+                                    classId: selectedClassId,
+                                    className: selectedClass.className,
+                                    teacherId: user?.uid ?? '',
+                                    departmentId: (selectedClass.departmentId ?? 'secondary') as Department,
+                                    academicYearId: String(academicYear),
+                                    semester: selectedSemester,
+                                  },
+                                  studentId,
+                                  result,
+                                ).catch((err) => {
+                                  console.error(err);
+                                  toast.error('บันทึกผลการเรียนไม่สำเร็จ');
+                                });
+                              }
+                            : undefined
+                        }
                       />
                     )}
                   </motion.div>
@@ -1696,6 +2000,133 @@ export default function GradeBookPage() {
           </div>
         </div>
       </div>
+
+      <Drawer open={showAddRoomDrawer} onOpenChange={setShowAddRoomDrawer} direction="right">
+        <DrawerContent className={ADD_ROOM_DRAWER_CONTENT_CLASS}>
+          <div className={ADD_ROOM_DRAWER_PANEL_CLASS}>
+            <DrawerHeader className="border-b border-border px-4 pb-3 pt-4 sm:pt-6">
+              <div className="relative flex min-h-10 items-center justify-center">
+                <div className="min-w-0 w-full px-10 text-center">
+                  <DrawerTitle className="text-lg font-black tracking-tight leading-tight">
+                    ห้องสอบของ{selectedClass?.className ?? 'ระดับชั้นนี้'}
+                  </DrawerTitle>
+                </div>
+                <div className={DRAWER_HEADER_RIGHT_ACTIONS}>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddRoomDrawer(false)}
+                    className={DRAWER_HEADER_ICON_BTN}
+                    aria-label="ปิด"
+                  >
+                    <HiXMark className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <Tabs
+                value={onlyMyRooms ? 'mine' : 'all'}
+                onValueChange={(v) => { setOnlyMyRooms(v === 'mine'); setAddRoomPage(1); }}
+                className="mt-3"
+              >
+                <TabsList className="w-full rounded-xl">
+                  <TabsTrigger value="mine" className={TAB_TRIGGER_CLASS}>
+                    ห้องสอบของฉัน
+                  </TabsTrigger>
+                  <TabsTrigger value="all" className={TAB_TRIGGER_CLASS}>
+                    ทั้งหมด
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </DrawerHeader>
+
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-4 py-3 scrollbar-hide">
+              {visibleUnlinkedGradeRooms.length === 0 ? (
+                <p className="py-10 text-center text-[12px] text-muted-foreground font-sarabun">
+                  {onlyMyRooms ? 'คุณยังไม่ได้สร้างห้องสอบในระดับชั้น/ห้องนี้' : 'ไม่มีห้องสอบอื่นในระดับชั้น/ห้องนี้'}
+                </p>
+              ) : (
+                pagedUnlinkedGradeRooms.map(room => {
+                  const subjectLabel = displayExamRoomSubjectName(room.subjectName, room.subjectId);
+                  return (
+                    <button
+                      key={room.id}
+                      type="button"
+                      onClick={() => handleLinkRoomToSubject(room)}
+                      disabled={linkingRoomId === room.id}
+                      className="flex w-full items-center gap-3 rounded-xl border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted disabled:opacity-50"
+                    >
+                      <img
+                        src={resolveExamRoomIconSrc(room)}
+                        alt=""
+                        draggable={false}
+                        className="h-12 w-12 shrink-0 object-contain"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 text-[13px] font-black text-foreground font-sukhumvit">{room.title}</p>
+                        {subjectLabel ? (
+                          <p className="truncate text-[11px] text-muted-foreground font-sukhumvit">{subjectLabel}</p>
+                        ) : null}
+                        {(room.subjectGroupId || room.subSubjectGroup?.trim()) && (
+                          <div className="mt-1 flex flex-nowrap items-center gap-1">
+                            {room.subjectGroupId && SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId] && (
+                              <SubSubjectGroupBadge
+                                maxWidth="90px"
+                                label={SUBJECT_GROUP_CONFIG[room.subjectGroupId as SubjectGroupId].name}
+                                subjectGroupId={room.subjectGroupId}
+                              />
+                            )}
+                            {room.subSubjectGroup?.trim() && (
+                              <SubSubjectGroupBadge
+                                maxWidth="90px"
+                                label={room.subSubjectGroup}
+                                subjectGroupId={room.subjectGroupId}
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {linkingRoomId === room.id ? (
+                        <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted border-t-foreground" />
+                      ) : (
+                        <HiPlus className="shrink-0 text-muted-foreground" size={16} />
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {addRoomTotalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 border-t border-border px-4 py-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={addRoomCurrentPage === 1}
+                  onClick={() => setAddRoomPage(Math.max(addRoomCurrentPage - 1, 1))}
+                  className="rounded-xl text-[11px] font-bold"
+                >
+                  <HiChevronLeft className="h-3.5 w-3.5" />
+                  ก่อนหน้า
+                </Button>
+                <span className="px-2 text-[11px] font-medium text-muted-foreground">
+                  {addRoomCurrentPage} / {addRoomTotalPages}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={addRoomCurrentPage === addRoomTotalPages}
+                  onClick={() => setAddRoomPage(Math.min(addRoomCurrentPage + 1, addRoomTotalPages))}
+                  className="rounded-xl text-[11px] font-bold"
+                >
+                  ถัดไป
+                  <HiChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }

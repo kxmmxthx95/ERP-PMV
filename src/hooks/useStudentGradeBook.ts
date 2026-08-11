@@ -8,7 +8,7 @@ import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import { resolveStudentByAuthUser } from '@/lib/resolveStudentProfile';
 import { whenFirestoreGatewayOpen } from '@/lib/firestoreShared/bootstrap';
 import type { ClassRoom } from '@/types/class';
-import type { GradeLetter, GradeRecord, GradeWeightConfig } from '@/types/grades';
+import type { GradeLetter, GradeRecord, GradeWeightConfig, PassFailResult } from '@/types/grades';
 import type { AttendanceStatus, Exam, ExamScore } from '@/types/teaching';
 import type { Student } from '@/types/student';
 import type { Subject } from '@/types/curriculum';
@@ -79,6 +79,8 @@ export interface StudentSubjectGradeCard {
   attendancePct: number | null;
   totalScore: number | null;
   grade: GradeLetter | null;
+  /** วิชากิจกรรม — ผ่าน/ไม่ผ่าน (ไม่เข้า GPA) */
+  result?: PassFailResult | null;
   classId: string;
   className: string;
 }
@@ -381,6 +383,37 @@ export function useStudentGradeBook() {
           // ── Dynamic Grade Calculation ──
           let totalScore: number | null = null;
           let calculatedGrade: GradeLetter | null = null;
+          let passFailResult: PassFailResult | null = grade?.result ?? null;
+
+          if (category === 'activity') {
+            // วิชากิจกรรม: ใช้แค่ result · ไม่คำนวณคะแนน/เกรด
+            cards.push({
+              key,
+              subjectId: ec.subjectId,
+              subjectName: resolvedName || ec.subjectId,
+              subjectCode: subject?.code ?? grade?.subjectCode ?? '',
+              subjectGroup: subject?.subjectGroup,
+              semester,
+              category,
+              categoryLabel: catCfg.label,
+              attendancePct: calcAttendancePct(
+                resolvedStudent.id,
+                ec.subjectId,
+                semester,
+                sessionDocs,
+                scheduleSlots,
+                yearStartDate,
+                yearEndDate,
+                String(academicYear),
+              ),
+              totalScore: null,
+              grade: null,
+              result: passFailResult,
+              classId,
+              className: cls.className,
+            });
+            return;
+          }
 
           if (grade) {
             totalScore = grade.totalScore ?? null;
@@ -536,6 +569,7 @@ export function useStudentGradeBook() {
             ),
             totalScore,
             grade: calculatedGrade,
+            result: null,
             classId,
             className: cls.className,
           });

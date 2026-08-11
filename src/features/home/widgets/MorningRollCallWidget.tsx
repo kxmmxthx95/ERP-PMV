@@ -15,6 +15,10 @@ import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useIsSchoolDayToday } from '@/hooks/useIsSchoolDayToday';
 import { getLocalDateString } from '@/lib/calendar/schoolDay';
 import { useHomeroomClassesForUser } from '@/hooks/useYearClassesHomeroom';
+import { useSchedule } from '@/hooks/useSchedule';
+import { useTeachersCollection } from '@/hooks/useTeachersCollection';
+import { buildTeacherIdentityKeys, matchesTeacherIdentity, resolveTeacherFromAuth } from '@/lib/teachers/teacherIdentity';
+import { useSubstitutionsForDate } from '@/lib/attendance/substituteAssignments';
 import {
   useTodayMorningRollCall,
   useSaveMorningRollCall,
@@ -147,6 +151,41 @@ export default function MorningRollCallWidget() {
     activeSemester as 1 | 2,
   );
   const displayStudentCount = primaryClass ? (countsByClassId[primaryClass.id] ?? 0) : 0;
+
+  // ── มอบหมายเช็คชื่อเข้าแถวแทนของวันนี้ ──────────────────────────────────────
+  const { classes: allClasses } = useSchedule({ includeClasses: true });
+  const { teachers } = useTeachersCollection();
+  const teacherProfile = useMemo(
+    () => (user?.uid ? resolveTeacherFromAuth(user.uid, teachers) : null),
+    [teachers, user?.uid],
+  );
+  const identityKeys = useMemo(
+    () => buildTeacherIdentityKeys(user?.uid ?? '', teacherProfile),
+    [user?.uid, teacherProfile],
+  );
+  const todaySubstitutions = useSubstitutionsForDate(
+    year ?? undefined,
+    (activeSemester ?? undefined) as 1 | 2 | undefined,
+    today,
+  );
+  const rollCallSubByClassId = useMemo(() => {
+    const map = new Map<string, (typeof todaySubstitutions)[number]>();
+    todaySubstitutions
+      .filter((s) => s.scope === 'rollcall' && (s.status ?? 'approved') === 'approved')
+      .forEach((s) => map.set(s.classId, s));
+    return map;
+  }, [todaySubstitutions]);
+  // ห้องที่ฉันรับมอบหมายให้เช็คชื่อแทน (ไม่ใช่ห้องประจำชั้นของฉันเอง)
+  const substituteRollCallClasses = useMemo(() => {
+    const myClassIds = new Set(homeRoomClasses.map((c) => c.id));
+    return [...rollCallSubByClassId.values()]
+      .filter((s) => matchesTeacherIdentity(s.substituteTeacherId, identityKeys) && !myClassIds.has(s.classId))
+      .map((s) => ({
+        id: s.classId,
+        className: allClasses.find((c) => c.id === s.classId)?.label ?? s.classId,
+        originalTeacherName: s.originalTeacherName,
+      }));
+  }, [rollCallSubByClassId, identityKeys, homeRoomClasses, allClasses]);
   const queryClient = useQueryClient();
   const { mutate: saveRollCall, isPending: isSaving } = useSaveMorningRollCall();
   const { sessions: todaySessions, loading: loadingSessions } = useTodayRollCallSessions(year ?? undefined);
@@ -172,8 +211,11 @@ export default function MorningRollCallWidget() {
     for (const cls of homeRoomClasses) {
       map[cls.id] = byClassId.get(cls.id) ?? null;
     }
+    for (const cls of substituteRollCallClasses) {
+      map[cls.id] = byClassId.get(cls.id) ?? null;
+    }
     return map;
-  }, [homeRoomClasses, todaySessions]);
+  }, [homeRoomClasses, substituteRollCallClasses, todaySessions]);
 
   const existingSession = useMemo(() => {
     if (!selectedClassId) return null;
@@ -181,8 +223,11 @@ export default function MorningRollCallWidget() {
   }, [fetchedSession, selectedClassId, sessionsByClassId]);
 
   const selectedClass = useMemo(
-    () => homeRoomClasses.find((c: { id: string }) => c.id === selectedClassId) ?? null,
-    [homeRoomClasses, selectedClassId],
+    () =>
+      homeRoomClasses.find((c: { id: string }) => c.id === selectedClassId)
+      ?? substituteRollCallClasses.find((c) => c.id === selectedClassId)
+      ?? null,
+    [homeRoomClasses, substituteRollCallClasses, selectedClassId],
   );
 
   const todayDayOfWeek = useMemo(() => new Date(`${today}T00:00:00`).getDay(), [today]);
@@ -364,15 +409,24 @@ export default function MorningRollCallWidget() {
     return applyApprovedLeaveToMorningRollCallRows(rows, classStudents, leaveRequests, today);
   }, [studentRows, studentsWithLeave, classStudents, leaveRequests, today, existingSession, editMode]);
 
-  const checkedClassCount = homeRoomClasses.filter((c: { id: string }) => sessionsByClassId[c.id]).length;
+  // ห้องที่ฉันต้องรับผิดชอบเช็คชื่อเข้าแถววันนี้ = ห้องประจำชั้นของฉัน (ที่ไม่มีคนแทน) + ห้องที่ฉันรับมอบหมายให้แทน
+  const responsibleClasses = useMemo(() => {
+    const myOwn = homeRoomClasses.filter((c: { id: string }) => {
+      const covering = rollCallSubByClassId.get(c.id);
+      return !(covering && matchesTeacherIdentity(covering.originalTeacherId, identityKeys));
+    });
+    return [...myOwn, ...substituteRollCallClasses];
+  }, [homeRoomClasses, substituteRollCallClasses, rollCallSubByClassId, identityKeys]);
+
+  const checkedClassCount = responsibleClasses.filter((c: { id: string }) => sessionsByClassId[c.id]).length;
 
   const dayPanelStyle = getDayCandyStyle(todayNum);
-  const showUncheckedSplit = !isRollCallBlocked && checkedClassCount === 0;
-  const allChecked = homeRoomClasses.length > 0 && checkedClassCount === homeRoomClasses.length;
+  const showUncheckedSplit = !isRollCallBlocked && checkedClassCount === 0 && homeRoomClasses.length > 0;
+  const allChecked = responsibleClasses.length > 0 && checkedClassCount === responsibleClasses.length;
 
   const aggregatedSummary = useMemo(() => {
     const totals = { present: 0, late: 0, absent: 0, leave: 0 };
-    for (const cls of homeRoomClasses) {
+    for (const cls of responsibleClasses) {
       const session = sessionsByClassId[cls.id];
       if (!session) continue;
       totals.present += session.summary.present;
@@ -381,7 +435,7 @@ export default function MorningRollCallWidget() {
       totals.leave += session.summary.leave;
     }
     return totals;
-  }, [homeRoomClasses, sessionsByClassId]);
+  }, [responsibleClasses, sessionsByClassId]);
 
   const checkedStudentTotal =
     aggregatedSummary.present +
@@ -477,6 +531,8 @@ export default function MorningRollCallWidget() {
   };
 
   const primaryClassName = primaryClass?.className || primaryClass?.id || '';
+  // เมื่อไม่มีห้องประจำชั้นของตัวเอง (มีแต่ห้องที่รับมอบหมายให้เช็คชื่อแทน) ใช้ห้องแรกที่รับผิดชอบแทน
+  const headerPrimaryClassName = primaryClassName || responsibleClasses[0]?.className || responsibleClasses[0]?.id || '';
 
   const statusBadgeLabel = isRollCallBlocked
     ? 'วันหยุด'
@@ -484,20 +540,20 @@ export default function MorningRollCallWidget() {
       ? 'ยังไม่เช็ค'
       : allChecked
         ? 'เช็คแล้ว'
-        : `${checkedClassCount}/${homeRoomClasses.length}`;
+        : `${checkedClassCount}/${responsibleClasses.length}`;
 
   const headerSubtitle =
     checkedClassCount > 0
-      ? homeRoomClasses.length > 1
+      ? responsibleClasses.length > 1
         ? `${checkedClassCount} ห้อง · ${checkedStudentTotal} น.`
-        : `${primaryClassName} · ${checkedStudentTotal} น.`
+        : `${headerPrimaryClassName} · ${checkedStudentTotal} น.`
       : `วัน${dayLabels[todayNum]} · ${todayDateLabel}`;
 
   if (!isLoaded || loadingSessions || loadingHomeroomClasses || (primaryClass && !studentCountsReady)) {
     return <WidgetSkeleton variant="wide" />;
   }
 
-  if (homeRoomClasses.length === 0) return null;
+  if (responsibleClasses.length === 0) return null;
 
   const widgetCardProps = {
     onClick: () => setDrawerOpen(true),
@@ -781,6 +837,8 @@ export default function MorningRollCallWidget() {
                 {homeRoomClasses.map((cls: { id: string; className?: string }) => {
                   const session = sessionsByClassId[cls.id];
                   const isChecked = !!session;
+                  const covering = rollCallSubByClassId.get(cls.id);
+                  const coveredByOther = covering && matchesTeacherIdentity(covering.originalTeacherId, identityKeys);
                   return (
                     <button
                       key={cls.id}
@@ -789,7 +847,9 @@ export default function MorningRollCallWidget() {
                       className={[
                         'w-full text-left rounded-2xl border p-3.5 transition-all',
                         'hover:bg-slate-50 active:scale-[0.99]',
-                        isChecked ? 'border-emerald-200 bg-emerald-50/70' : `${dayTheme.innerCard} hover:brightness-[0.98]`,
+                        coveredByOther
+                          ? 'border-indigo-200 bg-indigo-50/70'
+                          : isChecked ? 'border-emerald-200 bg-emerald-50/70' : `${dayTheme.innerCard} hover:brightness-[0.98]`,
                       ].join(' ')}
                     >
                       <div className="flex items-center gap-3">
@@ -800,7 +860,11 @@ export default function MorningRollCallWidget() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-[13px] font-black text-slate-800 truncate">{cls.className || cls.id}</p>
-                          {isChecked && session ? (
+                          {coveredByOther ? (
+                            <p className="text-[11px] font-semibold text-indigo-500 mt-0.5 truncate">
+                              ครู{covering.substituteTeacherName}เช็คชื่อแทนแล้ว
+                            </p>
+                          ) : isChecked && session ? (
                             <p className="text-[11px] font-semibold text-slate-500 mt-0.5">
                               มา {session.summary.present} · ขาด {session.summary.absent} · สาย {session.summary.late} · ลา {session.summary.leave}
                             </p>
@@ -809,7 +873,51 @@ export default function MorningRollCallWidget() {
                           )}
                         </div>
                         <span className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 ${
-                          isChecked ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                          coveredByOther
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : isChecked ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          {coveredByOther ? 'มีครูแทนแล้ว' : isChecked ? 'เช็คแล้ว' : 'รอเช็ค'}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+
+                {substituteRollCallClasses.map((cls) => {
+                  const session = sessionsByClassId[cls.id];
+                  const isChecked = !!session;
+                  return (
+                    <button
+                      key={cls.id}
+                      type="button"
+                      onClick={() => openClassEditor(cls.id)}
+                      className={[
+                        'w-full text-left rounded-2xl border p-3.5 transition-all',
+                        'hover:bg-slate-50 active:scale-[0.99]',
+                        isChecked ? 'border-emerald-200 bg-emerald-50/70' : 'border-indigo-200 bg-indigo-50/40 hover:brightness-[0.98]',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-12 h-12 rounded-2xl shrink-0 border flex items-center justify-center ${
+                          isChecked ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-indigo-50 border-indigo-200 text-indigo-600'
+                        }`}>
+                          <HiUsers className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[13px] font-black text-slate-800 truncate">{cls.className}</p>
+                          {isChecked && session ? (
+                            <p className="text-[11px] font-semibold text-slate-500 mt-0.5">
+                              มา {session.summary.present} · ขาด {session.summary.absent} · สาย {session.summary.late} · ลา {session.summary.leave}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] font-semibold text-indigo-500 mt-0.5 truncate">
+                              เช็คชื่อแทนให้ครู{cls.originalTeacherName}
+                            </p>
+                          )}
+                        </div>
+                        <span className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 ${
+                          isChecked ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'
                         }`}>
                           {isChecked ? 'เช็คแล้ว' : 'รอเช็ค'}
                         </span>

@@ -1,7 +1,6 @@
 /* Read-only โจทย์/ตัวเลือก — ให้ตรงกับ RichTextEditor (WYSIWYG) */
 .exam-question-content {
   word-break: break-word;
-  font-weight: normal;
 }
 
 .exam-question-content b,

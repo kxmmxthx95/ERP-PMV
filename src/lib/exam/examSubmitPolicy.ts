@@ -1,5 +1,5 @@
 /** Minimum time (seconds) a student must spend in the exam before manual submit. */
-export const EXAM_MIN_SUBMIT_SECONDS = 15 * 60;
+export const EXAM_MIN_SUBMIT_SECONDS = 0;
 
 export function canSubmitExamManually(
   startedAt: number | null | undefined,

@@ -56,7 +56,7 @@ export default function UpcomingPanel({
     <motion.div variants={cardAnim} className="flex flex-col gap-3 h-full min-h-0">
       {/* Main card */}
       <div
-        className="rounded-[2rem] overflow-hidden flex-1 flex flex-col"
+        className="rounded-2xl overflow-hidden flex-1 flex flex-col"
         style={glassCard}
       >
         {/* Header */}

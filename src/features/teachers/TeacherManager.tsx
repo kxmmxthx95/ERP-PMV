@@ -2,9 +2,9 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
-import { Users, Phone, Mail, MapPin, BookOpen, Search, ChevronLeft, RotateCcw } from 'lucide-react';
+import { Users, Phone, Mail, MapPin, BookOpen, Search, RotateCcw } from 'lucide-react';
 import {
-  HiPencil, HiTrash, HiPlus, HiCheck, HiXMark, HiArrowPathRoundedSquare,
+  HiPencil, HiTrash, HiPlus, HiCheck, HiXMark, HiArrowPathRoundedSquare, HiChevronLeft,
   HiOutlineLanguage, HiOutlineCalculator, HiOutlineBeaker, HiOutlineGlobeAsiaAustralia,
   HiOutlineHeart, HiOutlinePaintBrush, HiOutlineBriefcase, HiOutlineChatBubbleLeftRight,
   HiOutlineSparkles, HiOutlineBookOpen
@@ -63,12 +63,15 @@ import { useClassroomManager } from '@/features/classes/hooks/useClassroomManage
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useBrowseVisibleDepartments } from '@/hooks/useBrowseVisibleDepartments';
+import { shouldCountDepartment } from '@/lib/departments/homeDepartment';
 import { SUBJECT_GROUP_CONFIG } from '@/types/curriculum';
 import type { Department, Subject } from '@/types/curriculum';
 import type { TeacherProfile } from '@/types/teacher';
 import type { ClassRoom, EnrolledCourse } from '@/types/class';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import TeacherDeptCoverFlow from './components/TeacherDeptCoverFlow';
 import AddTeacherModal from './components/AddTeacherModal';
 import TeacherTransferModal, { swapHomeroomTeacherIds } from './components/TeacherTransferModal';
 import {
@@ -104,6 +107,55 @@ function normalizeDepartment(dept?: string | null) {
   const value = String(dept || '').trim().toLowerCase();
   if (value === 'kindergarten' || value === 'preschool') return 'early';
   return value;
+}
+
+const DEPT_BADGE: Record<Department, string> = {
+  early: 'bg-pink-500/15 text-pink-700',
+  primary: 'bg-blue-500/15 text-blue-700',
+  secondary: 'bg-violet-500/15 text-violet-700',
+};
+
+const POSITION_BADGE: Record<string, string> = {
+  'ครูบรรจุ': 'bg-primary/10 text-primary',
+  'ครูอัตราจ้าง': 'bg-secondary text-secondary-foreground',
+  'ครูพิเศษ': 'bg-accent text-accent-foreground',
+};
+
+function teacherPositionBadgeClass(position: string | undefined, active: boolean) {
+  if (active) return 'bg-primary-foreground/20 text-primary-foreground';
+  return POSITION_BADGE[position || ''] ?? 'bg-muted text-muted-foreground';
+}
+
+function teacherDeptBadgeClass(dept: string | undefined, active: boolean) {
+  if (active) return 'bg-primary-foreground/20 text-primary-foreground';
+  const norm = normalizeDepartment(dept) as Department;
+  return DEPT_BADGE[norm] ?? 'bg-muted text-muted-foreground';
+}
+
+function normalizeSubjectCategory(category?: string | null): keyof typeof SUBJECT_CATEGORY_STYLE {
+  const c = String(category || '').trim().toLowerCase();
+  if (c === 'core' || c === 'basic' || c.includes('พื้นฐาน')) return 'basic';
+  if (c === 'added' || c === 'additional' || c.includes('เพิ่มเติม')) return 'additional';
+  if (c === 'activity' || c.includes('กิจกรรม')) return 'activity';
+  return 'basic';
+}
+
+const SUBJECT_CATEGORY_BADGE: Record<keyof typeof SUBJECT_CATEGORY_STYLE, string> = {
+  basic: 'bg-sky-500/15 text-sky-700',
+  additional: 'bg-amber-500/15 text-amber-700',
+  activity: 'bg-emerald-500/15 text-emerald-700',
+};
+
+function subjectCategoryBadgeClass(category: string | undefined) {
+  return SUBJECT_CATEGORY_BADGE[normalizeSubjectCategory(category)];
+}
+
+function subjectClassBadgeClass() {
+  return 'bg-blue-500/15 text-blue-700';
+}
+
+function subjectPeriodBadgeClass() {
+  return 'bg-violet-500/15 text-violet-700';
 }
 
 const POSITION_ORDER: Record<string, number> = {
@@ -276,6 +328,7 @@ export default function TeacherManager() {
   const { versions, coursesByVersion, loadCoursesForVersion } = useCurriculumVersioned();
   const { maps, subjects: curriculumSubjects } = useCurriculum();
   const { year: activeSystemYear } = useActiveAcademicYear();
+  const { homeDepartment, browseVisibleDepartments, isDeptScoped } = useBrowseVisibleDepartments();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -294,6 +347,11 @@ export default function TeacherManager() {
   const [drawerCategoryFilter, setDrawerCategoryFilter] = useState('all');
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
+  }, []);
 
   useEffect(() => {
     const handleResize = () => setIsMdOrBelow(window.innerWidth < 1024);
@@ -367,16 +425,46 @@ export default function TeacherManager() {
     });
   }, [teachers, selectedDept, teacherSearchQuery, gradeTeacherIds]);
 
+  const teacherCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    (['early', 'primary', 'secondary'] as Department[]).forEach((dept) => {
+      if (!shouldCountDepartment(dept, homeDepartment, isDeptScoped)) return;
+      counts[dept] = teachers.filter((t) => normalizeDepartment(t.department) === dept).length;
+    });
+    return counts;
+  }, [teachers, homeDepartment, isDeptScoped]);
+
+  const showMobileDeptCoverFlow = isMdOrBelow && selectedId === null && selectedDept === '';
+  const showMobileTeacherList = isMdOrBelow && selectedId === null && selectedDept !== '';
+  const needsCustomMobileBack = isMdOrBelow && (showMobileTeacherList || selectedId !== null);
+
+  const handleMobileBack = useCallback(() => {
+    if (selectedId) {
+      setSelectedId(null);
+      return;
+    }
+    setSelectedDept('');
+    setSelectedGrade('');
+    setSelectedId(null);
+  }, [selectedId]);
+
   useEffect(() => {
-    if (!isMdOrBelow && filteredTeachers.length > 0) {
-      const isCurrentTeacherInFilter = filteredTeachers.some(t => t.id === selectedId);
-      if (!isCurrentTeacherInFilter) {
-        setSelectedId(filteredTeachers[0].id);
-      }
-    } else if (filteredTeachers.length === 0) {
+    const defaultBack = document.getElementById('portal-default-mobile-back');
+    if (!defaultBack) return;
+    defaultBack.style.display = needsCustomMobileBack ? 'none' : '';
+  }, [needsCustomMobileBack]);
+
+  useEffect(() => {
+    if (!isMdOrBelow) return;
+    document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+  }, [isMdOrBelow, selectedDept, selectedId]);
+
+  // เลือกแผนก/กรองแล้วไม่ auto-select ครูคนแรก
+  useEffect(() => {
+    if (selectedId && !filteredTeachers.some(t => t.id === selectedId)) {
       setSelectedId(null);
     }
-  }, [filteredTeachers, selectedId, isMdOrBelow]);
+  }, [filteredTeachers, selectedId]);
 
   const selectedTeacher = teachers.find(t => t.id === selectedId) || null;
 
@@ -675,6 +763,20 @@ export default function TeacherManager() {
   }, [selectedTeacher, selectedDrawerClass, updateClass]);
 
   return (
+    <>
+      {needsCustomMobileBack && headerMobileBackEl && createPortal(
+        <button
+          type="button"
+          onClick={handleMobileBack}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100"
+          title={selectedId ? 'กลับรายชื่อครู' : 'กลับเลือกแผนก'}
+          aria-label={selectedId ? 'กลับรายชื่อครู' : 'กลับเลือกแผนก'}
+        >
+          <HiChevronLeft size={16} />
+        </button>,
+        headerMobileBackEl,
+      )}
+
     <div
       className={cn(
         'flex flex-col min-h-0 relative',
@@ -683,12 +785,25 @@ export default function TeacherManager() {
     >
       <div className="flex h-full w-full bg-transparent gap-4 font-sukhumvit flex-1 overflow-hidden">
 
+        {showMobileDeptCoverFlow ? (
+          <TeacherDeptCoverFlow
+            teacherCounts={teacherCountsByDept}
+            departments={browseVisibleDepartments}
+            onSelectDept={(dept) => {
+              setSelectedDept(dept);
+              setSelectedGrade('');
+              setSelectedId(null);
+            }}
+          />
+        ) : null}
+
         {/* ── LEFT SIDEBAR — Department → Grade → Teacher List ── */}
-        {(!isMdOrBelow || selectedId === null) && (
+        {(!isMdOrBelow || showMobileTeacherList) && (
           <div className={cn(
             'flex h-full min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden',
             sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
             selectedId ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+            showMobileTeacherList && '[&_aside]:px-3 [&_aside]:pb-2 [&_aside]:pt-0 [&_aside>div]:gap-0',
           )}>
             <GradeBookClassSidebar
               selectedDept={selectedDept}
@@ -696,6 +811,9 @@ export default function TeacherManager() {
               selectedClassId=""
               gradeOptions={sidebarGradeOptions}
               classOptions={[]}
+              departments={browseVisibleDepartments}
+              hideDeptCards={isMdOrBelow}
+              hideFrameOnMobile
               onSelectDept={(dept) => {
                 setSelectedDept((prev) => {
                   const next = prev === dept ? '' : dept;
@@ -711,7 +829,7 @@ export default function TeacherManager() {
               showRooms={false}
               showGradeRoomNav={false}
               collapsed={sidebarCollapsed}
-              headerAction={(
+              headerAction={!isMdOrBelow ? (
                 <div className={cn('flex items-center gap-1.5 w-full', sidebarCollapsed ? 'justify-center' : 'justify-between')}>
                   {!sidebarCollapsed && (
                     <div className="relative flex-1 min-w-0">
@@ -730,7 +848,7 @@ export default function TeacherManager() {
                     onToggle={() => setSidebarCollapsed((v) => !v)}
                   />
                 </div>
-              )}
+              ) : undefined}
               collapsedExtra={(
                 <div className="flex flex-col items-center justify-center gap-2 mt-2 overflow-y-auto scrollbar-hide py-1 w-full min-h-0">
                   {filteredTeachers.map((t) => {
@@ -757,9 +875,15 @@ export default function TeacherManager() {
                 </div>
               )}
             >
-              <div className="flex flex-col gap-2.5 mt-2 flex-1 min-h-0 overflow-hidden w-full">
+              <div className={cn(
+                'flex flex-col gap-2.5 flex-1 min-h-0 overflow-hidden w-full',
+                !isMdOrBelow && 'mt-2',
+              )}>
                 {/* Teacher Cards Roster */}
-                <div className="flex-1 overflow-y-auto scrollbar-hide py-1 flex flex-col gap-1.5 min-h-0">
+                <div className={cn(
+                  'flex-1 overflow-y-auto scrollbar-hide flex flex-col gap-1.5 min-h-0',
+                  isMdOrBelow ? 'pb-1' : 'py-1',
+                )}>
                   <AnimatePresence initial={false}>
                     {selectedDept === '' && !teacherSearchQuery.trim() ? (
                       <div className="h-32 flex flex-col items-center justify-center text-muted-foreground opacity-60 rounded-xl text-center px-4">
@@ -776,8 +900,8 @@ export default function TeacherManager() {
                         return (
                           <motion.button
                             key={t.id}
-                            layout
-                            initial={{ opacity: 0 }}
+                            layout={!isMdOrBelow}
+                            initial={isMdOrBelow ? false : { opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             type="button"
@@ -806,12 +930,20 @@ export default function TeacherManager() {
                               )}>
                                 {t.name}
                               </span>
-                              <span className={cn(
-                                'block truncate text-[10px] font-bold font-sarabun',
-                                isActive ? 'text-primary-foreground/75' : 'text-muted-foreground',
-                              )}>
-                                {t.position || 'ครูผู้สอน'} · {formatDept(t.department)}
-                              </span>
+                              <div className="mt-1 flex flex-col items-start gap-1">
+                                <span className={cn(
+                                  'inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-bold font-sukhumvit',
+                                  teacherPositionBadgeClass(t.position, isActive),
+                                )}>
+                                  {t.position || 'ครูผู้สอน'}
+                                </span>
+                                <span className={cn(
+                                  'inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-bold font-sukhumvit',
+                                  teacherDeptBadgeClass(t.department, isActive),
+                                )}>
+                                  {formatDept(t.department) || '—'}
+                                </span>
+                              </div>
                             </div>
                           </motion.button>
                         );
@@ -826,30 +958,20 @@ export default function TeacherManager() {
         {/* ── LEFT PANEL — Detail View ── */}
         {(!isMdOrBelow || selectedId !== null) && (
           <div className="flex-1 min-w-0 flex flex-col gap-4 overflow-hidden h-full max-h-full bg-transparent border-0 p-0 shadow-none">
-            <AnimatePresence mode="wait">
+            <AnimatePresence mode={isMdOrBelow ? 'sync' : 'wait'}>
               {selectedTeacher ? (
                 <motion.div
                   key={selectedTeacher.id}
-                  initial={{ opacity: 0, x: 10 }}
+                  initial={isMdOrBelow ? false : { opacity: 0, x: 10 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -10 }}
+                  exit={isMdOrBelow ? undefined : { opacity: 0, x: -10 }}
                   transition={{ duration: 0.2, ease: 'easeOut' }}
-                  className="flex flex-col gap-4 h-full min-h-0 overflow-hidden flex-1 rounded-2xl border border-border bg-card p-4 md:p-6"
+                  className="flex flex-col gap-4 h-full min-h-0 overflow-hidden flex-1 rounded-none border-0 bg-transparent p-0 lg:rounded-2xl lg:border lg:border-border lg:bg-card lg:p-6"
                 >
                   {/* Section 1: ข้อมูลส่วนตัว (Personal Info) */}
                   <div className="relative shrink-0">
-                    {/* Mobile Back Button: Absolute position in the top-right corner, icon only */}
-                    {isMdOrBelow && (
-                      <button
-                        onClick={() => setSelectedId(null)}
-                        className="absolute top-3.5 right-3.5 w-8 h-8 flex items-center justify-center text-slate-500 hover:text-slate-800 bg-white/60 backdrop-blur-md border border-slate-200/60 rounded-full transition-all active:scale-95 cursor-pointer z-20"
-                        title="กลับรายชื่อครู"
-                      >
-                        <ChevronLeft size={16} strokeWidth={3} />
-                      </button>
-                    )}
                     {/* Apple Music Style Hero Header */}
-                    <div className="flex flex-col md:flex-row gap-4 md:gap-8 items-start justify-between">
+                    <div className="flex w-full flex-col gap-4 md:flex-row md:gap-8 md:items-start md:justify-between">
 
                       {/* Left: Image + Name/Position + Personal Info Chips */}
                       <div className="flex flex-col sm:flex-row gap-4 md:gap-6 items-start flex-1 min-w-0 w-full">
@@ -907,14 +1029,17 @@ export default function TeacherManager() {
                         </div>
                       </div>
 
-                      {/* Right: Action Buttons — Compact Dock (Moved to Top Right) */}
-                      <div className="inline-flex w-fit items-center gap-0.5 rounded-xl bg-card p-1 border border-border shrink-0 self-start">
+                      {/* Right: Action Buttons — Compact Dock */}
+                      <div className={cn(
+                        'flex w-full items-center gap-0.5 rounded-xl border border-border bg-card p-1 shrink-0 justify-between',
+                        'md:inline-flex md:w-fit md:justify-start md:self-start',
+                      )}>
                         <motion.button
                           type="button"
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => setIsSubjectDrawerOpen(true)}
-                          className="relative group p-1.5 rounded-lg hover:bg-muted/70 transition-colors text-foreground cursor-pointer"
+                          className="relative group flex flex-1 items-center justify-center rounded-lg p-1.5 text-foreground transition-colors hover:bg-muted/70 cursor-pointer md:flex-none"
                         >
                           <HiPlus className="w-4 h-4 text-slate-800" />
                           <span className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 rounded text-xs bg-popover text-popover-foreground border border-border opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none font-bold font-sukhumvit z-30 shadow-md">
@@ -927,7 +1052,7 @@ export default function TeacherManager() {
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => { setIsEditing(true); setModalOpen(true); }}
-                          className="relative group p-1.5 rounded-lg hover:bg-muted/70 transition-colors text-foreground cursor-pointer"
+                          className="relative group flex flex-1 items-center justify-center rounded-lg p-1.5 text-foreground transition-colors hover:bg-muted/70 cursor-pointer md:flex-none"
                         >
                           <HiPencil className="w-4 h-4 text-slate-800" />
                           <span className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 rounded text-xs bg-popover text-popover-foreground border border-border opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none font-bold font-sukhumvit z-30 shadow-md">
@@ -940,7 +1065,7 @@ export default function TeacherManager() {
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => setTransferModalOpen(true)}
-                          className="relative group p-1.5 rounded-lg hover:bg-muted/70 transition-colors text-foreground cursor-pointer"
+                          className="relative group flex flex-1 items-center justify-center rounded-lg p-1.5 text-foreground transition-colors hover:bg-muted/70 cursor-pointer md:flex-none"
                         >
                           <HiArrowPathRoundedSquare className="w-4 h-4 text-slate-800" />
                           <span className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 rounded text-xs bg-popover text-popover-foreground border border-border opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none font-bold font-sukhumvit z-30 shadow-md">
@@ -953,7 +1078,7 @@ export default function TeacherManager() {
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => setDeleteConfirmOpen(true)}
-                          className="relative group p-1.5 rounded-lg hover:bg-muted/70 transition-colors text-foreground cursor-pointer"
+                          className="relative group flex flex-1 items-center justify-center rounded-lg p-1.5 text-foreground transition-colors hover:bg-muted/70 cursor-pointer md:flex-none"
                         >
                           <HiTrash className="w-4 h-4 text-slate-800" />
                           <span className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 rounded text-xs bg-popover text-popover-foreground border border-border opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none font-bold font-sukhumvit z-30 shadow-md">
@@ -966,7 +1091,7 @@ export default function TeacherManager() {
                           type="button"
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
-                          className="relative group p-1.5 rounded-lg hover:bg-muted/70 transition-colors text-foreground cursor-pointer"
+                          className="relative group flex flex-1 items-center justify-center rounded-lg p-1.5 text-foreground transition-colors hover:bg-muted/70 cursor-pointer md:flex-none"
                         >
                           <FaLine className={cn('w-4 h-4', (selectedTeacher.lineId || selectedTeacher.lineUserId || selectedTeacher.isLineConnected) ? 'text-[#06C755]' : 'text-slate-800')} />
                           <span className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 rounded text-xs bg-popover text-popover-foreground border border-border opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none font-bold font-sukhumvit z-30 shadow-md">
@@ -991,52 +1116,57 @@ export default function TeacherManager() {
                         </div>
                       ) : (
                         <>
-                          {/* Mobile View: Card Grid */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 md:hidden">
+                          {/* Mobile View: list cards (match teacher roster) */}
+                          <div className="flex flex-col gap-1.5 md:hidden">
                             {teacherSubjects.map((subject, idx) => {
                               const colors = getSubjectCardColors(subject.subjectGroup);
-                              const catStyle = SUBJECT_CATEGORY_STYLE[subject.category as keyof typeof SUBJECT_CATEGORY_STYLE] || SUBJECT_CATEGORY_STYLE.basic;
+                              const catKey = normalizeSubjectCategory(subject.category);
+                              const catStyle = SUBJECT_CATEGORY_STYLE[catKey];
 
                               return (
                                 <motion.div
                                   key={subject.id}
-                                  initial={{ opacity: 0, y: 5 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ delay: Math.min(idx * 0.02, 0.24) }}
-                                  className="group flex items-center gap-2.5 p-2.5 bg-white hover:bg-slate-50 border border-slate-100 hover:border-blue-200 rounded-xl transition-all cursor-default shadow-sm hover:shadow-md"
+                                  initial={false}
+                                  animate={{ opacity: 1 }}
+                                  transition={{ delay: Math.min(idx * 0.015, 0.24) }}
+                                  className="flex w-full items-center gap-3 rounded-xl border border-border bg-card p-2.5 text-left transition-colors hover:bg-muted/50"
                                 >
                                   <div
-                                    className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 shadow-sm transition-all"
+                                    className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border shadow-sm"
                                     style={{
                                       background: `linear-gradient(135deg, ${colors[1]} 0%, ${colors[0]} 100%)`,
                                     }}
                                   >
-                                    <SubjectCardIcon subjectGroup={subject.subjectGroup} size={16} />
+                                    <SubjectCardIcon subjectGroup={subject.subjectGroup} size={18} className="text-white drop-shadow-sm" />
                                   </div>
 
-                                  <div className="flex-1 flex flex-col min-w-0">
-                                    <div className="flex items-center gap-1.5 mb-0.5 min-w-0">
-                                      <span className="text-[11px] md:text-[12px] font-bold text-slate-800 transition-colors group-hover:text-blue-600 truncate">
-                                        {subject.name}
-                                      </span>
-                                      <span className={`inline-flex items-center gap-0.5 text-[8px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${catStyle.bg} ${catStyle.text}`}>
-                                        <span className={`w-1 h-1 rounded-full ${catStyle.dot}`} />
+                                  <div className="min-w-0 flex-1">
+                                    <span className="block truncate text-[13px] font-black font-sukhumvit text-foreground">
+                                      {subject.name}
+                                    </span>
+                                    <div className="mt-1 flex flex-col items-start gap-1">
+                                      <span className={cn(
+                                        'inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-bold font-sukhumvit',
+                                        subjectCategoryBadgeClass(subject.category),
+                                      )}>
                                         {catStyle.label}
+                                        {subject.code ? ` · ${subject.code}` : ''}
                                       </span>
+                                      <span className={cn(
+                                        'inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-bold font-sukhumvit',
+                                        subjectClassBadgeClass(),
+                                      )}>
+                                        {subject.className || '—'}
+                                      </span>
+                                      {Number(subject.periodsPerWeek ?? 0) > 0 ? (
+                                        <span className={cn(
+                                          'inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-bold font-sukhumvit',
+                                          subjectPeriodBadgeClass(),
+                                        )}>
+                                          {Number(subject.periodsPerWeek)} คาบ/สัปดาห์
+                                        </span>
+                                      ) : null}
                                     </div>
-                                    <div className="flex items-center gap-1.5 min-w-0">
-                                      <span className="text-[9px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded uppercase tracking-tighter truncate max-w-[72px]">
-                                        {subject.code}
-                                      </span>
-                                      <span className="text-[9px] font-bold text-blue-500 bg-blue-50/50 px-1.5 py-0.5 rounded truncate">
-                                        {subject.className}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  <div className="shrink-0 flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100/50">
-                                    <span className="text-[8px] text-blue-600 font-bold">คาบ</span>
-                                    <span className="text-[11px] font-black text-blue-800">{Number(subject.periodsPerWeek ?? 0)}</span>
                                   </div>
                                 </motion.div>
                               );
@@ -1056,7 +1186,8 @@ export default function TeacherManager() {
                             <div className="divide-y divide-border bg-white overflow-y-auto flex-1 min-h-0 scrollbar-hide">
                               {teacherSubjects.map((subject, idx) => {
                                 const colors = getSubjectCardColors(subject.subjectGroup);
-                                const catStyle = SUBJECT_CATEGORY_STYLE[subject.category as keyof typeof SUBJECT_CATEGORY_STYLE] || SUBJECT_CATEGORY_STYLE.basic;
+                                const catKey = normalizeSubjectCategory(subject.category);
+                              const catStyle = SUBJECT_CATEGORY_STYLE[catKey];
 
                                 return (
                                   <motion.div
@@ -1288,7 +1419,8 @@ export default function TeacherManager() {
                               );
                               const isSelected = (subject.enrolledTeacherIds || []).some((tid: string) => teacherKeys.has(tid));
                               const colors = getSubjectCardColors(subject.subjectGroup);
-                              const catStyle = SUBJECT_CATEGORY_STYLE[subject.category as keyof typeof SUBJECT_CATEGORY_STYLE] || SUBJECT_CATEGORY_STYLE.basic;
+                              const catKey = normalizeSubjectCategory(subject.category);
+                              const catStyle = SUBJECT_CATEGORY_STYLE[catKey];
                               return (
                                 <button
                                   key={subject.id}
@@ -1410,5 +1542,6 @@ export default function TeacherManager() {
         </AlertDialog>
       </div>
     </div>
+    </>
   );
 }

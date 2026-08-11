@@ -8,11 +8,18 @@ import {
   deleteDoc,
   doc,
   onSnapshot,
+  query,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
+import { useTeachersCollection } from '@/hooks/useTeachersCollection';
+import {
+  buildTeacherIdentityKeys,
+  resolveTeacherFromAuth,
+} from '@/lib/teachers/teacherIdentity';
 import type { SubjectGroupId } from '@/types/curriculum';
 import type { NewQuestionSet, QuestionSet } from '@/types/questionBank';
 import { generateQuestionSetCode } from '@/features/questionBank/utils/questionSetCode';
@@ -46,14 +53,33 @@ export interface QuestionSetFilters {
 }
 
 export function useQuestionSetBank() {
-  const { user, userData } = useAuth();
+  const { user, userData, role } = useAuth();
+  const { teachers } = useTeachersCollection();
   const [questionSets, setQuestionSets] = useState<QuestionSet[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  const myCreatorKeys = useMemo(() => {
+    if (role !== 'teacher' || !user?.uid) return null;
+    const teacher = resolveTeacherFromAuth(user.uid, teachers);
+    return buildTeacherIdentityKeys(user.uid, teacher);
+  }, [role, user?.uid, teachers]);
+
+  const visibleQuestionSets = useMemo(() => {
+    if (!myCreatorKeys) return questionSets;
+    return questionSets.filter((set) =>
+      myCreatorKeys.has(String(set.createdBy ?? '').trim()),
+    );
+  }, [questionSets, myCreatorKeys]);
+
   // Subscribe to question_sets collection (metadata only — lightweight)
+  // ครู: กรอง createdBy ที่ query เลย (แทนที่จะดึงทั้งคลังมากรองฝั่ง client — ลด read เกินจำเป็น)
+  // admin/sysadmin/staff เห็นทั้งคลัง จึงไม่กรอง
   useEffect(() => {
+    const q = role === 'teacher' && user?.uid
+      ? query(collection(db, QUESTION_SETS_COL), where('createdBy', '==', user.uid))
+      : collection(db, QUESTION_SETS_COL);
     const unsub = onSnapshot(
-      collection(db, QUESTION_SETS_COL),
+      q,
       (snap) => {
         const rows = snap.docs
           .map((d) => ({ id: d.id, ...d.data() } as QuestionSet))
@@ -67,7 +93,7 @@ export function useQuestionSetBank() {
       },
     );
     return () => unsub();
-  }, []);
+  }, [role, user?.uid]);
 
   // ── CRUD ─────────────────────────────────────────────────────────────────────
 
@@ -170,7 +196,7 @@ export function useQuestionSetBank() {
   // ── Derived ──────────────────────────────────────────────────────────────────
 
   const filterQuestionSets = (filters: QuestionSetFilters) => {
-    return questionSets.filter((set) => {
+    return visibleQuestionSets.filter((set) => {
       if (
         filters.subjectGroup &&
         filters.subjectGroup !== 'all' &&
@@ -207,12 +233,12 @@ export function useQuestionSetBank() {
   };
 
   const stats = useMemo(() => {
-    const total = questionSets.length;
-    const published = questionSets.filter((s) => s.isPublished).length;
+    const total = visibleQuestionSets.length;
+    const published = visibleQuestionSets.filter((s) => s.isPublished).length;
     const draft = total - published;
-    const totalQuestions = questionSets.reduce((sum, s) => sum + (s.questionCount ?? 0), 0);
+    const totalQuestions = visibleQuestionSets.reduce((sum, s) => sum + (s.questionCount ?? 0), 0);
     return { total, published, draft, totalQuestions };
-  }, [questionSets]);
+  }, [visibleQuestionSets]);
 
   const addQuestionSetsBulk = async (items: NewQuestionSet[]) => {
     if (items.length === 0) return [] as string[];
@@ -268,7 +294,7 @@ export function useQuestionSetBank() {
 
   return {
     isLoading,
-    questionSets,
+    questionSets: visibleQuestionSets,
     stats,
     addQuestionSet,
     addQuestionSetsBulk,

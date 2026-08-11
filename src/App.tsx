@@ -40,6 +40,7 @@ const LeaveReportPage = lazy(() => import('@/features/leave/LeaveReportPage'));
 const LessonPlanManager = lazy(() => import('@/features/lessonPlan/LessonPlanManager'));
 const MicroSyllabusPage = lazy(() => import('@/features/microSyllabus/MicroSyllabusPage'));
 const DutySchedulePage = lazy(() => import('@/features/duty/DutySchedulePage'));
+const SubstituteAssignmentPage = lazy(() => import('@/features/substituteTeaching/SubstituteAssignmentPage'));
 const ReportControlCenter = lazy(() => import('@/features/reports/ReportControlCenter'));
 const AnnouncementsPage = lazy(() => import('@/features/announcements/AnnouncementsPage'));
 const FeedbackPage = lazy(() => import('@/features/feedback/FeedbackPage'));
@@ -50,7 +51,6 @@ const LineConnectPage = lazy(() => import('@/features/profile/LineConnectPage'))
 const LineCheckInPage = lazy(() => import('@/features/lineCheckIn/LineCheckInPage'));
 const MorningRollCallPage = lazy(() => import('@/features/attendance/MorningRollCallPage'));
 const FuturePlanPage = lazy(() => import('@/features/futurePlan/FuturePlanPage'));
-const WordGamePage = lazy(() => import('@/features/wordGame/WordGamePage'));
 const AiAgentCommandPage = lazy(() => import('@/features/aiAgents/AiAgentCommandPage'));
 const TasksPage = lazy(() => import('@/features/tasks/TasksPage'));
 const AdminTuitionView = lazy(() => import('@/features/tuition/AdminTuitionView'));
@@ -259,6 +259,11 @@ export default function App() {
                 <DutySchedulePage />
               </PermissionGate>
             } />
+            <Route path="substitute-teaching" element={
+              <PermissionGate featureKey="substituteTeaching">
+                <SubstituteAssignmentPage />
+              </PermissionGate>
+            } />
             <Route path="report-control" element={
               <PermissionGate featureKey="reports" require="edit">
                 <ReportControlCenter />
@@ -301,11 +306,6 @@ export default function App() {
             <Route path="courses/:courseId" element={
               <PermissionGate featureKey="courseOnDemand">
                 <CoursePlayerPage />
-              </PermissionGate>
-            } />
-            <Route path="word-game" element={
-              <PermissionGate featureKey="wordGame">
-                <WordGamePage />
               </PermissionGate>
             } />
             {/* settings — sysadmin เท่านั้น require='full' */}

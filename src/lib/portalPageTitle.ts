@@ -25,7 +25,6 @@ const PORTAL_PAGE_TITLES: ReadonlyArray<{ path: string; title: string }> = [
   { path: '/portal/grades', title: 'สมุดคะแนน' },
   { path: '/portal/student-analytics', title: 'วิเคราะห์ผู้เรียน' },
   { path: '/portal/future-plan', title: 'แผนการศึกษาต่อ' },
-  { path: '/portal/word-game', title: 'เกมทายคำ' },
   { path: '/portal/tasks', title: 'มอบหมายงาน' },
   { path: '/portal/settings', title: 'การตั้งค่า' },
   { path: '/portal/micro-syllabus', title: 'แผนการสอน' },

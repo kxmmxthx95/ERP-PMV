@@ -89,37 +89,51 @@ const SECTION_LABELS: Record<DailyStaffStatus, string> = {
   pending: 'รอเช็ก',
 };
 
-function getDepartmentLabel(department?: string): string | null {
+function getDepartmentConfig(department?: string) {
   if (!department) return null;
-  const config = DEPARTMENT_CONFIG[department as Department];
-  return config?.label ?? department;
+  if (!(department in DEPARTMENT_CONFIG)) return null;
+  return DEPARTMENT_CONFIG[department as Department];
 }
 
 function StaffRow({ staff }: { staff: DailyStaffRow }) {
   const meta = STATUS_META[staff.status];
-  const departmentLabel = getDepartmentLabel(staff.department);
+  const deptCfg = getDepartmentConfig(staff.department);
 
   return (
-    <div className={`rounded-2xl border p-3 ${meta.cardClassName}`}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <div className="w-10 h-10 rounded-xl shrink-0 overflow-hidden bg-slate-100 border border-slate-200/50">
+    <div className={`rounded-2xl border p-3.5 ${meta.cardClassName}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3.5">
+          <div className="size-[4.25rem] shrink-0 overflow-hidden rounded-full border-2 border-white bg-slate-100 shadow-sm">
             {staff.photoURL ? (
-              <img src={staff.photoURL} alt={staff.displayName} className="w-full h-full object-cover" />
+              <img src={staff.photoURL} alt={staff.displayName} className="h-full w-full object-cover" />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-sm font-black text-slate-500">
+              <div className="flex h-full w-full items-center justify-center text-lg font-black text-slate-500">
                 {staff.displayName.charAt(0)}
               </div>
             )}
           </div>
           <div className="min-w-0">
-            <p className="text-[13px] font-black text-slate-800 truncate">{staff.displayName}</p>
-            {departmentLabel ? (
-              <p className="text-[11px] font-bold text-slate-400 truncate">{departmentLabel}</p>
+            <p className="truncate text-[13px] font-black text-slate-800">{staff.displayName}</p>
+            {deptCfg ? (
+              <span
+                className="mt-1 inline-flex max-w-full truncate rounded-md border px-1.5 py-0.5 text-[10px] font-black"
+                style={{ color: deptCfg.color, background: deptCfg.bg, borderColor: deptCfg.border }}
+              >
+                {deptCfg.label}
+              </span>
+            ) : staff.department ? (
+              <span className="mt-1 inline-flex max-w-full truncate rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-600">
+                {staff.department}
+              </span>
+            ) : null}
+            {staff.checkInLabel ? (
+              <p className="mt-1 text-[10px] font-bold tabular-nums text-slate-500">
+                เข้า {staff.checkInLabel}
+              </p>
             ) : null}
           </div>
         </div>
-        <span className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 ${meta.badgeClassName}`}>
+        <span className={`shrink-0 rounded-lg px-2 py-1 text-[10px] font-black ${meta.badgeClassName}`}>
           {meta.label}
         </span>
       </div>

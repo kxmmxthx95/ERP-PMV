@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import {
   addMonths,
@@ -191,6 +192,8 @@ interface Props {
   readOnly?: boolean;
   planContext?: TeachingPlanContext;
   lessonOptions?: string[];
+  /** Rendered inside the white card, above the month nav (e.g. back button + subject title). Desktop-only usage is caller's choice. */
+  topAccessory?: ReactNode;
 }
 
 function inferDepartmentFromGrade(gradeLevel?: string): string {
@@ -330,6 +333,7 @@ export default function WeeklyTopicGrid({
   readOnly = false,
   planContext,
   lessonOptions = [],
+  topAccessory,
 }: Props) {
   const [topics, setTopics] = useState<WeeklyTopic[]>(() =>
     normalizeTopicsForCalendar(initialTopics, semesterStart),
@@ -624,6 +628,16 @@ export default function WeeklyTopicGrid({
     setDrawerOpen(false);
   };
 
+  // ปิด drawer ไม่ว่าจะกดปุ่ม X, คลิก backdrop, swipe หรือ Esc — auto-save ถ้ามีเนื้อหาที่ยังไม่บันทึก
+  // กันปัญหาครูพิมพ์แผนการสอนแล้วกดปิดแทนกดบันทึก ทำให้ข้อมูลหายเงียบๆ
+  const closeDrawer = () => {
+    if (!readOnly && hasDraftContent) {
+      void handleSavePlan();
+      return;
+    }
+    setDrawerOpen(false);
+  };
+
   const handleToggleComplete = async () => {
     if (!selectedDate) return;
     const existing = topicMap.get(selectedDate);
@@ -685,12 +699,12 @@ export default function WeeklyTopicGrid({
       )}
 
       <div
-        className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl"
+        className="flex flex-col rounded-2xl lg:min-h-0 lg:flex-1 lg:overflow-hidden"
         style={glassCard}
       >
+        {topAccessory}
         <div
           className="relative flex shrink-0 items-center justify-center px-6 py-4"
-          style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}
         >
           <div className="flex items-center gap-2">
             <motion.button
@@ -700,13 +714,13 @@ export default function WeeklyTopicGrid({
               disabled={!canGoPrevMonth}
               onClick={() => setCurrentMonth((m) => clampToSemesterMonth(subMonths(m, 1)))}
               className={cn(
-                'flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:text-slate-600',
+                'flex h-7 w-7 items-center justify-center rounded-full text-slate-400 transition-colors hover:text-slate-600',
                 !canGoPrevMonth && 'pointer-events-none opacity-30',
               )}
               style={{ background: 'rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.05)' }}
               aria-label="เดือนก่อนหน้า"
             >
-              <HiChevronLeft size={15} />
+              <HiChevronLeft size={12} />
             </motion.button>
 
             <div className="flex min-h-[46px] min-w-0 flex-col items-center justify-center">
@@ -717,7 +731,7 @@ export default function WeeklyTopicGrid({
                 transition={{ type: 'spring', stiffness: 300, damping: 24 }}
                 className="text-center"
               >
-                <h2 className="text-base font-black tracking-tight text-slate-800 font-sukhumvit">
+                <h2 className="text-sm font-black tracking-tight text-slate-800 font-sukhumvit">
                   {format(currentMonth, 'MMMM', { locale: th })} {currentMonth.getFullYear() + 543}
                 </h2>
               </motion.div>
@@ -744,13 +758,13 @@ export default function WeeklyTopicGrid({
               disabled={!canGoNextMonth}
               onClick={() => setCurrentMonth((m) => clampToSemesterMonth(addMonths(m, 1)))}
               className={cn(
-                'flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:text-slate-600',
+                'flex h-7 w-7 items-center justify-center rounded-full text-slate-400 transition-colors hover:text-slate-600',
                 !canGoNextMonth && 'pointer-events-none opacity-30',
               )}
               style={{ background: 'rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.05)' }}
               aria-label="เดือนถัดไป"
             >
-              <HiChevronRight size={15} />
+              <HiChevronRight size={12} />
             </motion.button>
           </div>
 
@@ -1046,7 +1060,7 @@ export default function WeeklyTopicGrid({
         )}
       </div>
 
-      <Drawer open={drawerOpen} onOpenChange={setDrawerOpen} direction="right">
+      <Drawer open={drawerOpen} onOpenChange={(open) => { if (open) setDrawerOpen(true); else closeDrawer(); }} direction="right">
         <DrawerContent className={DRAWER_CONTENT_CLASS}>
           <div className={DRAWER_PANEL_CLASS}>
           <DrawerHeader className="shrink-0 px-4 pb-3 pt-4">
@@ -1061,7 +1075,7 @@ export default function WeeklyTopicGrid({
               </div>
               <button
                 type="button"
-                onClick={() => setDrawerOpen(false)}
+                onClick={closeDrawer}
                 className="absolute right-0 top-1/2 inline-flex size-9 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 active:scale-[0.98]"
                 aria-label="ปิด"
               >

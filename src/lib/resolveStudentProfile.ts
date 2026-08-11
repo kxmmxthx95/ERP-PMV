@@ -11,11 +11,32 @@ function toStudent(id: string, data: Record<string, unknown>): Student {
   return { id, ...data } as Student;
 }
 
+// Every home-page widget resolves its own student profile independently (up to 5
+// sequential reads each on fallback). Cache by authUid so N widgets mounting together
+// share one resolution instead of firing N in parallel — TTL matches useExamRoom's
+// studentCtxCache convention.
+const RESOLVE_CACHE_TTL_MS = 5 * 60 * 1000;
+const resolveCache = new Map<string, { at: number; promise: Promise<Student | null> }>();
+
 /**
  * Resolve a student profile for the logged-in user.
  * Student records may use Firestore auto IDs while auth accounts use Firebase UIDs.
  */
-export async function resolveStudentByAuthUser(
+export function resolveStudentByAuthUser(
+  authUid: string,
+  hints?: ResolveStudentHints,
+): Promise<Student | null> {
+  const cached = resolveCache.get(authUid);
+  if (cached && Date.now() - cached.at < RESOLVE_CACHE_TTL_MS) {
+    return cached.promise;
+  }
+  const promise = resolveStudentByAuthUserUncached(authUid, hints);
+  resolveCache.set(authUid, { at: Date.now(), promise });
+  promise.catch(() => resolveCache.delete(authUid));
+  return promise;
+}
+
+async function resolveStudentByAuthUserUncached(
   authUid: string,
   hints?: ResolveStudentHints,
 ): Promise<Student | null> {

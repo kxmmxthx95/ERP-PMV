@@ -2,9 +2,34 @@ import type { ExamRoom } from '@/types/exam';
 
 export type RoundQuestionEntry = NonNullable<ExamRoom['roundQuestions']>[string];
 
+/** Finite attempt count → 1..N. Unlimited → use buildUnlimitedRoundKeys(room) instead. */
 export function buildRoundKeys(maxAttempts: number): string[] {
-  if (maxAttempts === 0) return ['∞'];
+  if (maxAttempts === 0) return ['1'];
   return Array.from({ length: maxAttempts }, (_, i) => String(i + 1));
+}
+
+/**
+ * Unlimited rooms: rounds 1..max(1, completedRounds+1, currentRound, numeric saved keys).
+ * Decision B from grill — next openable round always has a slot.
+ */
+export function buildUnlimitedRoundKeys(room: ExamRoom): string[] {
+  const completed = Math.max(0, room.completedRounds ?? 0);
+  const current = Math.max(0, room.currentRound ?? 0);
+  let maxSaved = 0;
+  for (const key of Object.keys(room.roundQuestions ?? {})) {
+    if (key === '∞') continue;
+    const n = Number(key);
+    if (Number.isFinite(n) && n > maxSaved) maxSaved = n;
+  }
+  const last = Math.max(1, completed + 1, current, maxSaved);
+  return Array.from({ length: last }, (_, i) => String(i + 1));
+}
+
+/** Firestore key for a room's round question config — always numeric round string. */
+export function resolveExamRoundQuestionKey(_room: ExamRoom, roundNumber: number): string {
+  const raw = Number(roundNumber);
+  const n = Number.isFinite(raw) && raw > 0 ? raw : 1;
+  return String(n);
 }
 
 /** Preserve part order as questions appear in the round (matches Exam Manager cart). */
@@ -32,23 +57,38 @@ export function isUsableRoundConfig(config: RoundQuestionEntry | undefined): boo
   return !!config.questionSetId?.trim();
 }
 
+function roomHasAnyUsableRoundQuestions(roomData: ExamRoom): boolean {
+  return Object.values(roomData.roundQuestions ?? {}).some(isUsableRoundConfig);
+}
+
+function roomHasOnlyLegacyOrInfinityQuestions(roomData: ExamRoom): boolean {
+  const rq = roomData.roundQuestions ?? {};
+  const keys = Object.keys(rq);
+  if (keys.length === 0) return true;
+  return keys.every((k) => k === '∞') && isUsableRoundConfig(rq['∞']);
+}
+
+/**
+ * Config for a specific exam round.
+ * Prefer roundQuestions[N]; unlimited rooms may fall back to legacy key `∞` when N is empty.
+ * Top-level questionSetId only when room has no usable per-round map (old rooms).
+ */
 export function getRoundQuestionConfigForRound(roomData: ExamRoom, roundNumber: number) {
   const rawRound = Number(roundNumber);
   const currentRound = Number.isFinite(rawRound) && rawRound > 0 ? rawRound : 1;
-  const roundKey = String(currentRound);
+  const roundKey = resolveExamRoundQuestionKey(roomData, currentRound);
   const rq = roomData.roundQuestions;
+  const unlimited = (roomData.settings?.maxAttempts ?? 1) === 0;
 
-  const candidates: Array<RoundQuestionEntry | undefined> = [
-    rq?.[roundKey],
-    rq?.['∞'],
-    rq?.['1'],
-    ...(rq ? Object.values(rq) : []),
-  ];
-
-  let roundConfig = candidates.find(isUsableRoundConfig);
-
-  if (
-    !roundConfig
+  let roundConfig: RoundQuestionEntry | undefined;
+  if (isUsableRoundConfig(rq?.[roundKey])) {
+    roundConfig = rq![roundKey];
+  } else if (unlimited && isUsableRoundConfig(rq?.['∞'])) {
+    // Legacy unlimited: shared ∞ config until teacher saves per-round keys
+    roundConfig = rq!['∞'];
+  } else if (
+    !roomHasAnyUsableRoundQuestions(roomData)
+    && currentRound === 1
     && roomData.questionSetId?.trim()
     && (roomData.selectedQuestionIds?.length ?? 0) > 0
   ) {
@@ -69,23 +109,17 @@ export function getRoundQuestionConfig(roomData: ExamRoom) {
 }
 
 export function describeMissingQuestionsError(roomData: ExamRoom): string {
-  const { roundConfig } = getRoundQuestionConfig(roomData);
-  const selectedIds = roundConfig?.questionIds || roomData.selectedQuestionIds || [];
-  const setId = roundConfig?.questionSetId || roomData.questionSetId;
-  const hasAnyRoundMeta = !!roomData.roundQuestions
-    && Object.values(roomData.roundQuestions).some(isUsableRoundConfig);
+  const { roundConfig, currentRound } = getRoundQuestionConfig(roomData);
 
-  if (!setId && selectedIds.length === 0 && !hasAnyRoundMeta) {
-    return 'ครูยังไม่ได้บันทึกชุดข้อสอบในห้องนี้ กรุณาแจ้งครูให้เปิดแท็บ「ข้อสอบ」แล้วกด「บันทึก」';
+  if (!isUsableRoundConfig(roundConfig)) {
+    return `ครูยังไม่ได้บันทึกชุดข้อสอบรอบ ${currentRound} กรุณาแจ้งครูให้เปิดแท็บ「ข้อสอบ」เลือกข้อสอบของรอบนี้แล้วกด「บันทึก」`;
   }
-  if (setId || selectedIds.length > 0 || hasAnyRoundMeta) {
-    return 'ไม่พบข้อมูลข้อสอบในคลัง (อาจถูกลบหรืออัปเดต) กรุณาแจ้งครูให้เลือกชุดข้อสอบและกดบันทึกใหม่';
-  }
-  return 'ไม่พบข้อสอบในห้องนี้ กรุณาแจ้งครูผู้สอน';
+
+  return 'ไม่พบข้อมูลข้อสอบในคลัง (อาจถูกลบหรืออัปเดต) กรุณาแจ้งครูให้เลือกชุดข้อสอบและกดบันทึกใหม่';
 }
 
 export function roomHasSavedQuestions(roomData: ExamRoom, currentRound: number): boolean {
-  const { roundConfig } = getRoundQuestionConfig({ ...roomData, currentRound });
+  const { roundConfig } = getRoundQuestionConfigForRound(roomData, currentRound);
   return isUsableRoundConfig(roundConfig);
 }
 
@@ -98,14 +132,22 @@ export function isExamRoomQuestionsConfigured(room: ExamRoom): boolean {
     return true;
   }
 
-  const nextKey = maxAttempts === 0 ? '∞' : String(nextRound);
-
-  if (isUsableRoundConfig(room.roundQuestions?.[nextKey])) {
+  if (roomHasSavedQuestions(room, nextRound)) {
     return true;
+  }
+
+  // Unlimited legacy: only ∞ (or top-level) exists — treat as configured for next round
+  if (maxAttempts === 0 && roomHasOnlyLegacyOrInfinityQuestions(room)) {
+    if (isUsableRoundConfig(room.roundQuestions?.['∞'])) return true;
+    return (
+      !!room.questionSetId?.trim()
+      && (room.selectedQuestionIds?.length ?? 0) > 0
+    );
   }
 
   if (
     nextRound <= 1
+    && !roomHasAnyUsableRoundQuestions(room)
     && !!room.questionSetId?.trim()
     && (room.selectedQuestionIds?.length ?? 0) > 0
   ) {
@@ -115,60 +157,24 @@ export function isExamRoomQuestionsConfigured(room: ExamRoom): boolean {
   return false;
 }
 
-function roundConfigMatches(
-  a: RoundQuestionEntry | undefined,
-  b: RoundQuestionEntry | undefined,
-): boolean {
-  if (!a || !b) return false;
-  if (a.questionSetId !== b.questionSetId) return false;
-  const idsA = a.questionIds ?? [];
-  const idsB = b.questionIds ?? [];
-  if (idsA.length !== idsB.length) return false;
-  return idsA.every((id, i) => id === idsB[i]);
-}
-
-export type PropagateRoundConfigOptions = {
-  /** Previous config for the round being saved — used to refresh mirrored sibling rounds. */
-  previousEntryForSavedRound?: RoundQuestionEntry;
-};
-
-/** Copy saved round config to empty rounds; refresh sibling rounds that still mirror the old config. */
-export function propagateRoundConfigToEmptyRounds(
-  roundQuestions: NonNullable<ExamRoom['roundQuestions']>,
-  savedRoundKey: string,
-  entry: RoundQuestionEntry,
-  maxAttempts: number,
-  options?: PropagateRoundConfigOptions,
-): NonNullable<ExamRoom['roundQuestions']> {
-  const next = { ...roundQuestions, [savedRoundKey]: entry };
-  if (!isUsableRoundConfig(entry)) return next;
-
-  const previous = options?.previousEntryForSavedRound;
-  const shouldRefreshMirrored = savedRoundKey === '1' || savedRoundKey === '∞';
-
-  buildRoundKeys(maxAttempts).forEach((rk) => {
-    if (rk === savedRoundKey) return;
-    if (!isUsableRoundConfig(next[rk])) {
-      next[rk] = { ...entry };
-      return;
-    }
-    if (shouldRefreshMirrored && previous && roundConfigMatches(next[rk], previous)) {
-      next[rk] = { ...entry };
-    }
-  });
-  return next;
-}
-
-/** คะแนนเต็มของรอบสอบ — ใช้ roundQuestions ก่อน fallback ไป room.totalPoints */
+/**
+ * คะแนนเต็มของรอบสอบ — แหล่งเดียวสำหรับครู + นักเรียน
+ * ลำดับ: sum(questionPoints) → totalPoints ในรอบ → room.totalPoints (legacy)
+ * รวม fallback ∞ ใน getRoundQuestionConfigForRound
+ */
 export function getExamRoomRoundTotalPoints(room: ExamRoom, round: number): number {
-  const rawRound = Number(round);
-  const normalizedRound = Number.isFinite(rawRound) && rawRound > 0 ? rawRound : 1;
-  const roundKey = String(normalizedRound);
-  const roundPoints =
-    room.roundQuestions?.[roundKey]?.totalPoints
-    ?? room.roundQuestions?.['∞']?.totalPoints
-    ?? room.roundQuestions?.['1']?.totalPoints
-    ?? room.totalPoints
-    ?? 0;
-  return Number(roundPoints) > 0 ? Number(roundPoints) : 0;
+  const { roundConfig } = getRoundQuestionConfigForRound(room, round);
+  if (roundConfig) {
+    const fromMap = Object.values(roundConfig.questionPoints ?? {}).reduce(
+      (sum, value) => sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0),
+      0,
+    );
+    if (fromMap > 0) return fromMap;
+
+    const roundPoints = Number(roundConfig.totalPoints ?? 0);
+    if (roundPoints > 0) return roundPoints;
+  }
+
+  const roomPoints = Number(room.totalPoints ?? 0);
+  return roomPoints > 0 ? roomPoints : 0;
 }

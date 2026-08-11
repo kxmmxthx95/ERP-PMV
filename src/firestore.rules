@@ -248,5 +248,13 @@ service cloud.firestore {
         )
       );
     }
+
+    // ── Class midterm reports: aggregated score matrix (1 class = 1 doc) ──
+    // Written by rebuildAcademicStats (admin). Read covered by wildcard too;
+    // explicit block documents intent for executive dashboard tab.
+    match /class_midterm_reports/{docId} {
+      allow read: if isAuth();
+      allow write: if canManage();
+    }
   }
 }

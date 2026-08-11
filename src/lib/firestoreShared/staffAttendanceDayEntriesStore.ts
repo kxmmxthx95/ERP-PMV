@@ -10,6 +10,7 @@ export type StaffDayEntry = {
   status: string;
   photoURL?: string;
   displayName?: string;
+  checkInTime?: unknown;
 };
 
 export type StaffDayEntriesMap = Record<string, StaffDayEntry[]>;
@@ -22,6 +23,7 @@ function mapDayEntries(rows: DocRow[]): StaffDayEntry[] {
     status: String(row.status ?? ''),
     photoURL: typeof row.photoURL === 'string' ? row.photoURL : undefined,
     displayName: typeof row.displayName === 'string' ? row.displayName : undefined,
+    checkInTime: row.checkInTime ?? undefined,
   }));
 }
 
@@ -51,6 +53,7 @@ async function fetchDayDocs(date: string, force = false): Promise<DocRow[]> {
         status: entry.status,
         photoURL: entry.photoURL,
         displayName: entry.displayName,
+        checkInTime: entry.checkInTime,
       }));
     }
   } else {

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState, useMemo, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
+import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { useSearchParams } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -10,6 +11,7 @@ import {
 } from 'react-icons/hi2';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
+import { useBrowseVisibleDepartments } from '@/hooks/useBrowseVisibleDepartments';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import { useSchedule } from '@/hooks/useSchedule';
@@ -56,6 +58,7 @@ import type { ClassRoom } from '@/types/class';
 import { GRADE_LEVEL_ORDER } from '@/types/class';
 import type { Department, SubjectCategory } from '@/types/curriculum';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
 
 // bundle-dynamic: heavy calendar / admin browser only when needed
 const WeeklyTopicGrid = lazy(() => import('./components/WeeklyTopicGrid'));
@@ -206,6 +209,7 @@ function AssignedSubjectCard({
 
 export default function MicroSyllabusPage() {
   const { user, userData, role } = useAuth();
+  const { browseVisibleDepartments } = useBrowseVisibleDepartments();
   const { activeYear, activeSemester } = useActiveAcademicYear();
   const { events: calendarEvents } = useAcademicCalendar(role ?? undefined);
   // activeYear.year เป็น พ.ศ. (เช่น 2569) — Google Calendar API ต้องใช้ปี ค.ศ.
@@ -592,6 +596,7 @@ export default function MicroSyllabusPage() {
   const [lessonSettingsOpen, setLessonSettingsOpen] = useState(false);
   const [headerRightEl, setHeaderRightEl] = useState<HTMLElement | null>(null);
   const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
+  const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
   const [breadcrumbExtraEl, setBreadcrumbExtraEl] = useState<HTMLElement | null>(null);
   const [breadcrumbPageEl, setBreadcrumbPageEl] = useState<HTMLElement | null>(null);
 
@@ -599,6 +604,8 @@ export default function MicroSyllabusPage() {
   const [filterDepartment, setFilterDepartment] = useState('');
   const [filterGradeLevel, setFilterGradeLevel] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const isDesktop = useIsDesktop();
 
   const availableGrades = useMemo(() => {
     if (!filterDepartment) return [];
@@ -631,6 +638,7 @@ export default function MicroSyllabusPage() {
   useEffect(() => {
     setHeaderRightEl(document.getElementById('header-portal-right-actions'));
     setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
+    setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
     setBreadcrumbExtraEl(document.getElementById('header-portal-breadcrumb-extra'));
     setBreadcrumbPageEl(document.getElementById('header-portal-breadcrumb-page'));
   }, []);
@@ -665,6 +673,14 @@ export default function MicroSyllabusPage() {
       setPendingSelectId(null);
     }
   }, [syllabi, pendingSelectId]);
+
+  // มือถือ: ตอนเปิดดูแผนวิชาใดวิชาหนึ่งอยู่ ปุ่มกลับ default ของ PortalLayout (ไปหน้า /portal)
+  // ไม่มีประโยชน์เท่าไหร่ที่นี่ — ซ่อนแล้วสลับไปใช้ปุ่มกลับไปหน้ารวมโฟลเดอร์ของฟีเจอร์นี้แทน
+  useEffect(() => {
+    const defaultBack = document.getElementById('portal-default-mobile-back');
+    if (!defaultBack) return;
+    defaultBack.style.display = selectedSyllabus ? 'none' : '';
+  }, [selectedSyllabus]);
 
   // ช่วงเทอมของ "ห้องที่กำลังเปิดดูอยู่" จริง — แผนกห้องอาจต่างจากแผนกของครูผู้สอน
   const selectedSemesterRange = useMemo(() => {
@@ -723,11 +739,13 @@ export default function MicroSyllabusPage() {
     setFilterDepartment(dept);
     setFilterGradeLevel('');
     setSelectedClassId('');
+    setSelectedKey(null);
   };
 
   const handleSidebarSelectGrade = (level: string) => {
     setFilterGradeLevel(level);
     setSelectedClassId('');
+    setSelectedKey(null);
   };
 
   const handleSidebarSelectClass = (classId: string) => {
@@ -801,32 +819,9 @@ export default function MicroSyllabusPage() {
     setSelectedKey(null);
     setPendingSelectId(null);
     setCreatingKey(null);
-  }, []);
-
-  // Header back (desktop กลับไปเมนู / mobile กลับเมนู) → subject list when a plan is open
-  useEffect(() => {
-    if (showAdminBrowser || !selectedKey) return;
-
-    const isPortalBackButton = (target: EventTarget | null) => {
-      if (!(target instanceof Element)) return false;
-      const btn = target.closest('button');
-      if (!btn) return false;
-      if (btn.id === 'portal-default-mobile-back') return true;
-      const title = btn.getAttribute('title') ?? '';
-      const label = btn.getAttribute('aria-label') ?? '';
-      return title === 'กลับไปเมนู' || title === 'กลับเมนู' || label === 'กลับไปเมนู';
-    };
-
-    const onClick = (e: MouseEvent) => {
-      if (!isPortalBackButton(e.target)) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      handleBackToSubjectList();
-    };
-
-    document.addEventListener('click', onClick, true);
-    return () => document.removeEventListener('click', onClick, true);
-  }, [showAdminBrowser, selectedKey, handleBackToSubjectList]);
+    // มือถือไม่มี sidebar เลือกห้อง กลับต้องกลับไปโฟลเดอร์วิชาทั้งหมดเลย ไม่ใช่ห้องเดิม
+    if (!isDesktop) setSelectedClassId('');
+  }, [isDesktop]);
 
   // ── No active year ─────────────────────────────────────────────────────────
   if (!activeYear) {
@@ -951,6 +946,18 @@ export default function MicroSyllabusPage() {
         </>,
         breadcrumbExtraEl,
       )}
+      {headerMobileBackEl && selectedSyllabus && createPortal(
+        <button
+          type="button"
+          onClick={handleBackToSubjectList}
+          className="lg:hidden flex h-9 w-9 rounded-full items-center justify-center text-slate-700 transition-colors hover:bg-slate-100"
+          title="กลับไปโฟลเดอร์วิชา"
+          aria-label="กลับไปโฟลเดอร์วิชา"
+        >
+          <HiArrowLeft className="h-4 w-4" />
+        </button>,
+        headerMobileBackEl,
+      )}
       <div className="shrink-0">
         <MicroSyllabusSubjectSelect
           active={Boolean(selectedSyllabus)}
@@ -988,8 +995,8 @@ export default function MicroSyllabusPage() {
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
           <div
             className={cn(
-              'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full lg:w-[280px] xl:w-[300px]',
-              hasRoomSelection ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+              'hidden min-h-0 w-full shrink-0 flex-col overflow-hidden lg:flex lg:h-auto lg:max-h-full',
+              sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
             )}
           >
             <GradeBookClassSidebar
@@ -998,38 +1005,23 @@ export default function MicroSyllabusPage() {
               selectedClassId={selectedClassId}
               gradeOptions={availableGrades}
               classOptions={classOptions}
+              departments={browseVisibleDepartments}
               onSelectDept={handleSidebarSelectDept}
               onSelectGrade={handleSidebarSelectGrade}
               onSelectClass={handleSidebarSelectClass}
+              collapsed={sidebarCollapsed}
+              headerAction={(
+                <div className={cn('flex', HEADER_ICON_BTN_GROUP)}>
+                  <SidebarCollapseButton
+                    collapsed={sidebarCollapsed}
+                    onToggle={() => setSidebarCollapsed((v) => !v)}
+                  />
+                </div>
+              )}
             />
           </div>
 
-          <div
-            className={cn(
-              'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden',
-              !hasRoomSelection && 'hidden lg:flex',
-            )}
-          >
-            {selectedSyllabus && (
-              <div className="relative mb-3 flex min-h-[3.25rem] shrink-0 items-center justify-center border-b border-border px-0 pb-3 pt-2 sm:pt-2.5">
-                <div className="absolute left-0">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="size-9 shrink-0 rounded-xl p-0 flex items-center justify-center"
-                    onClick={handleBackToSubjectList}
-                    title="กลับไปโฟลเดอร์วิชา"
-                    aria-label="กลับไปโฟลเดอร์วิชา"
-                  >
-                    <HiArrowLeft className="h-4 w-4" />
-                  </Button>
-                </div>
-                <p className="max-w-[70%] truncate font-sukhumvit text-[13px] font-black text-foreground text-center">
-                  {selectedSyllabus.subjectName}
-                  {selectedSyllabus.className ? ` · ${selectedSyllabus.className}` : ''}
-                </p>
-              </div>
-            )}
+          <div className="relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden">
             <AnimatePresence mode="wait">
               {selectedSyllabus ? (
                 <motion.div
@@ -1053,6 +1045,27 @@ export default function MicroSyllabusPage() {
                         className: selectedSyllabus.className,
                         gradeLevel: selectedSyllabus.gradeLevel,
                       }}
+                      topAccessory={(
+                        // มือถือมีปุ่มกลับ + ตัวเลือกวิชาที่ header บนสุดแล้ว (portal) — โชว์แถบนี้แค่ desktop กันหัวข้อ/ลูกศรกลับซ้ำ
+                        <div className="relative hidden shrink-0 items-center justify-center border-b border-border px-6 pb-3 pt-4 lg:flex">
+                          <div className="absolute left-6">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="size-9 shrink-0 rounded-xl p-0 flex items-center justify-center"
+                              onClick={handleBackToSubjectList}
+                              title="กลับไปโฟลเดอร์วิชา"
+                              aria-label="กลับไปโฟลเดอร์วิชา"
+                            >
+                              <HiArrowLeft className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <p className="max-w-[70%] truncate font-sukhumvit text-[13px] font-black text-foreground text-center">
+                            {selectedSyllabus.subjectName}
+                            {selectedSyllabus.className ? ` · ${selectedSyllabus.className}` : ''}
+                          </p>
+                        </div>
+                      )}
                     />
                   </Suspense>
                 </motion.div>
@@ -1106,12 +1119,37 @@ export default function MicroSyllabusPage() {
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
-                  className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center"
+                  className="flex min-h-0 flex-1 flex-col overflow-hidden"
                 >
-                  <HiOutlineCalendarDays className="h-8 w-8 text-muted-foreground/40" />
-                  <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
-                    เลือกห้องเรียนจากแถบด้านซ้ายเพื่อดูแผนการสอน
-                  </p>
+                  {/* มือถือไม่มี sidebar ให้เลือกห้อง โชว์โฟลเดอร์วิชาทั้งหมดตรงนี้แทน */}
+                  <div className="grid w-full grid-cols-2 gap-x-3 gap-y-5 overflow-y-auto overscroll-y-contain scrollbar-hide sm:grid-cols-3 lg:hidden">
+                    {selectableAssignments.map((a) => {
+                      const key = `${a.subjectId}|${a.classId}`;
+                      return (
+                        <AssignedSubjectCard
+                          key={key}
+                          assignment={a}
+                          active={false}
+                          creating={creatingKey === key}
+                          colorId={folderColors[key] ?? DEFAULT_COLOR_ID}
+                          onColorChange={(id) => {
+                            setFolderColors((prev) => {
+                              const next = { ...prev, [key]: id };
+                              saveFolderCardColors(next);
+                              return next;
+                            });
+                          }}
+                          onClick={() => handleSubjectSelectChange(key)}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div className="hidden min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center lg:flex">
+                    <HiOutlineCalendarDays className="h-8 w-8 text-muted-foreground/40" />
+                    <p className="font-sukhumvit text-[13px] font-black text-muted-foreground">
+                      เลือกห้องเรียนจากแถบด้านซ้ายเพื่อดูแผนการสอน
+                    </p>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

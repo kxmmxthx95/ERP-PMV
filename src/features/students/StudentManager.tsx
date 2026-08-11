@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useMemo, useCallback } from 'react
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Search, X,
+  X,
   DoorOpen,
   Trash2,
   Camera, Loader2, Save
@@ -16,39 +16,37 @@ import {
   HiArrowUpCircle,
   HiChevronDown,
   HiHomeModern,
-  HiOutlineFunnel,
   HiArrowLeft,
+  HiChevronLeft,
   HiPlus,
   HiAcademicCap,
+  HiArrowDownTray,
 } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
-import {
-  Drawer,
-  DrawerContent,
-  DrawerDescription,
-  DrawerFooter,
-  DrawerHeader,
-  DrawerTitle,
-} from '@/components/ui/drawer';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '@/lib/firebase';
 import { toast } from 'sonner';
 import { useStudentManager } from '@/hooks/useStudentManager';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useBrowseVisibleDepartments } from '@/hooks/useBrowseVisibleDepartments';
 import { useNamePrefix } from '@/hooks/useNamePrefix';
+import { shouldCountDepartment } from '@/lib/departments/homeDepartment';
 import StudentFormModal from './components/StudentFormModal';
 import StudentOverviewDashboard from './components/StudentOverviewDashboard';
 import { StudentDetailFormTab } from './components/StudentDetailFormTab';
 import { compressImage } from './components/studentDetailFormShared';
 import StudentAvatar from './components/StudentAvatar';
 import StudentImportChooser from './components/StudentImportChooser';
+import { exportStudentsToExcel } from './utils/studentExport';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import StudentMobileListBrowse from './components/StudentMobileListBrowse';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
 import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
 import type { Student } from '@/types/student';
 import type { Department } from '@/types/curriculum';
-import { GRADE_LEVEL_ORDER, type ClassRoom } from '@/types/class';
+import { GRADE_LEVEL_ORDER, type ClassRoom, type ClassRoomCard } from '@/types/class';
+import ClassMobileBrowse from '@/features/classes/components/ClassMobileBrowse';
 import { cn } from '@/lib/utils';
 
 const StudentCsvImportModal = lazy(() => import('./components/StudentCsvImportModal'));
@@ -63,6 +61,15 @@ function shortRoomLabel(room: ClassRoom): string {
   if (n) return n;
   const name = String(room.className ?? '').trim();
   return name.length > 4 ? name.slice(0, 4) : name || '—';
+}
+
+function inferDepartmentFromGrade(gradeLevel: string | null | undefined): Department | null {
+  const grade = String(gradeLevel ?? '').trim();
+  if (!grade) return null;
+  if (grade.startsWith('อ')) return 'early';
+  if (grade.startsWith('ป')) return 'primary';
+  if (grade.startsWith('ม')) return 'secondary';
+  return null;
 }
 
 const TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden';
@@ -89,42 +96,15 @@ const STATUS_COLOR: Record<string, string> = {
   transferred: '#94a3b8',
 };
 
-function DrawerFilterField({
-  label,
-  value,
-  onChange,
-  options,
-  disabled = false,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-  disabled?: boolean;
-}) {
-  return (
-    <div>
-      <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">
-        {label}
-      </label>
-      <Select value={value} onValueChange={onChange} disabled={disabled}>
-        <SelectTrigger className="h-11 w-full rounded-xl border-slate-200 bg-white px-3.5 text-[13px] font-bold text-slate-800 focus-visible:border-blue-200 focus-visible:ring-blue-50/50 disabled:opacity-40">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
+const DETAIL_TABS: { id: DetailTab; label: string; icon: IconType }[] = [
+  { id: 'personal', label: 'ข้อมูลส่วนตัว', icon: HiUser },
+  { id: 'family', label: 'ข้อมูลครอบครัว', icon: HiUsers },
+  { id: 'map', label: 'แผนที่บ้าน', icon: HiMapPin },
+];
 
 export default function StudentManager() {
   const { year: academicYear } = useActiveAcademicYear();
+  const { homeDepartment, browseVisibleDepartments, isDeptScoped } = useBrowseVisibleDepartments();
 
   const {
     filteredStudentCards, stats, filter, setFilter,
@@ -134,13 +114,16 @@ export default function StudentManager() {
   } = useStudentManager(academicYear ?? '2568');
 
   const [headerCenterMobileEl, setHeaderCenterMobileEl] = useState<HTMLElement | null>(null);
+  const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
+  const [headerRightActionsEl, setHeaderRightActionsEl] = useState<HTMLElement | null>(null);
   const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
-  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() => window.innerWidth < 1024);
 
   useEffect(() => {
     setHeaderCenterMobileEl(document.getElementById('header-portal-center-mobile'));
+    setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
+    setHeaderRightActionsEl(document.getElementById('header-portal-right-actions'));
     setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
   }, []);
 
@@ -165,9 +148,8 @@ export default function StudentManager() {
   const [activeTab, setActiveTab] = useState<StudentTab>('list');
   const [mobileTabMenuOpen, setMobileTabMenuOpen] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>('personal');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [detailMobileView, setDetailMobileView] = useState<'profile' | 'form'>('profile');
 
-  const hasActiveFilters = !!(filter.department || filter.gradeLevel || filter.classId || searchQuery);
   const yearClassrooms = useMemo(
     () => (classrooms as unknown as ClassRoom[]).filter((c) => {
       const row = c as ClassRoom & { academicYear?: string };
@@ -257,12 +239,61 @@ export default function StudentManager() {
       .slice()
       .sort((a, b) =>
         String(a.roomNumber || a.className).localeCompare(
-          String(b.roomNumber || b.className),
+          String(b.roomNumber || a.className),
           undefined,
           { numeric: true },
         ),
       );
   }, [promoteYearClassrooms, promoteDept, promoteGrade]);
+
+  const promoteClassCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    promoteYearClassrooms.forEach((cls) => {
+      const dept = cls.departmentId as Department | undefined;
+      if (dept && shouldCountDepartment(dept, homeDepartment, isDeptScoped)) {
+        counts[dept] = (counts[dept] ?? 0) + 1;
+      }
+    });
+    return counts;
+  }, [promoteYearClassrooms, homeDepartment, isDeptScoped]);
+
+  const promoteBrowseClassCards = useMemo((): ClassRoomCard[] => {
+    return promoteYearClassrooms.map((cls) => {
+      const dept = (cls.departmentId || 'secondary') as Department;
+      const studentCount = cls.studentCount ?? 0;
+      const maxStudents = cls.maxStudents ?? 40;
+      return {
+        classRoom: {
+          id: cls.id,
+          className: cls.className,
+          gradeLevel: cls.gradeLevel,
+          roomNumber: cls.roomNumber,
+          departmentId: dept,
+          department: dept,
+          academicYearId: cls.academicYearId || promoteYear,
+          semester: 1,
+          homeroomTeacherId: cls.homeroomTeacherIds?.[0] || '',
+          homeroomTeacherIds: cls.homeroomTeacherIds || [],
+          enrolledCourses: [],
+          studentCount,
+          maxStudents,
+          track: cls.track,
+          trackColor: cls.trackColor,
+          isActive: true,
+          createdAt: '',
+        },
+        homeroomTeacher: null,
+        homeroomTeachers: [],
+        scheduledPeriods: 0,
+        totalPeriods: 0,
+        fillPct: 0,
+        isFull: studentCount >= maxStudents,
+      };
+    });
+  }, [promoteYearClassrooms, promoteYear]);
+
+  const showPromoteMobileBrowse =
+    isMdOrBelow && activeTab === 'promote' && !promoteClassId;
 
   const handlePromoteSelectDept = useCallback((dept: Department) => {
     setPromoteDept((prev) => (prev === dept ? '' : dept));
@@ -275,17 +306,6 @@ export default function StudentManager() {
     setPromoteClassId('');
   }, []);
 
-  const handleClearFilters = () => {
-    setFilter(prev => ({
-      ...prev,
-      department: '',
-      gradeLevel: '',
-      classId: '',
-      searchText: '',
-    }));
-    setSearchQuery('');
-  };
-
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
   const [isEditMode, setIsEditMode] = useState(false);
   const [detailForm, setDetailForm] = useState<any>(null);
@@ -294,11 +314,81 @@ export default function StudentManager() {
   const [isSavingChanges, setIsSavingChanges] = useState(false);
   const selectedStudent = selectedId ? getStudentById(selectedId) : null;
 
+  const studentCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    filteredStudentCards.forEach(({ currentGrade }) => {
+      const dept = inferDepartmentFromGrade(currentGrade);
+      if (dept && shouldCountDepartment(dept, homeDepartment, isDeptScoped)) {
+        counts[dept] = (counts[dept] ?? 0) + 1;
+      }
+    });
+    return counts;
+  }, [filteredStudentCards, homeDepartment, isDeptScoped]);
+
+  const showMobileClassBrowse =
+    isMdOrBelow && activeTab === 'list' && !selectedStudent && !filter.classId;
+  const needsCustomMobileBack =
+    isMdOrBelow && (
+      (activeTab === 'list' && (!!filter.department || !!selectedStudent))
+      || (activeTab === 'promote' && (!!promoteDept || !!promoteClassId))
+    );
+
+  const selectedClassRoom = useMemo(
+    () => yearClassrooms.find((c) => c.id === filter.classId) ?? null,
+    [yearClassrooms, filter.classId],
+  );
+
+  const handleMobileBack = useCallback(() => {
+    if (activeTab === 'promote' && isMdOrBelow) {
+      if (promoteClassId) {
+        setPromoteClassId('');
+        return;
+      }
+      setPromoteDept('');
+      setPromoteGrade('');
+      return;
+    }
+    if (selectedStudent && isMdOrBelow && detailMobileView === 'form') {
+      setDetailMobileView('profile');
+      return;
+    }
+    if (selectedStudent) {
+      setSelectedId(null);
+      setDetailMobileView('profile');
+      return;
+    }
+    if (filter.classId) {
+      setFilter((prev) => ({ ...prev, classId: '', gradeLevel: '' }));
+      return;
+    }
+    setFilter((prev) => ({
+      ...prev,
+      department: '',
+      gradeLevel: '',
+      classId: '',
+    }));
+  }, [activeTab, promoteClassId, selectedStudent, detailMobileView, isMdOrBelow, filter.classId, setFilter]);
+
+  useEffect(() => {
+    const defaultBack = document.getElementById('portal-default-mobile-back');
+    if (!defaultBack) return;
+    defaultBack.style.display = needsCustomMobileBack ? 'none' : '';
+  }, [needsCustomMobileBack]);
+
+  useEffect(() => {
+    if (!isMdOrBelow) return;
+    if (activeTab === 'list' || activeTab === 'promote') {
+      document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+    }
+  }, [isMdOrBelow, activeTab, filter.department, filter.classId, selectedId, detailMobileView, promoteDept, promoteClassId]);
+
   // Sync detail form when selected student changes
   useEffect(() => {
     if (selectedStudent) {
       setDetailForm(selectedStudent);
       setHasPendingChanges(false);
+      setDetailMobileView('profile');
+      setDetailTab('personal');
     }
   }, [selectedStudent]);
 
@@ -371,10 +461,14 @@ export default function StudentManager() {
     }
   };
 
-  // Sync search query to filter
-  useEffect(() => {
-    setFilter(prev => ({ ...prev, searchText: searchQuery }));
-  }, [searchQuery]);
+  const handleFormSubmit = async (data: any) => {
+    if (editingStudent) {
+      await updateStudent(editingStudent.id, data);
+      return;
+    }
+    await addStudent(data);
+    // Stay on list — do not open detail (multi-add via form)
+  };
 
   useEffect(() => {
     if (activeTab === 'list') {
@@ -392,15 +486,6 @@ export default function StudentManager() {
     window.addEventListener('scroll', close, true);
     return () => window.removeEventListener('scroll', close, true);
   }, [mobileTabMenuOpen]);
-
-  const handleFormSubmit = async (data: any) => {
-    if (editingStudent) {
-      await updateStudent(editingStudent.id, data);
-      return;
-    }
-    await addStudent(data);
-    // Stay on list — do not open detail (multi-add via form)
-  };
 
   const handleDelete = async (id: string) => {
     await deleteStudent(id);
@@ -495,24 +580,6 @@ export default function StudentManager() {
     headerCenterMobileEl,
   );
 
-  const showMobileFilterButton = isMdOrBelow && activeTab === 'list' && !selectedStudent;
-
-  const mobileFilterButtonPortal = showMobileFilterButton && headerMobileActionsEl && createPortal(
-    <button
-      type="button"
-      onClick={() => setFilterDrawerOpen(true)}
-      className={HEADER_ICON_BTN}
-      title="ตัวกรอง"
-      aria-label="ตัวกรอง"
-    >
-      <HiOutlineFunnel size={16} />
-      {hasActiveFilters && (
-        <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-destructive" aria-hidden />
-      )}
-    </button>,
-    headerMobileActionsEl,
-  );
-
   const yearOptions = useMemo(() => [
     { value: '2565', label: 'ปี 2565' },
     { value: '2566', label: 'ปี 2566' },
@@ -585,78 +652,81 @@ export default function StudentManager() {
   ) : null;
 
   return (
+    <>
+      {needsCustomMobileBack && headerMobileBackEl && createPortal(
+        <button
+          type="button"
+          onClick={handleMobileBack}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100"
+          title={
+            activeTab === 'promote'
+              ? promoteClassId
+                ? 'กลับเลือกห้องเรียน'
+                : 'กลับเลือกแผนก'
+              : selectedStudent
+                ? detailMobileView === 'form'
+                  ? 'กลับข้อมูลนักเรียน'
+                  : 'กลับรายชื่อนักเรียน'
+                : filter.classId
+                  ? 'กลับเลือกชั้นและห้อง'
+                  : 'กลับเลือกแผนก'
+          }
+          aria-label={
+            activeTab === 'promote'
+              ? promoteClassId
+                ? 'กลับเลือกห้องเรียน'
+                : 'กลับเลือกแผนก'
+              : selectedStudent
+                ? detailMobileView === 'form'
+                  ? 'กลับข้อมูลนักเรียน'
+                  : 'กลับรายชื่อนักเรียน'
+                : filter.classId
+                  ? 'กลับเลือกชั้นและห้อง'
+                  : 'กลับเลือกแผนก'
+          }
+        >
+          <HiChevronLeft size={16} />
+        </button>,
+        headerMobileBackEl,
+      )}
+
+      {activeTab === 'list' && !selectedStudent && headerMobileActionsEl && createPortal(
+        <div className={cn('pointer-events-auto relative flex lg:hidden', HEADER_ICON_BTN_GROUP)}>
+          <button
+            type="button"
+            onClick={() => exportStudentsToExcel(filteredStudentCards)}
+            className={HEADER_ICON_BTN}
+            title="ออกข้อมูลนักเรียนเป็น Excel"
+            aria-label="ออกข้อมูลนักเรียนเป็น Excel"
+          >
+            <HiArrowDownTray size={16} />
+          </button>
+        </div>,
+        headerMobileActionsEl,
+      )}
+
+      {activeTab === 'list' && !selectedStudent && headerRightActionsEl && createPortal(
+        <div className={cn('pointer-events-auto hidden lg:flex', HEADER_ICON_BTN_GROUP)}>
+          <button
+            type="button"
+            onClick={() => exportStudentsToExcel(filteredStudentCards)}
+            className={HEADER_ICON_BTN}
+            title="ออกข้อมูลนักเรียนเป็น Excel"
+            aria-label="ออกข้อมูลนักเรียนเป็น Excel"
+          >
+            <HiArrowDownTray size={16} />
+          </button>
+        </div>,
+        headerRightActionsEl,
+      )}
+
     <div
       className={cn(
-        'flex w-full min-h-0 flex-1 flex-col overflow-hidden font-sukhumvit',
+        'relative flex min-h-0 flex-col font-sukhumvit',
         'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
       )}
     >
       {mobileTabPortal}
-      {mobileFilterButtonPortal}
-
-      <Drawer open={filterDrawerOpen} onOpenChange={setFilterDrawerOpen} direction="bottom">
-        <DrawerContent className="font-sukhumvit pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <DrawerHeader className="text-left">
-            <DrawerTitle className="text-base font-black text-slate-900">ตัวกรองนักเรียน</DrawerTitle>
-            <DrawerDescription className="text-xs text-slate-500">
-              เลือกปีการศึกษา หรือค้นหาชื่อ
-            </DrawerDescription>
-          </DrawerHeader>
-
-          <div className="space-y-4 px-4">
-            <DrawerFilterField
-              label="ปีการศึกษา"
-              value={filter.academicYearId || '2568'}
-              onChange={(v) => setFilter((prev) => ({ ...prev, academicYearId: v, gradeLevel: '', classId: '' }))}
-              options={yearOptions}
-            />
-            <div>
-              <label className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-slate-400">
-                ค้นหา
-              </label>
-              <div className="relative">
-                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                <input
-                  type="text"
-                  placeholder="ชื่อ รหัสนักเรียน..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-9 text-[13px] font-bold text-slate-800 placeholder:text-slate-400 outline-none transition-all focus:border-blue-200 focus:ring-4 focus:ring-blue-50/50"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    aria-label="ล้างคำค้นหา"
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <DrawerFooter className="flex-row gap-2">
-            {hasActiveFilters && (
-              <button
-                type="button"
-                onClick={handleClearFilters}
-                className="h-11 flex-1 rounded-xl border border-rose-200 bg-rose-50 text-[13px] font-black text-rose-600 transition-colors hover:bg-rose-100"
-              >
-                ล้างตัวกรอง
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setFilterDrawerOpen(false)}
-              className="h-11 flex-1 rounded-xl bg-slate-900 text-[13px] font-black text-white shadow-md transition-colors hover:bg-slate-800"
-            >
-              แสดงผล
-            </button>
-          </DrawerFooter>
-        </DrawerContent>
-      </Drawer>
 
       {activeTab === 'overview' ? (
         <StudentOverviewDashboard
@@ -665,8 +735,35 @@ export default function StudentManager() {
           academicYear={academicYear ?? undefined}
         />
       ) : activeTab === 'list' ? (
-        <div className="relative flex h-full min-h-0 max-h-full flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
-          {!selectedStudent && (
+        <div className="flex h-full w-full min-h-0 flex-1 flex-col overflow-hidden lg:flex-row lg:items-stretch lg:gap-4">
+          {showMobileClassBrowse ? (
+            <StudentMobileListBrowse
+              selectedDept={filter.department}
+              gradeOptions={sidebarGradeOptions}
+              yearClassrooms={yearClassrooms}
+              studentCountsByDept={studentCountsByDept}
+              departments={browseVisibleDepartments}
+              onSelectDept={(dept) => {
+                setFilter((prev) => ({
+                  ...prev,
+                  department: dept,
+                  gradeLevel: '',
+                  classId: '',
+                }));
+                setSelectedId(null);
+              }}
+              onSelectRoom={(grade, classId) => {
+                setFilter((prev) => ({
+                  ...prev,
+                  gradeLevel: grade,
+                  classId,
+                }));
+                setSelectedId(null);
+              }}
+            />
+          ) : null}
+
+          {!selectedStudent && !isMdOrBelow && (
             <div
               className={cn(
                 'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
@@ -680,6 +777,7 @@ export default function StudentManager() {
                 selectedClassId={filter.classId}
                 gradeOptions={sidebarGradeOptions}
                 classOptions={sidebarClassOptions}
+                departments={browseVisibleDepartments}
                 onSelectDept={handleSidebarSelectDept}
                 onSelectGrade={handleSidebarSelectGrade}
                 onSelectClass={handleSidebarSelectClass}
@@ -742,6 +840,7 @@ export default function StudentManager() {
             className={cn(
               'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
               !selectedStudent && !filter.classId && 'hidden lg:flex',
+              isMdOrBelow && (filter.classId || selectedStudent) && 'rounded-none border-0 bg-transparent px-3 pb-4 pt-2 sm:px-3',
             )}
           >
             {/* TOP BAR — same height/border as GradeBookClassSidebar */}
@@ -755,16 +854,19 @@ export default function StudentManager() {
               {selectedStudent ? (
                 <motion.div
                   key={selectedStudent.id}
-                  initial={{ opacity: 0, x: 10 }}
+                  initial={isMdOrBelow ? false : { opacity: 0, x: 10 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -10 }}
                   transition={{ duration: 0.2 }}
                   className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0 overflow-hidden h-full"
                 >
-                  {/* LEFT SIDE: Photo, Info, Edit Toggle, Tabs Selection */}
-                  <div className="w-full lg:w-[300px] flex flex-col shrink-0 lg:border-r lg:border-black/[0.05] lg:pr-6 lg:pl-2 lg:pt-2 min-h-0 overflow-y-auto scrollbar-hide h-full">
-                    {/* Back button */}
-                    <div className="mb-4">
+                  {(!isMdOrBelow || detailMobileView === 'profile') && (
+                  <div className={cn(
+                    'flex w-full shrink-0 flex-col lg:w-[300px] lg:border-r lg:border-black/[0.05] lg:pr-6 lg:pl-2 lg:pt-2',
+                    isMdOrBelow ? 'min-h-0 flex-1 overflow-y-auto scrollbar-hide' : 'h-full min-h-0 overflow-y-auto scrollbar-hide',
+                  )}>
+                    {/* Back button — desktop only; mobile uses portal header back */}
+                    <div className="mb-4 hidden lg:block">
                       <button
                         type="button"
                         onClick={() => setSelectedId(null)}
@@ -898,34 +1000,59 @@ export default function StudentManager() {
                       </AnimatePresence>
                     </div>
 
-                    <div className="h-px bg-black/[0.05] mb-5" />
+                    {isMdOrBelow ? (
+                      <div className="mb-4 flex shrink-0 items-center gap-1 overflow-x-auto scrollbar-hide rounded-xl border border-border bg-muted/40 p-1">
+                        {DETAIL_TABS.map((tab) => {
+                          const Icon = tab.icon;
+                          return (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              onClick={() => {
+                                setDetailTab(tab.id);
+                                setDetailMobileView('form');
+                              }}
+                              className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-black whitespace-nowrap text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground"
+                            >
+                              <Icon size={14} className="shrink-0" />
+                              <span>{tab.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                  )}
 
-                    {/* Tabs Selection inside Left Panel (Vertical style) */}
-                    <div className="flex flex-col gap-1">
-                      {[
-                        { id: 'personal', label: 'ข้อมูลส่วนตัว', icon: HiUser },
-                        { id: 'family', label: 'ข้อมูลครอบครัว', icon: HiUsers },
-                        { id: 'map', label: 'แผนที่บ้าน', icon: HiMapPin },
-                      ].map((tab) => {
+                  {(!isMdOrBelow || detailMobileView === 'form') && (
+                  <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:pl-2 lg:border-r lg:border-black/[0.05]">
+                    <div className="mb-2 flex shrink-0 items-center gap-1 overflow-x-auto scrollbar-hide rounded-xl border border-border bg-muted/40 p-1">
+                      {DETAIL_TABS.map((tab) => {
                         const isActive = detailTab === tab.id;
                         const Icon = tab.icon;
                         return (
                           <button
                             key={tab.id}
-                            onClick={() => setDetailTab(tab.id as DetailTab)}
-                            className={`flex items-center gap-3 py-2.5 px-4 rounded-xl transition-all text-left w-full cursor-pointer ${isActive ? 'bg-blue-600 text-white shadow-sm font-black' : 'text-slate-600 hover:text-slate-900 hover:bg-black/[0.02] font-bold'}`}
+                            type="button"
+                            onClick={() => {
+                              setDetailTab(tab.id);
+                              if (isMdOrBelow) setDetailMobileView('form');
+                            }}
+                            className={cn(
+                              'flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-black transition-all whitespace-nowrap',
+                              isActive
+                                ? 'bg-primary text-primary-foreground shadow-sm'
+                                : 'text-muted-foreground hover:bg-background/70 hover:text-foreground',
+                            )}
                           >
-                            <Icon size={16} className={isActive ? 'text-white' : 'text-slate-400'} />
-                            <span className="text-[13px]">{tab.label}</span>
+                            <Icon size={14} className="shrink-0" />
+                            <span>{tab.label}</span>
                           </button>
                         );
                       })}
                     </div>
-                  </div>
 
-                  {/* RIGHT SIDE: Detail Form Content */}
-                  <div className="flex-1 min-w-0 flex flex-col overflow-hidden h-full lg:pl-2 lg:border-r lg:border-black/[0.05]">
-                    <div className="flex-1 overflow-y-auto scrollbar-hide min-h-0 px-1 pt-2 sm:px-2 sm:pt-3">
+                    <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hide px-1 pt-0 sm:px-2">
                       <AnimatePresence mode="wait">
                         <motion.div
                           key={detailTab + (isEditMode ? '-edit' : '-view')}
@@ -947,19 +1074,19 @@ export default function StudentManager() {
                           )}
                         </motion.div>
                       </AnimatePresence>
-
                     </div>
                   </div>
+                  )}
                 </motion.div>
               ) : (
                 /* STUDENT LIST TABLE */
                 <motion.div
                   key="grid"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="flex-1 min-h-0 overflow-y-auto scrollbar-hide"
+                  initial={isMdOrBelow ? { opacity: 0, x: 40 } : { opacity: 0 }}
+                  animate={isMdOrBelow ? { opacity: 1, x: 0 } : { opacity: 1 }}
+                  exit={isMdOrBelow ? { opacity: 0, x: -24 } : { opacity: 0 }}
+                  transition={{ duration: isMdOrBelow ? 0.32 : 0.15, ease: [0.32, 0.72, 0, 1] }}
+                  className="flex min-h-0 flex-1 flex-col overflow-hidden"
                 >
                   {!filter.classId ? (
                     <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center">
@@ -977,9 +1104,22 @@ export default function StudentManager() {
                       <p className="text-[13px] font-sarabun">ไม่พบรายชื่อ</p>
                     </div>
                   ) : (
-                    <div className="flex flex-col gap-3 pb-6">
+                    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden pb-6">
+                      {isMdOrBelow && selectedClassRoom ? (
+                        <div className="shrink-0 pb-1 pt-1 text-center">
+                          <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                            รายชื่อนักเรียน
+                          </p>
+                          <h2 className="mt-0.5 text-lg font-black tracking-tight text-foreground">
+                            {selectedClassRoom.className}
+                          </h2>
+                          <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
+                            {filteredStudentCards.length} คน
+                          </p>
+                        </div>
+                      ) : null}
                       {/* Mobile cards */}
-                      <div className="flex flex-col gap-2.5 md:hidden">
+                      <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto scrollbar-hide md:hidden">
                         {filteredStudentCards.map(({ student, currentGrade }, i) => {
                           const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
                           return (
@@ -1131,10 +1271,35 @@ export default function StudentManager() {
         </Suspense>
       ) : (
         <div className="relative flex h-full min-h-0 max-h-full flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+          {showPromoteMobileBrowse ? (
+            <ClassMobileBrowse
+              selectedDept={promoteDept}
+              gradeOptions={promoteGradeOptions}
+              classCards={promoteBrowseClassCards}
+              classCountsByDept={promoteClassCountsByDept}
+              departments={browseVisibleDepartments}
+              coverTitle="จัดการสถานะ"
+              coverSubtitle="เลือกแผนกวิชาเพื่อเลือกห้องเรียนต้นทาง"
+              onSelectDept={(dept) => {
+                setPromoteDept(dept);
+                setPromoteGrade('');
+                setPromoteClassId('');
+              }}
+              onSelectClass={(classId) => {
+                const room = promoteYearClassrooms.find((c) => c.id === classId);
+                if (room?.gradeLevel) setPromoteGrade(room.gradeLevel);
+                setPromoteClassId(classId);
+              }}
+            />
+          ) : null}
+
           <div
             className={cn(
               'flex min-h-0 w-full shrink-0 flex-col overflow-hidden lg:h-auto lg:max-h-full',
               sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
+              promoteClassId
+                ? 'hidden lg:flex'
+                : 'hidden min-h-0 flex-1 lg:flex lg:flex-none',
             )}
           >
             <GradeBookClassSidebar
@@ -1143,6 +1308,7 @@ export default function StudentManager() {
               selectedClassId={promoteClassId}
               gradeOptions={promoteGradeOptions}
               classOptions={promoteClassOptions}
+              departments={browseVisibleDepartments}
               onSelectDept={handlePromoteSelectDept}
               onSelectGrade={handlePromoteSelectGrade}
               onSelectClass={setPromoteClassId}
@@ -1184,7 +1350,13 @@ export default function StudentManager() {
             />
           </div>
 
-          <div className="relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
+          <div
+            className={cn(
+              'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+              !promoteClassId && 'hidden lg:flex',
+              isMdOrBelow && promoteClassId && 'rounded-none border-0 bg-transparent px-3 pb-4 pt-2 sm:px-3',
+            )}
+          >
             <div className="mb-2 hidden min-h-[3.25rem] w-full shrink-0 items-center border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:flex">
               {paneHeaderTabs}
             </div>
@@ -1224,5 +1396,6 @@ export default function StudentManager() {
         />
       </Suspense>
     </div>
+    </>
   );
 }

@@ -64,16 +64,13 @@ type DrawerProps = {
 };
 
 const SIDE_DRAWER_CONTENT_CLASS = cn(
-  'h-dvh max-h-none',
+  'h-dvh max-h-none p-0 before:inset-0 before:rounded-none',
   'data-[vaul-drawer-direction=right]:w-screen data-[vaul-drawer-direction=right]:max-w-none',
-  'data-[vaul-drawer-direction=right]:before:inset-0 data-[vaul-drawer-direction=right]:before:rounded-none',
   'data-[vaul-drawer-direction=left]:w-screen data-[vaul-drawer-direction=left]:max-w-none',
-  'data-[vaul-drawer-direction=left]:before:inset-0 data-[vaul-drawer-direction=left]:before:rounded-none',
   'sm:data-[vaul-drawer-direction=right]:w-full sm:data-[vaul-drawer-direction=right]:max-w-md',
-  'sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl',
+  'sm:data-[vaul-drawer-direction=right]:p-2 sm:data-[vaul-drawer-direction=right]:before:inset-2 sm:data-[vaul-drawer-direction=right]:before:rounded-4xl',
   'sm:data-[vaul-drawer-direction=left]:w-full sm:data-[vaul-drawer-direction=left]:max-w-md',
-  'sm:data-[vaul-drawer-direction=left]:before:inset-2 sm:data-[vaul-drawer-direction=left]:before:rounded-4xl',
-  'sm:p-2',
+  'sm:data-[vaul-drawer-direction=left]:p-2 sm:data-[vaul-drawer-direction=left]:before:inset-2 sm:data-[vaul-drawer-direction=left]:before:rounded-4xl',
 );
 
 export function ExamMobileFilterDrawer({
@@ -92,12 +89,18 @@ export function ExamMobileFilterDrawer({
     <Drawer open={open} onOpenChange={onOpenChange} direction={direction}>
       <DrawerContent
         className={cn(
-          'font-sukhumvit pb-[max(1rem,env(safe-area-inset-bottom))]',
-          isSide && SIDE_DRAWER_CONTENT_CLASS,
+          'font-sukhumvit',
+          isSide
+            ? cn(SIDE_DRAWER_CONTENT_CLASS, 'pb-[max(0.5rem,env(safe-area-inset-bottom))]')
+            : 'pb-[max(1rem,env(safe-area-inset-bottom))]',
           contentClassName,
         )}
       >
-        <DrawerHeader className={isSide ? 'text-left' : 'text-center'}>
+        <DrawerHeader
+          className={cn(
+            isSide ? 'px-3 pt-3 pb-2 text-left' : 'text-center',
+          )}
+        >
           <div className="flex items-start justify-between gap-3">
             <div className={cn('min-w-0 flex-1', !isSide && 'text-center')}>
               <DrawerTitle className="text-base font-black text-slate-900">{title}</DrawerTitle>
@@ -117,8 +120,18 @@ export function ExamMobileFilterDrawer({
             </DrawerClose>
           </div>
         </DrawerHeader>
-        <div className={cn('space-y-5 px-4', isSide && 'flex-1 overflow-y-auto')}>{children}</div>
-        {footer && <DrawerFooter className="flex-row gap-2">{footer}</DrawerFooter>}
+        <div
+          className={cn(
+            isSide ? 'flex-1 space-y-4 overflow-y-auto px-3' : 'space-y-5 px-4',
+          )}
+        >
+          {children}
+        </div>
+        {footer && (
+          <DrawerFooter className={cn('flex-row gap-2', isSide && 'px-3 pt-2 pb-3')}>
+            {footer}
+          </DrawerFooter>
+        )}
       </DrawerContent>
     </Drawer>
   );
@@ -126,7 +139,11 @@ export function ExamMobileFilterDrawer({
 
 export function ExamFilterShowResultsButton({ onClick }: { onClick: () => void }) {
   return (
-    <Button type="button" onClick={onClick} className="h-11 flex-1 text-[13px] font-black">
+    <Button
+      type="button"
+      onClick={onClick}
+      className="h-11 min-w-0 flex-1 basis-0 shrink rounded-xl text-[13px] font-black"
+    >
       แสดงผล
     </Button>
   );

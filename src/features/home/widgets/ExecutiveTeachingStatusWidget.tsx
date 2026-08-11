@@ -19,10 +19,11 @@ import {
   DRAWER_HEADER_RIGHT_ACTIONS,
 } from '@/lib/drawerHeaderBtn';
 import { subjectColorByName } from '@/features/schedule/constants/colors';
-import { formatThaiDateLabel } from '@/lib/dateUtils';
+import { formatThaiDateLabel, getLocalDateString } from '@/lib/dateUtils';
 import { cn } from '@/lib/utils';
 import { formatCountdown, getRemainingSeconds, useLocalNowSeconds } from '@/lib/localSecondsStore';
 import { resolveCanonicalTeacherId, teacherDisplayName } from '@/lib/teachers/teacherIdentity';
+import { useSubstitutionsForDate } from '@/lib/attendance/substituteAssignments';
 import { WIDGET_CARD, WIDGET_GLASS, WIDGET_STAT_CELL, WIDGET_STAT_LABEL, WIDGET_STAT_VALUE } from '../widgetStyles';
 import {
   getWidgetHolidayCardStyle,
@@ -46,6 +47,9 @@ type TeacherStatus = {
   subjectName?: string;
   subjectCode?: string;
   subjectGroup?: string;
+  /** คาบนี้เป็นคาบสอนแทน (ครูเจ้าของวิชามีคนรับมอบหมายแล้ว) */
+  isSubstitute?: boolean;
+  originalTeacherName?: string;
 };
 
 const DRAWER_CONTENT_CLASS = cn(
@@ -187,9 +191,18 @@ const TeacherRow = memo(function TeacherRow({
   const detailColor = subjectLabel
     ? subjectColorByName(subjectLabel, teacher.subjectGroup).text
     : undefined;
+  const badgeLabel = teacher.isSubstitute && teacher.kind === 'teaching' ? 'สอนแทน' : meta.badgeLabel;
+  const badgeClassName =
+    teacher.isSubstitute && teacher.kind === 'teaching'
+      ? 'bg-indigo-100 text-indigo-700'
+      : meta.badgeClassName;
+  const cardClassName =
+    teacher.isSubstitute && teacher.kind === 'teaching'
+      ? 'bg-indigo-50/90 border-indigo-200'
+      : meta.cardClassName;
 
   return (
-    <div className={`rounded-2xl border p-3.5 ${meta.cardClassName}`}>
+    <div className={`rounded-2xl border p-3.5 ${cardClassName}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3.5 min-w-0 flex-1">
           <div className="size-[4.25rem] rounded-full shrink-0 overflow-hidden bg-slate-100 border-2 border-white shadow-sm">
@@ -212,11 +225,16 @@ const TeacherRow = memo(function TeacherRow({
             >
               {teacher.detail}
             </p>
+            {teacher.isSubstitute && teacher.originalTeacherName ? (
+              <p className="text-[10px] font-bold text-indigo-500 mt-0.5 truncate">
+                สอนแทน → {teacher.originalTeacherName}
+              </p>
+            ) : null}
             {teacherNeedsCountdown(teacher) ? <TeacherRowCountdown teacher={teacher} /> : null}
           </div>
         </div>
-        <span className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 ${meta.badgeClassName}`}>
-          {meta.badgeLabel}
+        <span className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 ${badgeClassName}`}>
+          {badgeLabel}
         </span>
       </div>
     </div>
@@ -321,6 +339,12 @@ export default function ExecutiveTeachingStatusWidget() {
   const { teachers } = useTeachersCollection();
   const { year, activeSemester } = useActiveAcademicYear();
   const nowMinute = useNowMinute();
+  const today = useMemo(() => getLocalDateString(), []);
+  const todaySubstitutions = useSubstitutionsForDate(
+    year ?? undefined,
+    (activeSemester ?? undefined) as 1 | 2 | undefined,
+    today,
+  );
   const todayDay = useMemo(() => {
     const d = new Date().getDay();
     return d === 0 ? 7 : d;
@@ -392,16 +416,46 @@ export default function ExecutiveTeachingStatusWidget() {
         entry.semester === activeSemester,
     );
 
-    const byTeacher = new Map<string, typeof todaysEntries>();
+    // คาบที่มีครูสอนแทน (approved) วันนี้ — คีย์ classId|period
+    const periodSubByKey = new Map<
+      string,
+      { substituteTeacherId: string; substituteTeacherName: string; originalTeacherName: string }
+    >();
+    todaySubstitutions
+      .filter((s) => s.scope === 'period' && s.period != null && (s.status ?? 'approved') === 'approved')
+      .forEach((s) => {
+        periodSubByKey.set(`${s.classId}|${s.period}`, {
+          substituteTeacherId: s.substituteTeacherId,
+          substituteTeacherName: s.substituteTeacherName,
+          originalTeacherName: s.originalTeacherName,
+        });
+      });
+
+    type EnrichedEntry = (typeof todaysEntries)[number] & {
+      isSubstitute?: boolean;
+      originalTeacherName?: string;
+    };
+
+    const byTeacher = new Map<string, EnrichedEntry[]>();
     todaysEntries.forEach((entry) => {
+      const covering = periodSubByKey.get(`${entry.classId}|${entry.period}`);
+      // มีครูสอนแทน → นับคาบนี้เป็นของครูแทน (ไม่แสดงครูเดิมว่ากำลังสอนคาบนี้)
+      const effectiveTeacherId = covering?.substituteTeacherId ?? entry.teacherId;
+      const effectiveTeacherName = covering?.substituteTeacherName ?? entry.teacherName;
       const canonicalId = resolveCanonicalTeacherId(
-        entry.teacherId,
+        effectiveTeacherId,
         teachers,
-        entry.teacherName,
+        effectiveTeacherName,
       );
       if (!canonicalId) return;
       const list = byTeacher.get(canonicalId) ?? [];
-      list.push(entry);
+      list.push({
+        ...entry,
+        teacherId: effectiveTeacherId,
+        teacherName: effectiveTeacherName,
+        isSubstitute: Boolean(covering),
+        originalTeacherName: covering?.originalTeacherName,
+      });
       byTeacher.set(canonicalId, list);
     });
 
@@ -419,7 +473,7 @@ export default function ExecutiveTeachingStatusWidget() {
           const range = parseTimeRange(getPeriodTime(entry.classId, entry.period));
           return { entry, range };
         })
-        .filter((item): item is { entry: (typeof teacherEntries)[number]; range: { startMin: number; endMin: number } } => Boolean(item.range))
+        .filter((item): item is { entry: EnrichedEntry; range: { startMin: number; endMin: number } } => Boolean(item.range))
         .sort((a, b) => a.range.startMin - b.range.startMin);
 
       if (enriched.length === 0) return;
@@ -436,6 +490,8 @@ export default function ExecutiveTeachingStatusWidget() {
           subjectName: current.entry.subjectName,
           subjectCode: current.entry.subjectCode,
           subjectGroup: current.entry.subjectGroup,
+          isSubstitute: current.entry.isSubstitute,
+          originalTeacherName: current.entry.originalTeacherName,
         });
         return;
       }
@@ -491,7 +547,7 @@ export default function ExecutiveTeachingStatusWidget() {
       totalTodayTeachers: byTeacher.size,
       isWeekend: false,
     };
-  }, [activeSemester, classNameMap, classSettings, entries, nowMinute, schoolWideSettings, teachers, todayDay, year]);
+  }, [activeSemester, classNameMap, classSettings, entries, nowMinute, schoolWideSettings, teachers, todayDay, todaySubstitutions, year]);
 
   const groupedTeachers = useMemo(
     () =>

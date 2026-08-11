@@ -50,6 +50,7 @@ export default function QuestionSetExamSimulator({ set, open, onClose }: Props) 
   const [pdfPageNum, setPdfPageNum] = useState(1);
   const [pdfTotalPages, setPdfTotalPages] = useState(0);
 
+  const isPdfExam = Boolean(set.examPdfUrl?.trim());
   const hiddenPages = set.examPdfHiddenPages ?? [];
   const visiblePages = useMemo(
     () => getVisiblePdfPages(pdfTotalPages, hiddenPages),
@@ -68,10 +69,10 @@ export default function QuestionSetExamSimulator({ set, open, onClose }: Props) 
     setAnswers({});
     setSubmitted(false);
     setGradeSummary(null);
-    setPanelMode('pdf');
+    setPanelMode(isPdfExam ? 'pdf' : 'answers');
     setPdfPageNum(1);
     setPdfTotalPages(0);
-  }, [open, set.id]);
+  }, [open, set.id, isPdfExam]);
 
   useEffect(() => {
     if (pdfTotalPages <= 0 || visiblePages.length === 0) return;
@@ -102,7 +103,7 @@ export default function QuestionSetExamSimulator({ set, open, onClose }: Props) 
 
   if (!open) return null;
 
-  const canSimulate = Boolean(set.examPdfUrl?.trim()) && sheetQuestions.length > 0;
+  const canSimulate = sheetQuestions.length > 0;
 
   return (
     <AnimatePresence>
@@ -136,9 +137,7 @@ export default function QuestionSetExamSimulator({ set, open, onClose }: Props) 
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
               <p className="font-sukhumvit text-[15px] font-black text-slate-700">ยังจำลองชุดนี้ไม่ได้</p>
               <p className="max-w-sm font-sarabun text-[13px] text-slate-500">
-                {!set.examPdfUrl?.trim()
-                  ? 'ชุดข้อสอบนี้ยังไม่มีไฟล์ PDF'
-                  : 'ชุดข้อสอบนี้ยังไม่ได้ตั้งค่าเฉลย'}
+                ชุดข้อสอบนี้ยังไม่มีข้อสอบหรือยังไม่ได้ตั้งค่าเฉลย
               </p>
               <button
                 type="button"
@@ -150,59 +149,63 @@ export default function QuestionSetExamSimulator({ set, open, onClose }: Props) 
             </div>
           ) : (
             <>
-              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/80 px-4 py-2 lg:hidden">
-                <button
-                  type="button"
-                  onClick={() => setPanelMode('pdf')}
-                  className={cn(
-                    'flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 font-sukhumvit text-[12px] font-black transition-colors',
-                    panelMode === 'pdf' ? 'bg-slate-900 text-white' : 'text-slate-500',
-                  )}
-                >
-                  <FileText size={14} />
-                  ข้อสอบ PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPanelMode('answers')}
-                  className={cn(
-                    'flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 font-sukhumvit text-[12px] font-black transition-colors',
-                    panelMode === 'answers' ? 'bg-slate-900 text-white' : 'text-slate-500',
-                  )}
-                >
-                  <ClipboardList size={14} />
-                  กระดาษคำตอบ
-                </button>
-              </div>
+              {isPdfExam && (
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/80 px-4 py-2 lg:hidden">
+                  <button
+                    type="button"
+                    onClick={() => setPanelMode('pdf')}
+                    className={cn(
+                      'flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 font-sukhumvit text-[12px] font-black transition-colors',
+                      panelMode === 'pdf' ? 'bg-slate-900 text-white' : 'text-slate-500',
+                    )}
+                  >
+                    <FileText size={14} />
+                    ข้อสอบ PDF
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPanelMode('answers')}
+                    className={cn(
+                      'flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 font-sukhumvit text-[12px] font-black transition-colors',
+                      panelMode === 'answers' ? 'bg-slate-900 text-white' : 'text-slate-500',
+                    )}
+                  >
+                    <ClipboardList size={14} />
+                    กระดาษคำตอบ
+                  </button>
+                </div>
+              )}
 
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-                <div
-                  className={cn(
-                    'flex min-h-0 min-w-0 flex-col overflow-hidden border-slate-200 px-3 py-3 lg:w-[58%] lg:border-r lg:px-5',
-                    panelMode !== 'pdf' ? 'hidden lg:flex' : 'flex flex-1',
-                  )}
-                >
-                  <p className="mb-2 hidden shrink-0 font-sukhumvit text-[11px] font-black uppercase tracking-[0.15em] text-slate-500 lg:block">
-                    ข้อสอบ PDF
-                  </p>
-                  {set.examPdfUrl ? (
-                    <PdfPageViewer
-                      url={set.examPdfUrl}
-                      className="min-h-0 flex-1"
-                      pageNum={pdfPageNum}
-                      onPageNumChange={setPdfPageNum}
-                      onLoadStateChange={handlePdfLoadState}
-                      showPagination={false}
-                      hiddenPages={hiddenPages}
-                      applyHiddenPages
-                    />
-                  ) : null}
-                </div>
+                {isPdfExam && (
+                  <div
+                    className={cn(
+                      'flex min-h-0 min-w-0 flex-col overflow-hidden border-slate-200 px-3 py-3 lg:w-[58%] lg:border-r lg:px-5',
+                      panelMode !== 'pdf' ? 'hidden lg:flex' : 'flex flex-1',
+                    )}
+                  >
+                    <p className="mb-2 hidden shrink-0 font-sukhumvit text-[11px] font-black uppercase tracking-[0.15em] text-slate-500 lg:block">
+                      ข้อสอบ PDF
+                    </p>
+                    {set.examPdfUrl ? (
+                      <PdfPageViewer
+                        url={set.examPdfUrl}
+                        className="min-h-0 flex-1"
+                        pageNum={pdfPageNum}
+                        onPageNumChange={setPdfPageNum}
+                        onLoadStateChange={handlePdfLoadState}
+                        showPagination={false}
+                        hiddenPages={hiddenPages}
+                        applyHiddenPages
+                      />
+                    ) : null}
+                  </div>
+                )}
 
                 <div
                   className={cn(
                     'flex min-h-0 min-w-0 flex-col overflow-hidden px-3 py-3 lg:flex-1 lg:px-5',
-                    panelMode !== 'answers' ? 'hidden lg:flex' : 'flex flex-1',
+                    isPdfExam && panelMode !== 'answers' ? 'hidden lg:flex' : 'flex flex-1',
                   )}
                 >
                   {isLoading ? (
@@ -223,7 +226,9 @@ export default function QuestionSetExamSimulator({ set, open, onClose }: Props) 
                         headerText={
                           submitted
                             ? 'ผลการตรวจ — ข้อผิดและข้อที่ไม่ได้ตอบจะถูกไฮไลต์'
-                            : 'กรอกคำตอบ (ดูโจทย์จาก PDF)'
+                            : isPdfExam
+                              ? 'กรอกคำตอบ (ดูโจทย์จาก PDF)'
+                              : 'จำลองสอบ — อ่านโจทย์แล้วเลือกคำตอบ'
                         }
                         gradeByQuestionId={submitted ? gradeSummary?.byQuestionId : undefined}
                         correctAnswerByQuestionId={submitted ? gradeSummary?.correctAnswerByQuestionId : undefined}
@@ -240,7 +245,7 @@ export default function QuestionSetExamSimulator({ set, open, onClose }: Props) 
                     ? `คะแนน ${gradeSummary.correct}/${gradeSummary.total} (${gradeSummary.scorePercent}%) · ผิด ${gradeSummary.wrong} ข้อ`
                     : `ตอบแล้ว ${answeredCount}/${sheetQuestions.length} ข้อ`}
                 </p>
-                {pdfTotalPages > 0 && panelMode === 'pdf' && !submitted && (
+                {isPdfExam && pdfTotalPages > 0 && panelMode === 'pdf' && !submitted && (
                   <PdfPagePagination
                     pageNum={pdfPageNum}
                     totalPages={pdfTotalPages}

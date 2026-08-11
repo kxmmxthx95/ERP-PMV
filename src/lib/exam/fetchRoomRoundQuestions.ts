@@ -1,7 +1,8 @@
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
+import { collection, documentId, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { buildExamPartGroups, type ExamPartGroupMeta } from '@/lib/exam/examPartGroups';
-import { deriveSetOrder, getRoundQuestionConfigForRound } from '@/lib/exam/roundQuestions';
+import { deriveSetOrder, getRoundQuestionConfigForRound, isUsableRoundConfig } from '@/lib/exam/roundQuestions';
+import { chunkIds } from '@/lib/firestoreShared/fetchStudentsByIds';
 import type { ExamRoom } from '@/types/exam';
 import type { Question } from '@/types/questionBank';
 
@@ -13,9 +14,13 @@ export type RoomRoundExamData = {
 /** Load full question docs (with answer keys) and part grouping for a specific exam round. */
 export async function fetchRoomRoundExamData(room: ExamRoom, round: number): Promise<RoomRoundExamData> {
   const { roundConfig } = getRoundQuestionConfigForRound(room, round);
-  const fallbackSetId = roundConfig?.questionSetId || room.questionSetId;
-  const selectedIds = roundConfig?.questionIds || room.selectedQuestionIds || [];
-  const setByQuestionId = roundConfig?.questionSetByQuestionId || {};
+  if (!roundConfig || !isUsableRoundConfig(roundConfig)) {
+    return { questions: [], partGroups: [] };
+  }
+
+  const fallbackSetId = roundConfig.questionSetId;
+  const selectedIds = roundConfig.questionIds ?? [];
+  const setByQuestionId = roundConfig.questionSetByQuestionId || {};
 
   if (selectedIds.length === 0 && !fallbackSetId) {
     return { questions: [], partGroups: [] };
@@ -27,9 +32,6 @@ export async function fetchRoomRoundExamData(room: ExamRoom, round: number): Pro
     if (mappedSetId) candidateSetIds.add(mappedSetId);
   });
   if (fallbackSetId) candidateSetIds.add(fallbackSetId);
-  if (candidateSetIds.size === 0 && room.questionSetId?.trim()) {
-    candidateSetIds.add(room.questionSetId.trim());
-  }
   if (candidateSetIds.size === 0) {
     return { questions: [], partGroups: [] };
   }
@@ -37,18 +39,20 @@ export async function fetchRoomRoundExamData(room: ExamRoom, round: number): Pro
   const setIds = Array.from(candidateSetIds);
   const orderedSetIds = deriveSetOrder(selectedIds, setByQuestionId, fallbackSetId ?? '');
   const metaIdsToLoad = orderedSetIds.length > 0 ? orderedSetIds : setIds;
+  // ดึง metadata ของทุก set ด้วย documentId 'in' แบบ batch แทนการ getDoc ทีละ set (N+1)
   const metaById = new Map<string, Record<string, unknown>>();
-  await Promise.all(
-    metaIdsToLoad.map(async (setId) => {
-      try {
-        const snap = await getDoc(doc(db, 'question_sets', setId));
-        const data = snap.data();
-        if (data) metaById.set(setId, data);
-      } catch {
-        /* ignore missing set meta */
-      }
-    }),
-  );
+  try {
+    const metaSnaps = await Promise.all(
+      chunkIds(metaIdsToLoad).map((group) =>
+        getDocs(query(collection(db, 'question_sets'), where(documentId(), 'in', group))),
+      ),
+    );
+    metaSnaps.forEach((snap) => {
+      snap.docs.forEach((d) => metaById.set(d.id, d.data()));
+    });
+  } catch {
+    /* ignore missing set meta */
+  }
 
   const setSnapshots = await Promise.all(
     setIds.map((setId) => getDocs(collection(db, 'question_sets', setId, 'questions'))),

@@ -8,6 +8,7 @@ const EXAM_ROOM_SUB_SUBJECT_ICONS: Partial<Record<SubjectGroupId, Record<string,
     'ชีววิทยา': '/EXAM%20ROOM/BIO.webp',
     'วิทยาศาสตร์ทั่วไป': '/EXAM%20ROOM/GEN.webp',
     'วิทยาการคำนวณ': '/EXAM%20ROOM/COM.webp',
+    'โลก ดาราศาสตร์ และอวกาศ': '/EXAM%20ROOM/ASTRO.webp',
   },
   social: {
     'ศาสนา ศีลธรรม จริยธรรม': '/EXAM%20ROOM/SOC/12.webp',

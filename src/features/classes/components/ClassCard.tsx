@@ -1,7 +1,9 @@
 import type { ClassRoomCard } from '@/types/class';
+import { cn } from '@/lib/utils';
 
 interface ClassCardProps {
   card: ClassRoomCard;
+  fill?: boolean;
 }
 
 function ClassCardPattern() {
@@ -40,7 +42,7 @@ function TeacherAvatar({
   );
 }
 
-export default function ClassCard({ card }: ClassCardProps) {
+export default function ClassCard({ card, fill = false }: ClassCardProps) {
   const { classRoom, homeroomTeachers, isFull } = card;
   const teachers = homeroomTeachers.length > 0
     ? homeroomTeachers
@@ -50,9 +52,12 @@ export default function ClassCard({ card }: ClassCardProps) {
   const multiTeacher = teachers.length > 1;
 
   return (
-    <div className="group cursor-pointer select-none">
+    <div className={cn('group cursor-pointer select-none', fill && 'h-full w-full')}>
       <div
-        className="relative aspect-[2.6/1] lg:aspect-square rounded-2xl overflow-hidden shadow-md transition-all duration-300 group-hover:opacity-95 group-hover:shadow-xl bg-gradient-to-br from-blue-500 via-blue-600 to-blue-700"
+        className={cn(
+          'relative w-full overflow-hidden rounded-2xl shadow-md transition-all duration-300 group-hover:opacity-95 group-hover:shadow-xl bg-gradient-to-br from-blue-500 via-blue-600 to-blue-700',
+          fill ? 'aspect-[2.4/1]' : 'aspect-[2.6/1] lg:aspect-square',
+        )}
       >
         <ClassCardPattern />
         <div

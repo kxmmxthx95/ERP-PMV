@@ -1,26 +1,52 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, CheckCircle2, AlertCircle, PlayCircle, Trophy, RefreshCcw } from 'lucide-react';
+import {
+  HiXMark,
+  HiCheckCircle,
+  HiExclamationCircle,
+  HiArrowPath,
+  HiTrophy,
+  HiChevronLeft,
+  HiChevronRight,
+} from 'react-icons/hi2';
 import {
   type Question, isMultipleChoice
 } from '@/types/questionBank';
 import ExamQuestionContent from './ExamQuestionContent';
 import { DEFAULT_OPTION_LABELS } from '@/features/questionBank/utils/optionLabels';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { useImageLongPressPreview } from '@/features/questionBank/hooks/useImageLongPressPreview';
 
 interface Props {
   open: boolean;
   onClose: () => void;
   question: Question | null;
+  /** เช่น "ข้อ 2/15" */
+  progressLabel?: string;
+  /** นำทางชุดข้อสอบ — ส่งคู่ onPrev/onNext เพื่อโชว์ปุ่มไป/กลับ */
+  onPrev?: () => void;
+  onNext?: () => void;
+  canPrev?: boolean;
+  canNext?: boolean;
 }
 
-export default function QuestionSimulatorModal({ open, onClose, question }: Props) {
+export default function QuestionSimulatorModal({
+  open,
+  onClose,
+  question,
+  progressLabel,
+  onPrev,
+  onNext,
+  canPrev = false,
+  canNext = false,
+}: Props) {
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const openImagePreview = useCallback((url: string) => setLightboxUrl(url), []);
+  const showNav = onPrev != null || onNext != null;
 
   useEffect(() => {
     if (open) {
@@ -57,45 +83,47 @@ export default function QuestionSimulatorModal({ open, onClose, question }: Prop
     <>
       <AnimatePresence>
         {open && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={onClose}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+              className="absolute inset-0 bg-black/30 supports-backdrop-filter:backdrop-blur-sm"
             />
 
             <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-[540px] bg-white rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden border border-white max-h-[90vh]"
+              exit={{ opacity: 0, scale: 0.96, y: 8 }}
+              transition={{ duration: 0.18 }}
+              className="relative flex max-h-[min(90dvh,820px)] w-full max-w-[540px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-xl"
             >
               {/* Header */}
-              <div className="p-5 flex items-center justify-between border-b border-slate-100 shrink-0">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600">
-                    <PlayCircle size={20} strokeWidth={2.5} />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-black text-slate-800 font-sukhumvit leading-none">จำลองการทำข้อสอบ</h3>
-                    <p className="text-[11px] font-bold text-slate-400 font-sarabun mt-1 tracking-wide uppercase">Exam Simulator Mode</p>
-                  </div>
+              <div className="relative flex shrink-0 items-center gap-3 border-b border-border px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
+                <div className="min-w-0 flex-1 pr-10">
+                  <h3 className="truncate text-lg font-black tracking-tight text-foreground font-sukhumvit sm:text-xl">
+                    จำลองการทำข้อสอบ
+                  </h3>
+                  {progressLabel ? (
+                    <p className="mt-0.5 truncate text-[11px] font-bold text-muted-foreground font-sarabun">
+                      {progressLabel}
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   type="button"
                   onClick={onClose}
                   aria-label="ปิด"
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors shrink-0"
+                  className="absolute right-4 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition hover:bg-muted hover:text-foreground"
                 >
-                  <X size={16} strokeWidth={2.5} />
+                  <HiXMark className="h-4 w-4" />
                 </button>
               </div>
 
               {/* Content */}
-              <div className="flex-1 overflow-y-auto px-6 py-7 custom-scrollbar">
-                <div className="mb-8">
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 scrollbar-hide sm:px-6">
+                <div className="mb-5">
                   <ExamQuestionContent
                     html={question.questionText}
                     variant="question"
@@ -103,7 +131,6 @@ export default function QuestionSimulatorModal({ open, onClose, question }: Prop
                   />
                 </div>
 
-                {/* Options — layout เหมือนตอนสร้างข้อสอบ */}
                 {isMultipleChoice(question) && (
                   <div className="space-y-2">
                     {question.payload.options.map((option, idx) => {
@@ -111,16 +138,18 @@ export default function QuestionSimulatorModal({ open, onClose, question }: Prop
                       const isCorrectOption = option.isCorrect;
                       const label = DEFAULT_OPTION_LABELS[idx] ?? String(idx + 1);
 
-                      let variantStyles = 'bg-slate-50 border-slate-200 hover:border-slate-300';
-                      if (isSelected) variantStyles = 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-500/10';
+                      let variantStyles = 'bg-muted/50 border-border hover:border-foreground/20';
+                      if (isSelected) {
+                        variantStyles = 'bg-primary/5 border-primary ring-2 ring-primary/15';
+                      }
 
                       if (isSubmitted) {
                         if (isCorrectOption) {
-                          variantStyles = 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/10 shadow-lg shadow-emerald-500/10';
+                          variantStyles = 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/10';
                         } else if (isSelected && !isCorrectOption) {
-                          variantStyles = 'bg-rose-50 border-rose-500 ring-2 ring-rose-500/10';
+                          variantStyles = 'bg-destructive/5 border-destructive ring-2 ring-destructive/15';
                         } else {
-                          variantStyles = 'bg-slate-50 border-slate-100 opacity-60';
+                          variantStyles = 'bg-muted/40 border-border opacity-60';
                         }
                       }
 
@@ -133,33 +162,35 @@ export default function QuestionSimulatorModal({ open, onClose, question }: Prop
                           onClick={() => handleOptionSelect(option.id)}
                           disabled={isSubmitted}
                           className={cn(
-                            'w-full rounded-xl border text-left transition-all flex items-start gap-2 p-1',
+                            'flex w-full items-start gap-2 rounded-xl border p-1.5 text-left transition-all',
                             variantStyles,
                           )}
                         >
-                          <div className={cn(
-                            'mt-1 shrink-0 w-9 h-9 rounded-full flex items-center justify-center font-black text-[13px] font-sukhumvit transition-all',
-                            isSubmitted && isCorrectOption
-                              ? 'bg-emerald-500 text-white'
-                              : isSelected
-                                ? 'bg-indigo-600 text-white'
-                                : 'bg-white/80 text-slate-500 border border-slate-200/70',
-                          )}>
+                          <div
+                            className={cn(
+                              'mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-black font-sukhumvit transition-all',
+                              isSubmitted && isCorrectOption
+                                ? 'bg-emerald-500 text-white'
+                                : isSelected
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'border border-border bg-card text-muted-foreground',
+                            )}
+                          >
                             {isSubmitted && isCorrectOption ? (
-                              <CheckCircle2 size={15} />
+                              <HiCheckCircle className="h-4 w-4" />
                             ) : (
                               label
                             )}
                           </div>
 
-                          <div className="flex-1 min-w-0 flex items-start gap-2">
+                          <div className="flex min-w-0 flex-1 items-start gap-2">
                             <ExamQuestionContent
                               html={option.text}
                               variant="option"
                               onImagePreview={openImagePreview}
                             />
                             {isSubmitted && isSelected && !isCorrectOption && (
-                              <AlertCircle size={18} className="text-rose-500 shrink-0 mt-2" />
+                              <HiExclamationCircle className="mt-2 h-4 w-4 shrink-0 text-destructive" />
                             )}
                           </div>
 
@@ -177,52 +208,93 @@ export default function QuestionSimulatorModal({ open, onClose, question }: Prop
               </div>
 
               {/* Footer */}
-              <div className="px-4 py-3 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0">
-                <div className="min-w-0">
-                  <AnimatePresence mode="wait">
-                    {isSubmitted && (
-                      <motion.div
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className="flex items-center gap-1.5"
-                      >
-                        {isCorrect ? (
-                          <div className="flex items-center gap-1.5 text-emerald-600 font-black font-sukhumvit text-[12px]">
-                            <Trophy size={15} />
-                            ถูกต้อง! เก่งมาก
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 text-rose-600 font-black font-sukhumvit text-[12px]">
-                            <AlertCircle size={15} />
-                            ยังไม่ถูก ลองดูใหม่นะ
-                          </div>
-                        )}
-                      </motion.div>
+              <div className="flex shrink-0 flex-col gap-3 border-t border-border px-5 pt-4 pb-5 sm:px-6 sm:pb-6">
+                {isSubmitted && (
+                  <div
+                    className={cn(
+                      'flex items-center gap-1.5 text-[12px] font-black font-sukhumvit',
+                      isCorrect ? 'text-emerald-600' : 'text-destructive',
                     )}
-                  </AnimatePresence>
-                </div>
+                  >
+                    {isCorrect ? (
+                      <>
+                        <HiTrophy className="h-4 w-4" />
+                        ถูกต้อง! เก่งมาก
+                      </>
+                    ) : (
+                      <>
+                        <HiExclamationCircle className="h-4 w-4" />
+                        ยังไม่ถูก ลองดูใหม่นะ
+                      </>
+                    )}
+                  </div>
+                )}
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2">
+                  {showNav ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={onPrev}
+                      disabled={!canPrev}
+                      className="h-10 shrink-0 rounded-xl px-3 text-xs font-bold"
+                      aria-label="ข้อก่อน"
+                    >
+                      <HiChevronLeft className="h-4 w-4" />
+                      <span className="hidden sm:inline">ข้อก่อน</span>
+                    </Button>
+                  ) : null}
+
                   {isSubmitted ? (
                     <Button
-                      onClick={handleRetry}
-                      className="h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-slate-600 text-[12px] font-black font-sukhumvit flex items-center gap-1.5 hover:bg-slate-50 transition-all"
+                      type="button"
+                      variant={showNav ? 'secondary' : 'default'}
+                      onClick={showNav ? handleRetry : onClose}
+                      className="h-10 min-w-0 flex-1 rounded-xl text-xs font-bold"
                     >
-                      <RefreshCcw size={14} />
+                      {showNav ? (
+                        <>
+                          <HiArrowPath className="h-3.5 w-3.5" />
+                          ทำใหม่
+                        </>
+                      ) : (
+                        'ปิด'
+                      )}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      onClick={handleSubmit}
+                      disabled={!selectedOptionId}
+                      className="h-10 min-w-0 flex-1 rounded-xl text-xs font-bold"
+                    >
+                      ส่งคำตอบ
+                    </Button>
+                  )}
+
+                  {showNav ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={onNext}
+                      disabled={!canNext}
+                      className="h-10 shrink-0 rounded-xl px-3 text-xs font-bold"
+                      aria-label="ข้อถัดไป"
+                    >
+                      <span className="hidden sm:inline">ข้อถัดไป</span>
+                      <HiChevronRight className="h-4 w-4" />
+                    </Button>
+                  ) : isSubmitted ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={handleRetry}
+                      className="h-10 shrink-0 rounded-xl px-3 text-xs font-bold"
+                    >
+                      <HiArrowPath className="h-3.5 w-3.5" />
                       ทำใหม่
                     </Button>
                   ) : null}
-                  <Button
-                    onClick={isSubmitted ? onClose : handleSubmit}
-                    disabled={!selectedOptionId && !isSubmitted}
-                    className={`h-9 px-4 rounded-xl text-[12px] font-black font-sukhumvit transition-all ${
-                      isSubmitted
-                        ? 'bg-slate-900 text-white hover:bg-slate-800'
-                        : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-600/20 disabled:opacity-50 disabled:shadow-none'
-                    }`}
-                  >
-                    {isSubmitted ? 'ปิดหน้าต่าง' : 'ส่งคำตอบ'}
-                  </Button>
                 </div>
               </div>
             </motion.div>
@@ -230,7 +302,6 @@ export default function QuestionSimulatorModal({ open, onClose, question }: Prop
         )}
       </AnimatePresence>
 
-      {/* Image lightbox */}
       <AnimatePresence>
         {lightboxUrl && (
           <div
@@ -248,19 +319,21 @@ export default function QuestionSimulatorModal({ open, onClose, question }: Prop
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.85 }}
               transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-              className="relative z-10 max-w-[90vw] max-h-[85vh]"
+              className="relative z-10 max-h-[85vh] max-w-[90vw]"
               onClick={(e) => e.stopPropagation()}
             >
               <img
                 src={lightboxUrl}
                 alt=""
-                className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
+                className="max-h-[85vh] max-w-full rounded-2xl object-contain shadow-2xl"
               />
               <button
+                type="button"
                 onClick={() => setLightboxUrl(null)}
-                className="absolute -top-3 -right-3 w-9 h-9 rounded-full bg-white text-slate-700 flex items-center justify-center shadow-lg hover:bg-slate-100 transition-colors"
+                aria-label="ปิด"
+                className="absolute -right-3 -top-3 flex size-9 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-md transition hover:bg-muted"
               >
-                <X size={16} strokeWidth={2.5} />
+                <HiXMark className="h-4 w-4" />
               </button>
             </motion.div>
           </div>
@@ -283,37 +356,15 @@ function OptionImageThumbnail({
   return (
     <div
       ref={ref}
-      className="shrink-0 mt-1 w-20"
+      className="mt-1 w-20 shrink-0"
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
       <img
         src={url}
         alt=""
-        className="w-full h-16 object-cover rounded-lg border border-white/60 shadow-sm"
+        className="h-16 w-full rounded-lg border border-border object-cover shadow-sm"
       />
     </div>
-  );
-}
-
-function Button({
-  children,
-  onClick,
-  disabled,
-  className
-}: {
-  children: React.ReactNode;
-  onClick?: () => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <button
-      disabled={disabled}
-      onClick={onClick}
-      className={className}
-    >
-      {children}
-    </button>
   );
 }

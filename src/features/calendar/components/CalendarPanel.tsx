@@ -51,7 +51,7 @@ export default function CalendarPanel({
   return (
     <motion.div
       variants={cardAnim}
-      className="rounded-[2rem] overflow-hidden flex flex-col h-full"
+      className="rounded-2xl overflow-hidden flex flex-col h-full"
       style={glassCard}
     >
       <CalendarMonthNav

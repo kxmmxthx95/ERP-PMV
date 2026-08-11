@@ -1,10 +1,4 @@
 {
-  "database": [
-    {
-      "instance": "pmv1-90180-default-rtdb",
-      "rules": "database.rules.json"
-    }
-  ],
   "firestore": [
     {
       "database": "(default)",

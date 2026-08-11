@@ -605,6 +605,8 @@ export default function TodayScheduleWidget() {
           lateStudentIds,
           leaveStudentIds,
           totalStudents: attendanceRows.length,
+          // เคลียร์ flag จาก sync ใบลา — ไม่เช่นนั้นงานประจำวันครูค้าง «รอทำ»
+          leaveSyncOnly: false,
           updatedAt: recordedAt,
           createdAt: recordedAt,
         },
@@ -669,11 +671,11 @@ export default function TodayScheduleWidget() {
               ไม่พบโปรไฟล์ครู
             </p>
           ) : isNonSchoolDay ? (
-            <div className="w-full min-w-0">
-              <p className="text-[10px] font-black text-slate-800 leading-tight truncate">
+            <div className="flex h-full flex-col items-center justify-center gap-1 w-full min-w-0 text-center px-1">
+              <p className="text-[10px] font-black text-slate-800 leading-tight line-clamp-2">
                 {isWeekend ? 'วันหยุดสุดสัปดาห์' : `วันหยุด${holidayTitle ? ` · ${holidayTitle}` : ''}`}
               </p>
-              <p className="text-[9px] font-bold text-slate-500 mt-0.5">ไม่ต้องเช็กชื่อ</p>
+              <p className="text-[9px] font-bold text-slate-500">ไม่ต้องเช็กชื่อ</p>
             </div>
           ) : todaysEntries.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-1 w-full text-center">

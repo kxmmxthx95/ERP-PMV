@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -32,9 +32,10 @@ import {
 } from '@/types/curriculum';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import QuestionBankMobileBrowse from './components/QuestionBankMobileBrowse';
 import { SubjectIcon } from '@/features/curriculum/utils/subjectVisual';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
-import { buildTeacherIdentityKeys } from '@/lib/teachers/teacherIdentity';
+import { buildTeacherIdentityKeys, resolveTeacherFromAuth } from '@/lib/teachers/teacherIdentity';
 import { resolveQuestionSetCreatorName } from '@/features/questionBank/utils/questionSetCreatorName';
 import QuestionSetBuilder from './components/QuestionSetBuilder';
 import QuestionSetImportModal from './components/QuestionSetImportModal';
@@ -61,8 +62,10 @@ const SUBJECT_GROUP_ENTRIES = (
 export default function QuestionBankManager() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { role } = useAuth();
+  const { role, user, userData } = useAuth();
   const isStudentView = role === 'student';
+  const isTeacherView = role === 'teacher';
+  const showTeacherBrowse = !isStudentView && !isTeacherView;
   const { teachers } = useTeachersCollection();
   const {
     isLoading: isSetLoading,
@@ -192,11 +195,84 @@ export default function QuestionBankManager() {
     || browseStep.level === 'subgroups'
     || Boolean(search.trim());
 
+  const currentTeacher = useMemo(
+    () => (user?.uid ? resolveTeacherFromAuth(user.uid, teachers) : null),
+    [user?.uid, teachers],
+  );
+
+  const homeDepartment = useMemo((): Department | null => {
+    const parseDept = (raw: string | undefined | null): Department | null => {
+      const value = String(raw ?? '').trim();
+      if (value === 'early' || value === 'primary' || value === 'secondary') return value;
+      return null;
+    };
+    if (!isTeacherView && !isStudentView) return null;
+    const fromTeacherProfile = parseDept(currentTeacher?.department);
+    if (fromTeacherProfile) return fromTeacherProfile;
+    const userDept = userData as { departmentId?: string; department?: string } | null;
+    return parseDept(userDept?.departmentId) ?? parseDept(userDept?.department);
+  }, [isTeacherView, isStudentView, currentTeacher?.department, userData]);
+
+  const setCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    questionSets
+      .filter((set) => set.setKind !== 'exercise')
+      .filter((set) => !isStudentView || set.isPublished)
+      .forEach((set) => {
+        const dept = (set.department || set.departmentId) as Department | undefined;
+        if (dept && dept in DEPARTMENT_CONFIG) {
+          if (homeDepartment && dept !== homeDepartment) return;
+          counts[dept] = (counts[dept] ?? 0) + 1;
+        }
+      });
+    return counts;
+  }, [questionSets, isStudentView, homeDepartment]);
+
+  /** Teacher/student: single home dept only. Admin: undefined → all depts in DeptCoverFlow. */
+  const browseVisibleDepartments = useMemo((): Department[] | undefined => {
+    if (!isTeacherView && !isStudentView) return undefined;
+    return homeDepartment ? [homeDepartment] : [];
+  }, [isTeacherView, isStudentView, homeDepartment]);
+
+  const showMobileBrowse = isMdOrBelow && !hasRightSelection;
+  const needsCustomMobileBack = isMdOrBelow && (Boolean(filterDepartment) || hasRightSelection || Boolean(search.trim()));
+
+  const handleMobileBack = useCallback(() => {
+    if (search.trim()) {
+      setSearch('');
+      return;
+    }
+    if (hasRightSelection) {
+      if (canBrowseBack) {
+        handleBrowseBack();
+        return;
+      }
+      resetBrowseNav();
+      return;
+    }
+    if (filterGradeLevel || selectedTeacherId) {
+      setFilterGradeLevel('');
+      setSelectedTeacherId(null);
+      resetBrowseNav();
+      return;
+    }
+    if (filterDepartment) {
+      setFilterDepartment('');
+      resetBrowseNav();
+      return;
+    }
+  }, [search, hasRightSelection, canBrowseBack, handleBrowseBack, filterGradeLevel, selectedTeacherId, filterDepartment]);
+
   useEffect(() => {
     const defaultBack = document.getElementById('portal-default-mobile-back');
     if (!defaultBack) return;
-    defaultBack.style.display = hasRightSelection ? 'none' : '';
-  }, [hasRightSelection]);
+    defaultBack.style.display = needsCustomMobileBack ? 'none' : '';
+  }, [needsCustomMobileBack]);
+
+  useEffect(() => {
+    if (!isMdOrBelow) return;
+    document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+  }, [isMdOrBelow, filterDepartment, hasRightSelection, selectedSet?.id, browseStep.level]);
 
   useEffect(() => {
     const state = location.state as {
@@ -252,11 +328,11 @@ export default function QuestionBankManager() {
       gradeLevel: filters.gradeLevel,
     }).filter((set) => set.setKind !== 'exercise');
     const published = isStudentView ? filtered.filter((set) => set.isPublished) : filtered;
-    if (browseMode !== 'teacher' || !selectedTeacherId) return published;
+    if (!showTeacherBrowse || browseMode !== 'teacher' || !selectedTeacherId) return published;
     const teacher = teachers.find((t) => t.id === selectedTeacherId);
     const keys = buildTeacherIdentityKeys(teacher?.userId ?? '', teacher ?? null);
     return published.filter((set) => keys.has(String(set.createdBy ?? '').trim()));
-  }, [filterQuestionSets, filters.department, filters.gradeLevel, isStudentView, browseMode, selectedTeacherId, teachers]);
+  }, [filterQuestionSets, filters.department, filters.gradeLevel, isStudentView, showTeacherBrowse, browseMode, selectedTeacherId, teachers]);
 
   const departmentSets = useMemo(() => {
     if (!filterDepartment) return [];
@@ -270,8 +346,17 @@ export default function QuestionBankManager() {
     return isStudentView ? filtered.filter((set) => set.isPublished) : filtered;
   }, [filterQuestionSets, filterDepartment, isStudentView]);
 
+  const gradeSetCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    departmentSets.forEach((set) => {
+      const grade = set.gradeLevel?.trim();
+      if (grade) counts[grade] = (counts[grade] ?? 0) + 1;
+    });
+    return counts;
+  }, [departmentSets]);
+
   const teacherEntries = useMemo(() => {
-    if (!filterDepartment || browseMode !== 'teacher') return [];
+    if (!filterDepartment || !showTeacherBrowse || browseMode !== 'teacher') return [];
     return teachers
       .filter((t) => t.department === filterDepartment)
       .map((t) => {
@@ -284,7 +369,7 @@ export default function QuestionBankManager() {
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name, 'th'));
-  }, [teachers, departmentSets, filterDepartment, browseMode]);
+  }, [teachers, departmentSets, filterDepartment, browseMode, showTeacherBrowse]);
 
   const selectedTeacherEntry = useMemo(
     () => teacherEntries.find((t) => t.id === selectedTeacherId) ?? null,
@@ -595,7 +680,7 @@ export default function QuestionBankManager() {
 
   const collapsedBrowseRail = filterDepartment ? (
     <div className="flex w-full flex-col items-center gap-2 border-t border-border px-1.5 py-2">
-      {!isStudentView && (
+      {showTeacherBrowse && (
         <div className="flex w-full flex-col items-center gap-1.5 pb-1">
           {(
             [
@@ -730,43 +815,51 @@ export default function QuestionBankManager() {
         headerCenterMobilePortalEl,
       )}
 
-      {isMdOrBelow && headerMobileBackPortalEl && hasRightSelection && createPortal(
+      {isMdOrBelow && headerMobileBackPortalEl && needsCustomMobileBack && createPortal(
         <button
           type="button"
-          onClick={() => {
-            if (isSearchActive) {
-              setSearch('');
-              return;
-            }
-            if (canBrowseBack) {
-              handleBrowseBack();
-              return;
-            }
-            resetBrowseNav();
-          }}
+          onClick={handleMobileBack}
           className={HEADER_ICON_BTN}
-          title="กลับ"
-          aria-label="กลับ"
+          title={
+            hasRightSelection
+              ? 'กลับ'
+              : filterGradeLevel || selectedTeacherId
+                ? browseMode === 'teacher' ? 'กลับเลือกครู' : 'กลับเลือกชั้น'
+                : filterDepartment
+                  ? 'กลับเลือกแผนก'
+                  : 'กลับ'
+          }
+          aria-label={
+            hasRightSelection
+              ? 'กลับ'
+              : filterGradeLevel || selectedTeacherId
+                ? browseMode === 'teacher' ? 'กลับเลือกครู' : 'กลับเลือกชั้น'
+                : filterDepartment
+                  ? 'กลับเลือกแผนก'
+                  : 'กลับ'
+          }
         >
           <HiArrowLeft size={16} />
         </button>,
         headerMobileBackPortalEl,
       )}
 
-      {headerMobileActionsPortalEl && createPortal(
+      {headerMobileActionsPortalEl && (!showMobileBrowse || !isStudentView) && createPortal(
         <div className={cn('pointer-events-auto relative flex lg:hidden', HEADER_ICON_BTN_GROUP)}>
-          <button
-            type="button"
-            onClick={() => setMobileFilterDrawerOpen(true)}
-            className={HEADER_ICON_BTN}
-            title="ตัวกรอง"
-            aria-label="ตัวกรอง"
-          >
-            <HiOutlineFunnel size={16} />
-            {hasActiveFilters && (
-              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-destructive" aria-hidden />
-            )}
-          </button>
+          {!showMobileBrowse && (
+            <button
+              type="button"
+              onClick={() => setMobileFilterDrawerOpen(true)}
+              className={HEADER_ICON_BTN}
+              title="ตัวกรอง"
+              aria-label="ตัวกรอง"
+            >
+              <HiOutlineFunnel size={16} />
+              {hasActiveFilters && (
+                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-destructive" aria-hidden />
+              )}
+            </button>
+          )}
           {!isStudentView && (
             <div className="relative">
               <button
@@ -863,11 +956,32 @@ export default function QuestionBankManager() {
       </ExamMobileFilterDrawer>
 
       <div className="flex min-h-0 flex-1 basis-0 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch">
+        {showMobileBrowse ? (
+          <QuestionBankMobileBrowse
+            selectedDept={filterDepartment}
+            browseMode={browseMode}
+            selectedGrade={filterGradeLevel}
+            selectedTeacherId={selectedTeacherId}
+            gradeOptions={gradeOptions}
+            gradeSetCounts={gradeSetCounts}
+            setCountsByDept={setCountsByDept}
+            isStudentView={isStudentView}
+            showTeacherBrowse={showTeacherBrowse}
+            canShowSubjectGroups={canShowSubjectGroups}
+            onSelectDept={handleSelectDept}
+            onBrowseMode={handleBrowseMode}
+            onSelectGrade={handleSelectGrade}
+            subjectGroupNav={subjectGroupNav}
+            teacherList={teacherList}
+            departments={browseVisibleDepartments}
+          />
+        ) : null}
+
         <div
           className={cn(
             'flex h-full min-h-0 w-full shrink-0 flex-col self-stretch overflow-hidden',
             sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
-            hasRightSelection ? 'hidden lg:flex' : 'flex min-h-0 flex-1 lg:flex-none',
+            hasRightSelection ? 'hidden lg:flex' : 'hidden min-h-0 flex-1 lg:flex lg:flex-none',
           )}
         >
           <GradeBookClassSidebar
@@ -879,9 +993,10 @@ export default function QuestionBankManager() {
             onSelectDept={handleSelectDept}
             onSelectGrade={handleSelectGrade}
             onSelectClass={() => {}}
+            departments={browseVisibleDepartments}
             showRooms={false}
             showGradeRoomNav={browseMode === 'grade'}
-            afterDept={!isStudentView ? modeToggle : null}
+            afterDept={showTeacherBrowse ? modeToggle : null}
             collapsed={sidebarCollapsed}
             collapsedExtra={collapsedBrowseRail}
             headerAction={(
@@ -921,7 +1036,9 @@ export default function QuestionBankManager() {
 
         <div
           className={cn(
-            'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
+            'relative flex min-h-0 flex-1 basis-0 flex-col self-stretch overflow-hidden',
+            'rounded-none border-0 bg-transparent p-0',
+            'lg:rounded-2xl lg:border lg:border-border lg:bg-card lg:px-2.5 lg:pb-2.5',
             !hasRightSelection && 'hidden lg:flex',
           )}
         >

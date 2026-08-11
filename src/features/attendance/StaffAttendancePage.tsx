@@ -32,9 +32,13 @@ import { useAuth } from '@/hooks/useAuth';
 import {
   useAdminStaffAttendance,
   resolveStaffAttendanceDisplay,
+  overrideStaffAttendanceStatus,
   type StaffAttendanceRecord,
   type AttendanceStatus,
 } from '@/hooks/useStaffAttendance';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { formatThaiDateLabelFromIso } from '@/lib/dateUtils';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
 import {
   buildTeacherPositionByUserId,
@@ -139,10 +143,16 @@ function toYMD(d: Date): string {
 }
 
 function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: PersonalStatsPanelProps) {
-  const { role } = useAuth();
+  const { user, role } = useAuth();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [rows, setRows] = useState<CheckInHistoryRow[]>([]);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [editDay, setEditDay] = useState<{
+    date: string;
+    status: AttendanceStatus;
+    note: string;
+  } | null>(null);
 
   const now = new Date();
   const [viewY, setViewY] = useState(now.getFullYear());
@@ -204,11 +214,19 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
     };
     run();
     return () => { cancelled = true; };
-  }, [row.userId, leaveDates, isSpecialTeacher, viewY, viewM, calendarEvents]);
+  }, [row.userId, leaveDates, isSpecialTeacher, viewY, viewM, calendarEvents, reloadToken]);
 
   const statusByDate = useMemo(() => {
     const m = new Map<string, CheckInHistoryStatus>();
     rows.forEach((r) => m.set(r.date, r.status));
+    return m;
+  }, [rows]);
+
+  const noteByDate = useMemo(() => {
+    const m = new Map<string, string>();
+    rows.forEach((r) => {
+      if (r.note) m.set(r.date, r.note);
+    });
     return m;
   }, [rows]);
 
@@ -217,6 +235,16 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
 
   const cells = useMemo(() => getMonthGrid(viewY, viewM), [viewY, viewM]);
   const todayStr = toYMD(now);
+
+  const openDayEditor = (dateStr: string, status: CheckInHistoryStatus | undefined) => {
+    const editableStatus: AttendanceStatus =
+      status === 'present' || status === 'late' || status === 'absent' ? status : 'present';
+    setEditDay({
+      date: dateStr,
+      status: editableStatus,
+      note: noteByDate.get(dateStr) ?? '',
+    });
+  };
 
   return (
     <motion.div
@@ -227,7 +255,7 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
       transition={{ duration: 0.2, ease: 'easeOut' }}
       className="lg:rounded-2xl lg:bg-card lg:border lg:border-border p-5 flex-1 flex flex-col min-h-0 h-full"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex shrink-0 items-start justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-14 h-14 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
             {row.photoURL ? (
@@ -255,7 +283,7 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
       </div>
 
       {/* Stats summary */}
-      <div className="mt-4 grid grid-cols-5 gap-2">
+      <div className="mt-4 grid shrink-0 grid-cols-5 gap-2">
         <div className="rounded-xl bg-slate-50 border border-slate-100 px-1 py-2 text-center">
           <p className="text-[9px] font-bold text-slate-500 truncate">วันทำงาน</p>
           <p className="text-[16px] font-black text-slate-800 tabular-nums">{loading ? '—' : stats.total}</p>
@@ -279,7 +307,7 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
       </div>
 
       {/* Month nav */}
-      <div className="mt-4 mb-3 flex items-center justify-between">
+      <div className="mt-4 mb-3 flex shrink-0 items-center justify-between">
         <button
           type="button"
           onClick={() => {
@@ -316,7 +344,7 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
       </div>
 
       {/* Weekday headers */}
-      <div className="mb-1 grid grid-cols-7 gap-1">
+      <div className="mb-1 grid shrink-0 grid-cols-7 gap-1.5">
         {WEEKDAY_LABELS.map((d, idx) => (
           <div
             key={d}
@@ -330,16 +358,17 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
         ))}
       </div>
 
-      {/* Calendar grid */}
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.div
-          key={`${viewY}-${viewM}`}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -6 }}
-          transition={{ duration: 0.18 }}
-          className="flex-1 grid grid-cols-7 auto-rows-fr gap-1.5 min-h-0"
-        >
+      {/* Calendar grid — auto-rows-fr เติมพื้นที่ที่เหลือ; ช่องต้อง min-h-0 (ห้าม min-h คงที่) ไม่งั้นแถวสั้นแล้วช่องล้นซ้อนกัน */}
+      <div className="min-h-0 flex-1">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={`${viewY}-${viewM}`}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18 }}
+            className="grid h-full min-h-0 grid-cols-7 auto-rows-fr gap-1.5"
+          >
           {cells.map((date) => {
             const dateStr = toYMD(date);
             const status = statusByDate.get(dateStr);
@@ -355,12 +384,16 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
               (event) => event.type === 'holiday' && dateStr >= event.startDate && dateStr <= event.endDate,
             );
             const hasStatusColor = !isFuture && isCurrentMonth && !isHoliday && !!status;
+            const canEdit = isCurrentMonth && !isFuture && !isHoliday;
 
             return (
-              <div
+              <button
                 key={dateStr}
+                type="button"
+                disabled={!canEdit}
+                onClick={() => canEdit && openDayEditor(dateStr, status)}
                 className={cn(
-                  'relative flex flex-col items-start justify-between overflow-hidden rounded-xl border p-2 h-full min-h-[4.5rem] transition-all',
+                  'relative flex h-full min-h-0 flex-col items-start justify-start overflow-hidden rounded-xl border p-2 text-left transition-colors',
                   isToday && 'ring-1 ring-blue-300',
                   !isCurrentMonth
                     ? 'bg-slate-50/40 border-slate-200 opacity-60'
@@ -369,8 +402,20 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
                       : hasStatusColor
                         ? (STATUS_CELL_BG[status as string] ?? 'bg-slate-50 border-slate-200')
                         : 'bg-white border-slate-200',
+                  canEdit && 'cursor-pointer hover:brightness-[0.98] active:scale-[0.98]',
                 )}
-                title={isHoliday ? 'วันหยุด' : hasStatusColor ? STATUS_CONFIG[status as AttendanceStatus]?.label : undefined}
+                title={
+                  isHoliday
+                    ? 'วันหยุด'
+                    : canEdit
+                      ? `แก้ไขสถานะ · ${STATUS_CONFIG[status as AttendanceStatus]?.label ?? 'ยังไม่มีข้อมูล'}`
+                      : undefined
+                }
+                aria-label={
+                  canEdit
+                    ? `แก้ไขสถานะวันที่ ${date.getDate()}`
+                    : `วันที่ ${date.getDate()}`
+                }
               >
                 <span
                   className={cn(
@@ -384,15 +429,56 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
                 >
                   {date.getDate()}
                 </span>
-              </div>
+              </button>
             );
           })}
         </motion.div>
-      </AnimatePresence>
+        </AnimatePresence>
+      </div>
 
       {loadError ? (
-        <p className="mt-3 text-[11px] font-semibold text-rose-600">{loadError}</p>
+        <p className="mt-3 shrink-0 text-[11px] font-semibold text-rose-600">{loadError}</p>
       ) : null}
+
+      <AnimatePresence>
+        {editDay && (
+          <OverrideModal
+            record={{
+              id: `${row.userId}_${editDay.date}`,
+              userId: row.userId,
+              displayName: row.displayName,
+              date: editDay.date,
+              checkInTime: null,
+              checkOutTime: null,
+              status: editDay.status,
+              note: editDay.note,
+            }}
+            dateLabel={formatThaiDateLabelFromIso(editDay.date)}
+            onClose={() => setEditDay(null)}
+            onSave={async (nextStatus, note) => {
+              if (!user?.uid) {
+                toast.error('ไม่พบผู้ใช้ที่ล็อกอิน');
+                return;
+              }
+              try {
+                await overrideStaffAttendanceStatus({
+                  date: editDay.date,
+                  userId: row.userId,
+                  displayName: row.displayName,
+                  status: nextStatus,
+                  note,
+                  adminUid: user.uid,
+                });
+                toast.success('บันทึกสถานะเข้างานแล้ว');
+                setEditDay(null);
+                setReloadToken((n) => n + 1);
+              } catch {
+                toast.error('บันทึกไม่สำเร็จ');
+              }
+            }}
+          />
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -400,12 +486,33 @@ function PersonalStatsPanel({ row, leaveRequests, isSpecialTeacher = false }: Pe
 // ── Admin Override Modal ──────────────────────────────────────────────────────
 interface OverrideModalProps {
   record: StaffAttendanceRecord | null;
+  dateLabel?: string;
   onClose: () => void;
-  onSave: (status: AttendanceStatus, note: string) => void;
+  onSave: (status: AttendanceStatus, note: string) => void | Promise<void>;
 }
-function OverrideModal({ record, onClose, onSave }: OverrideModalProps) {
-  const [status, setStatus] = useState<AttendanceStatus>(record?.status ?? 'present');
+function OverrideModal({ record, dateLabel, onClose, onSave }: OverrideModalProps) {
+  const initialStatus: AttendanceStatus =
+    record?.status === 'present' || record?.status === 'late' || record?.status === 'absent'
+      ? record.status
+      : 'present';
+  const [status, setStatus] = useState<AttendanceStatus>(initialStatus);
   const [note, setNote] = useState(record?.note ?? '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setStatus(initialStatus);
+    setNote(record?.note ?? '');
+    setSaving(false);
+  }, [record?.id, record?.date, record?.note, initialStatus]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave(status, note);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -413,18 +520,32 @@ function OverrideModal({ record, onClose, onSave }: OverrideModalProps) {
       <motion.div
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        className="relative w-full max-w-sm rounded-3xl bg-white p-6 flex flex-col gap-4 shadow-2xl"
+        className="relative w-full max-w-sm rounded-2xl bg-white p-6 flex flex-col gap-4 shadow-2xl"
       >
-        <p className="font-bold text-slate-800">Override: {record?.displayName ?? 'บุคลากร'}</p>
+        <div>
+          <p className="text-lg font-black tracking-tight text-slate-800">แก้ไขสถานะเข้างาน</p>
+          <p className="mt-0.5 text-xs font-bold text-slate-500 truncate">
+            {record?.displayName ?? 'บุคลากร'}
+            {dateLabel ? ` · ${dateLabel}` : ''}
+          </p>
+        </div>
 
-        <div className="flex flex-col gap-2">
-          <label className="text-xs text-slate-500">สถานะ</label>
+        <div className="space-y-1">
+          <label className="pl-1 text-[10px] font-black uppercase tracking-wider text-slate-600">
+            สถานะ
+          </label>
           <div className="grid grid-cols-3 gap-2">
-            {(['present', 'late', 'absent'] as AttendanceStatus[]).map(s => (
+            {(['present', 'late', 'absent'] as AttendanceStatus[]).map((s) => (
               <button
                 key={s}
+                type="button"
                 onClick={() => setStatus(s)}
-                className={`py-2 rounded-xl text-xs font-semibold border transition-all ${status === s ? `${STATUS_CONFIG[s].bg} ${STATUS_CONFIG[s].text} border-transparent` : 'border-slate-200 text-slate-500'}`}
+                className={cn(
+                  'h-10 rounded-xl border text-xs font-bold transition-all',
+                  status === s
+                    ? `${STATUS_CONFIG[s].bg} ${STATUS_CONFIG[s].text} border-transparent`
+                    : 'border-slate-200 bg-slate-50/70 text-slate-500',
+                )}
               >
                 {STATUS_CONFIG[s].label}
               </button>
@@ -432,21 +553,27 @@ function OverrideModal({ record, onClose, onSave }: OverrideModalProps) {
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <label className="text-xs text-slate-500">หมายเหตุ</label>
+        <div className="space-y-1">
+          <label className="pl-1 text-[10px] font-black uppercase tracking-wider text-slate-600">
+            หมายเหตุ
+          </label>
           <textarea
             value={note}
-            onChange={e => setNote(e.target.value)}
+            onChange={(e) => setNote(e.target.value)}
             rows={2}
-            className="w-full rounded-xl border border-slate-200 p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-300"
+            className="h-auto w-full rounded-xl border-none bg-slate-50/70 p-3 text-xs font-bold resize-none focus:outline-none focus-visible:bg-slate-50/90 focus-visible:ring-2 focus-visible:ring-slate-900/20"
             placeholder="เหตุผล..."
           />
         </div>
 
-        <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-slate-200 text-sm text-slate-600 font-semibold">ยกเลิก</button>
-          <button onClick={() => onSave(status, note)} className="flex-1 py-3 rounded-xl bg-blue-500 text-white text-sm font-semibold">บันทึก</button>
-        </div>
+        <Button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={saving}
+          className="h-10 w-full rounded-xl font-bold"
+        >
+          {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+        </Button>
       </motion.div>
     </div>
   );

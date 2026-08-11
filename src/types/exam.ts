@@ -28,6 +28,8 @@ export interface GradeBookSubjectLink {
   subjectId: string;
   subjectName: string;
   subjectCode?: string;
+  /** ครูที่กดเชื่อมวิชานี้กับห้องสอบ (teachers/{id} หรือ userId) */
+  linkedByTeacherId?: string;
 }
 
 export interface ExamRoomSettings {

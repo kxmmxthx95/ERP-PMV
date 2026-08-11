@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { IconType } from 'react-icons';
 import {
   HiAcademicCap,
@@ -7,6 +7,12 @@ import {
   HiFaceSmile,
   HiHomeModern,
 } from 'react-icons/hi2';
+import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  type CarouselApi,
+} from '@/components/ui/carousel';
 import { cn } from '@/lib/utils';
 import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
 import type { ClassRoom } from '@/types/class';
@@ -63,7 +69,137 @@ type Props = {
   disableAnimations?: boolean;
   /** Hide the department card grid entirely (e.g. student view — dept/grade is fixed, skip straight to children). Default false. */
   hideDeptCards?: boolean;
+  /** Mobile (<lg): horizontal carousel for department cards (e.g. TeacherManager). Default false. */
+  mobileDeptCarousel?: boolean;
+  /** Visible department cards. Default: all departments. */
+  departments?: Department[];
 };
+
+function DeptSelectButton({
+  dept,
+  active,
+  collapsed,
+  onSelect,
+  className,
+}: {
+  dept: Department;
+  active: boolean;
+  collapsed: boolean;
+  onSelect: (dept: Department) => void;
+  className?: string;
+}) {
+  const cfg = DEPARTMENT_CONFIG[dept];
+  const DeptIcon = DEPT_ICON[dept];
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(dept)}
+      title={cfg.label}
+      aria-label={cfg.label}
+      aria-pressed={active}
+      className={cn(
+        'flex items-center rounded-xl border text-left transition-all',
+        collapsed
+          ? 'w-full gap-3 px-3 py-2.5 lg:size-11 lg:w-11 lg:justify-center lg:gap-0 lg:p-0'
+          : 'w-full gap-3 px-3 py-2.5',
+        active ? DEPT_ACTIVE[dept] : cn(DEPT_ACCENT[dept], 'hover:opacity-90'),
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          'flex shrink-0 items-center justify-center',
+          collapsed
+            ? 'h-9 w-9 rounded-lg lg:size-full lg:rounded-xl lg:bg-transparent'
+            : cn('h-9 w-9 rounded-lg', active ? 'bg-white/20' : 'bg-white/70'),
+        )}
+      >
+        <DeptIcon
+          className={cn(
+            collapsed ? 'h-4 w-4 lg:h-5 lg:w-5' : 'h-4 w-4',
+            !active && !collapsed && 'opacity-90',
+          )}
+        />
+      </span>
+      <span className={cn('min-w-0', collapsed && 'lg:hidden')}>
+        <span className="block truncate text-[13px] font-black font-sukhumvit">{cfg.label}</span>
+        <span
+          className={cn(
+            'block text-[10px] font-bold',
+            active ? 'text-white/80' : 'text-muted-foreground',
+          )}
+        >
+          {cfg.grades.length} ระดับชั้น
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function MobileDeptCarousel({
+  selectedDept,
+  onSelectDept,
+  departments,
+}: {
+  selectedDept: string;
+  onSelectDept: (dept: Department) => void;
+  departments: Department[];
+}) {
+  const [carouselApi, setCarouselApi] = useState<CarouselApi | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    if (!carouselApi) return;
+    const onSelect = () => setActiveIndex(carouselApi.selectedScrollSnap());
+    onSelect();
+    carouselApi.on('select', onSelect);
+    carouselApi.on('reInit', onSelect);
+    return () => {
+      carouselApi.off('select', onSelect);
+      carouselApi.off('reInit', onSelect);
+    };
+  }, [carouselApi]);
+
+  useEffect(() => {
+    if (!carouselApi) return;
+    const index = departments.indexOf(selectedDept as Department);
+    if (index >= 0) carouselApi.scrollTo(index);
+  }, [carouselApi, selectedDept, departments]);
+
+  return (
+    <div className="w-full min-w-0">
+      <Carousel setApi={setCarouselApi} opts={{ align: 'center', loop: false }} className="w-full">
+        <CarouselContent className="-ml-2">
+          {departments.map((dept) => (
+            <CarouselItem key={dept} className="basis-[82%] pl-2 sm:basis-[68%]">
+              <DeptSelectButton
+                dept={dept}
+                active={selectedDept === dept}
+                collapsed={false}
+                onSelect={onSelectDept}
+                className="h-full"
+              />
+            </CarouselItem>
+          ))}
+        </CarouselContent>
+      </Carousel>
+      <div className="mt-2 flex items-center justify-center gap-1.5">
+        {departments.map((dept, index) => (
+          <button
+            key={dept}
+            type="button"
+            aria-label={`ไปที่${DEPARTMENT_CONFIG[dept].label}`}
+            onClick={() => carouselApi?.scrollTo(index)}
+            className={cn(
+              'h-1.5 rounded-full transition-all',
+              activeIndex === index ? 'w-5 bg-primary' : 'w-1.5 bg-muted-foreground/30',
+            )}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function GradeBookClassSidebar({
   selectedDept,
@@ -86,6 +222,8 @@ export default function GradeBookClassSidebar({
   collapsedExtra,
   disableAnimations = false,
   hideDeptCards = false,
+  mobileDeptCarousel = false,
+  departments = DEPARTMENTS,
 }: Props) {
   return (
     <aside
@@ -117,64 +255,46 @@ export default function GradeBookClassSidebar({
         onWheel={(e) => e.stopPropagation()}
       >
         <section className={cn(collapsed && 'lg:w-full', hideDeptCards && 'hidden')}>
-          <div
-            className={cn(
-              'grid grid-cols-1 gap-2',
-              collapsed && 'lg:place-items-center lg:gap-2',
-            )}
-          >
-            {DEPARTMENTS.map((dept) => {
-              const cfg = DEPARTMENT_CONFIG[dept];
-              const active = selectedDept === dept;
-              const DeptIcon = DEPT_ICON[dept];
-              return (
-                <button
+          {mobileDeptCarousel ? (
+            <>
+              <div className="lg:hidden">
+                <MobileDeptCarousel selectedDept={selectedDept} onSelectDept={onSelectDept} departments={departments} />
+              </div>
+              <div
+                className={cn(
+                  'hidden grid-cols-1 gap-2 lg:grid',
+                  collapsed && 'lg:place-items-center lg:gap-2',
+                )}
+              >
+                {departments.map((dept) => (
+                  <DeptSelectButton
+                    key={dept}
+                    dept={dept}
+                    active={selectedDept === dept}
+                    collapsed={collapsed}
+                    onSelect={onSelectDept}
+                  />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div
+              className={cn(
+                'grid grid-cols-1 gap-2',
+                collapsed && 'lg:place-items-center lg:gap-2',
+              )}
+            >
+              {departments.map((dept) => (
+                <DeptSelectButton
                   key={dept}
-                  type="button"
-                  onClick={() => onSelectDept(dept)}
-                  title={cfg.label}
-                  aria-label={cfg.label}
-                  aria-pressed={active}
-                  className={cn(
-                    'flex items-center rounded-xl border text-left transition-all',
-                    collapsed
-                      ? 'w-full gap-3 px-3 py-2.5 lg:size-11 lg:w-11 lg:justify-center lg:gap-0 lg:p-0'
-                      : 'w-full gap-3 px-3 py-2.5',
-                    active ? DEPT_ACTIVE[dept] : cn(DEPT_ACCENT[dept], 'hover:opacity-90'),
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'flex shrink-0 items-center justify-center',
-                      collapsed
-                        ? 'h-9 w-9 rounded-lg lg:size-full lg:rounded-xl lg:bg-transparent'
-                        : cn('h-9 w-9 rounded-lg', active ? 'bg-white/20' : 'bg-white/70'),
-                    )}
-                  >
-                    <DeptIcon
-                      className={cn(
-                        collapsed ? 'h-4 w-4 lg:h-5 lg:w-5' : 'h-4 w-4',
-                        !active && !collapsed && 'opacity-90',
-                      )}
-                    />
-                  </span>
-                  <span className={cn('min-w-0', collapsed && 'lg:hidden')}>
-                    <span className="block truncate text-[13px] font-black font-sukhumvit">
-                      {cfg.label}
-                    </span>
-                    <span
-                      className={cn(
-                        'block text-[10px] font-bold',
-                        active ? 'text-white/80' : 'text-muted-foreground',
-                      )}
-                    >
-                      {cfg.grades.length} ระดับชั้น
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+                  dept={dept}
+                  active={selectedDept === dept}
+                  collapsed={collapsed}
+                  onSelect={onSelectDept}
+                />
+              ))}
+            </div>
+          )}
         </section>
 
         {collapsedExtra ? (

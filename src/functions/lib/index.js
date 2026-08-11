@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.migrateStaffAttendanceByDate = exports.updateAuthUserEmail = exports.setUserClaims = exports.deleteAuthUser = exports.setAnonymousUserRole = exports.finalizeExamRoundOnClose = exports.requestExamAttemptGrading = exports.wordGameLeaveRoom = exports.wordGameSubmitGuess = exports.wordGameStart = exports.wordGameJoinRoom = exports.wordGameCreateRoom = exports.examPdfBytes = exports.horoscopeDaily = exports.deviceFingerprintAttendance = exports.qbAnalystChat = exports.resetPasswordByNationalId = exports.forceLogoutAllUsers = exports.hardResetUser = exports.forceLogoutUser = exports.lineStaffAttendance = exports.completeLineLinkWithToken = exports.lineWebhookV2 = exports.lineWebhook = exports.processLineLinkRequest = exports.examRoomAutoClose = exports.reportDailyScheduled = exports.notifyHomeroomOnStudentLeave = exports.sendLineReport = void 0;
+exports.migrateStaffAttendanceByDate = exports.updateAuthUserEmail = exports.setUserClaims = exports.deleteAuthUser = exports.setAnonymousUserRole = exports.finalizeExamRoundOnClose = exports.requestExamAttemptGrading = exports.onExamRoomAcademicStats = exports.rebuildAcademicStats = exports.examPdfBytes = exports.horoscopeDaily = exports.deviceFingerprintAttendance = exports.qbAnalystChat = exports.resetPasswordByNationalId = exports.forceLogoutAllUsers = exports.hardResetUser = exports.forceLogoutUser = exports.lineStaffAttendance = exports.completeLineLinkWithToken = exports.lineWebhookV2 = exports.lineWebhook = exports.processLineLinkRequest = exports.examRoomAutoClose = exports.reportDailyScheduled = exports.notifySubstitutionApproved = exports.notifySubstituteAssignment = exports.notifyHomeroomOnStudentLeave = exports.sendLineReport = void 0;
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const firestore_1 = require("firebase-functions/v2/firestore");
@@ -13,6 +13,10 @@ var sendLineReport_1 = require("./sendLineReport");
 Object.defineProperty(exports, "sendLineReport", { enumerable: true, get: function () { return sendLineReport_1.sendLineReport; } });
 var notifyHomeroomOnStudentLeave_1 = require("./notifyHomeroomOnStudentLeave");
 Object.defineProperty(exports, "notifyHomeroomOnStudentLeave", { enumerable: true, get: function () { return notifyHomeroomOnStudentLeave_1.notifyHomeroomOnStudentLeave; } });
+var notifySubstituteAssignment_1 = require("./notifySubstituteAssignment");
+Object.defineProperty(exports, "notifySubstituteAssignment", { enumerable: true, get: function () { return notifySubstituteAssignment_1.notifySubstituteAssignment; } });
+var notifySubstitutionApproved_1 = require("./notifySubstitutionApproved");
+Object.defineProperty(exports, "notifySubstitutionApproved", { enumerable: true, get: function () { return notifySubstitutionApproved_1.notifySubstitutionApproved; } });
 var reportDailyScheduled_1 = require("./reportDailyScheduled");
 Object.defineProperty(exports, "reportDailyScheduled", { enumerable: true, get: function () { return reportDailyScheduled_1.reportDailyScheduled; } });
 var examRoomAutoClose_1 = require("./examRoomAutoClose");
@@ -41,12 +45,9 @@ var horoscopeDaily_1 = require("./horoscopeDaily");
 Object.defineProperty(exports, "horoscopeDaily", { enumerable: true, get: function () { return horoscopeDaily_1.horoscopeDaily; } });
 var examPdfBytes_1 = require("./examPdfBytes");
 Object.defineProperty(exports, "examPdfBytes", { enumerable: true, get: function () { return examPdfBytes_1.examPdfBytes; } });
-var wordGame_1 = require("./wordGame");
-Object.defineProperty(exports, "wordGameCreateRoom", { enumerable: true, get: function () { return wordGame_1.wordGameCreateRoom; } });
-Object.defineProperty(exports, "wordGameJoinRoom", { enumerable: true, get: function () { return wordGame_1.wordGameJoinRoom; } });
-Object.defineProperty(exports, "wordGameStart", { enumerable: true, get: function () { return wordGame_1.wordGameStart; } });
-Object.defineProperty(exports, "wordGameSubmitGuess", { enumerable: true, get: function () { return wordGame_1.wordGameSubmitGuess; } });
-Object.defineProperty(exports, "wordGameLeaveRoom", { enumerable: true, get: function () { return wordGame_1.wordGameLeaveRoom; } });
+var rebuildAcademicStats_1 = require("./rebuildAcademicStats");
+Object.defineProperty(exports, "rebuildAcademicStats", { enumerable: true, get: function () { return rebuildAcademicStats_1.rebuildAcademicStats; } });
+Object.defineProperty(exports, "onExamRoomAcademicStats", { enumerable: true, get: function () { return rebuildAcademicStats_1.onExamRoomAcademicStats; } });
 const STAFF_MIGRATION_BATCH_LIMIT = 450;
 function isValidDateStr(value) {
     return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -242,7 +243,19 @@ function resolveStudentAnswer(questionId, questionIndex, effectiveIds, answers) 
     }
     return "";
 }
-async function autoGradeAttempt(db, attemptRef, attemptData, roomData, attemptId) {
+async function loadQuestionSet(db, setId, cache) {
+    const cached = cache.get(setId);
+    if (cached)
+        return cached;
+    const snap = await db.collection("question_sets").doc(setId).collection("questions").get();
+    const questions = new Map();
+    snap.forEach((docSnap) => {
+        questions.set(docSnap.id, docSnap.data());
+    });
+    cache.set(setId, questions);
+    return questions;
+}
+async function autoGradeAttempt(db, attemptRef, attemptData, roomData, attemptId, questionSetCache = new Map()) {
     const roomId = typeof attemptData.roomId === "string" ? attemptData.roomId.trim() : "";
     const round = normalizeRound(attemptData.round);
     const { selectedQuestionIds, questionSetByQuestionId, questionPoints, fallbackQuestionSetId } = resolveRoundConfig(roomData, round);
@@ -262,10 +275,8 @@ async function autoGradeAttempt(db, attemptRef, attemptData, roomData, attemptId
     }
     const questionMap = new Map();
     await Promise.all(Array.from(candidateSetIds).map(async (setId) => {
-        const snap = await db.collection("question_sets").doc(setId).collection("questions").get();
-        snap.forEach((docSnap) => {
-            questionMap.set(docSnap.id, docSnap.data());
-        });
+        const setQuestions = await loadQuestionSet(db, setId, questionSetCache);
+        setQuestions.forEach((question, qid) => questionMap.set(qid, question));
     }));
     const effectiveQuestionIds = resolveEffectiveQuestionIds(selectedQuestionIds, questionMap);
     if (effectiveQuestionIds.length === 0) {
@@ -465,6 +476,10 @@ exports.finalizeExamRoundOnClose = (0, firestore_1.onDocumentUpdated)({
         .get();
     if (attemptsSnap.empty)
         return;
+    // Shared across the whole round — students in the same room/round grade against
+    // the same question set(s), so this turns N re-reads of question_sets/*/questions
+    // (one per student) into a single read per distinct set for this close event.
+    const questionSetCache = new Map();
     for (const attemptDoc of attemptsSnap.docs) {
         const data = attemptDoc.data();
         const status = String(data.status || "");
@@ -483,7 +498,7 @@ exports.finalizeExamRoundOnClose = (0, firestore_1.onDocumentUpdated)({
             continue;
         if (typeof data.score === "number")
             continue;
-        await autoGradeAttempt(db, attemptDoc.ref, data, after, attemptDoc.id);
+        await autoGradeAttempt(db, attemptDoc.ref, data, after, attemptDoc.id, questionSetCache);
     }
 });
 /**

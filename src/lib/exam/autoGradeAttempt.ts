@@ -119,8 +119,8 @@ export function resolveStudentAnswer(
 
 export function resolveRoundGradingConfig(roomData: ExamRoom, round: number): RoundGradingConfig {
   const { roundConfig } = getRoundQuestionConfigForRound(roomData, round);
-  const fallbackQuestionSetId = roundConfig?.questionSetId || roomData.questionSetId;
-  const selectedQuestionIds = roundConfig?.questionIds || roomData.selectedQuestionIds || [];
+  const fallbackQuestionSetId = roundConfig?.questionSetId;
+  const selectedQuestionIds = roundConfig?.questionIds || [];
   const questionSetByQuestionId = roundConfig?.questionSetByQuestionId || {};
   const questionPoints = roundConfig?.questionPoints || {};
 

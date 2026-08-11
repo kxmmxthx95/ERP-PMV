@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback, useSyncExternalStore, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     HiArrowRight, HiPlus, HiXMark,
-    HiArrowLeft,
+    HiChevronLeft,
     HiPencil, HiTrash,
     HiAcademicCap,
     HiUserPlus,
@@ -26,8 +27,9 @@ import {
     DRAWER_HEADER_ICON_BTN,
     DRAWER_HEADER_RIGHT_ACTIONS,
 } from '@/lib/drawerHeaderBtn';
-import { GRADE_LEVEL_ORDER, type ClassRoom } from '@/types/class';
+import { GRADE_LEVEL_ORDER, type ClassRoom, type ClassRoomCard } from '@/types/class';
 import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
+import ClassMobileBrowse from '@/features/classes/components/ClassMobileBrowse';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -180,6 +182,8 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
 
     const [selectedClassroomId, setSelectedClassroomId] = useState<string | null>(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [isLgOrBelow, setIsLgOrBelow] = useState(() => window.innerWidth < 1024);
+    const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
     const [addStudentsOpen, setAddStudentsOpen] = useState(false);
     const [addStudentsSearch, setAddStudentsSearch] = useState('');
     const [drawerSelectedIds, setDrawerSelectedIds] = useState<Set<string>>(new Set());
@@ -201,6 +205,18 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
             setNewRoom(prev => ({ ...prev, academicYearId: classroomYear }));
         }
     }, [classroomYear, editingClassroom]);
+
+    useEffect(() => {
+        setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
+    }, []);
+
+    useEffect(() => {
+        const mq = window.matchMedia('(max-width: 1023px)');
+        const onChange = () => setIsLgOrBelow(mq.matches);
+        onChange();
+        mq.addEventListener('change', onChange);
+        return () => mq.removeEventListener('change', onChange);
+    }, []);
 
     // --- Shared cached data (ไม่ refetch ทั้งโรงเรียนใหม่ทุกครั้งที่ mount/สลับ tab) ---
     const studentsStore = useMemo(() => getStudentsByYearStore(classroomYear), [classroomYear]);
@@ -330,6 +346,72 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
         () => classrooms.find((c) => c.id === selectedClassroomId) ?? null,
         [classrooms, selectedClassroomId],
     );
+
+    const classCountsByDept = useMemo(() => {
+        const counts: Partial<Record<Department, number>> = {};
+        classrooms.forEach((cls) => {
+            const dept = cls.departmentId as Department | undefined;
+            if (dept) counts[dept] = (counts[dept] ?? 0) + 1;
+        });
+        return counts;
+    }, [classrooms]);
+
+    const browseClassCards = useMemo((): ClassRoomCard[] => {
+        return classrooms.map((cls) => {
+            const studentCount = studentsByClass[cls.id]?.length ?? 0;
+            const dept = (cls.departmentId || 'secondary') as Department;
+            return {
+                classRoom: {
+                    id: cls.id,
+                    className: cls.className,
+                    gradeLevel: cls.gradeLevel,
+                    roomNumber: cls.roomNumber,
+                    departmentId: dept,
+                    department: dept,
+                    academicYearId: cls.academicYearId || classroomYear,
+                    semester: 1,
+                    homeroomTeacherId: cls.homeroomTeacherIds?.[0] || '',
+                    homeroomTeacherIds: cls.homeroomTeacherIds || [],
+                    enrolledCourses: [],
+                    studentCount,
+                    maxStudents: cls.capacity || 40,
+                    track: cls.track,
+                    trackColor: cls.trackColor,
+                    isActive: true,
+                    createdAt: '',
+                },
+                homeroomTeacher: null,
+                homeroomTeachers: [],
+                scheduledPeriods: 0,
+                totalPeriods: 0,
+                fillPct: 0,
+                isFull: studentCount >= (cls.capacity || 40),
+            };
+        });
+    }, [classrooms, studentsByClass, classroomYear]);
+
+    const showMobileClassBrowse = isLgOrBelow && !selectedClassroomId;
+    const needsCustomMobileBack = isLgOrBelow && Boolean(deptFilter || selectedClassroomId);
+
+    const handleMobileBack = useCallback(() => {
+        if (selectedClassroomId) {
+            setSelectedClassroomId(null);
+            return;
+        }
+        setDeptFilter('');
+        setGradeFilter('');
+    }, [selectedClassroomId]);
+
+    useEffect(() => {
+        const defaultBack = document.getElementById('portal-default-mobile-back');
+        if (!defaultBack) return;
+        defaultBack.style.display = needsCustomMobileBack ? 'none' : '';
+    }, [needsCustomMobileBack]);
+
+    useEffect(() => {
+        if (!isLgOrBelow) return;
+        document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+    }, [isLgOrBelow, deptFilter, selectedClassroomId]);
 
     const curriculumDrawerGradeOptions = useMemo(() => {
         if (curriculumFilterDept) {
@@ -639,6 +721,19 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
     return (
         <div className="relative flex h-full min-h-0 max-h-full flex-1 flex-col gap-4 overflow-hidden font-sukhumvit lg:flex-row lg:items-stretch">
 
+            {needsCustomMobileBack && headerMobileBackEl && createPortal(
+                <button
+                    type="button"
+                    onClick={handleMobileBack}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100"
+                    title={selectedClassroomId ? 'กลับเลือกห้องเรียน' : 'กลับเลือกแผนก'}
+                    aria-label={selectedClassroomId ? 'กลับเลือกห้องเรียน' : 'กลับเลือกแผนก'}
+                >
+                    <HiChevronLeft size={16} />
+                </button>,
+                headerMobileBackEl,
+            )}
+
             {loading ? (
                 <div className="flex-1 flex items-center justify-center text-slate-400 gap-3 h-64">
                     <div className="w-5 h-5 border-2 border-slate-200 border-t-slate-500 rounded-full animate-spin" />
@@ -646,6 +741,25 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                 </div>
             ) : (
                 <>
+                    {showMobileClassBrowse ? (
+                        <ClassMobileBrowse
+                            selectedDept={deptFilter}
+                            gradeOptions={sidebarGradeOptions}
+                            classCards={browseClassCards}
+                            classCountsByDept={classCountsByDept}
+                            onSelectDept={(dept) => {
+                                setDeptFilter(dept);
+                                setGradeFilter('');
+                                setSelectedClassroomId(null);
+                            }}
+                            onSelectClass={(classId) => {
+                                const room = classrooms.find((c) => c.id === classId);
+                                if (room?.gradeLevel) setGradeFilter(room.gradeLevel);
+                                setSelectedClassroomId(classId);
+                            }}
+                        />
+                    ) : null}
+
                     {/* ── LEFT — GradeBookClassSidebar (same as รายชื่อ) ── */}
                     <div
                         className={cn(
@@ -653,7 +767,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                             sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[280px] xl:w-[300px]',
                             selectedClassroomId
                                 ? 'hidden lg:flex'
-                                : 'flex min-h-0 flex-1 lg:flex-none',
+                                : 'hidden min-h-0 flex-1 lg:flex lg:flex-none',
                         )}
                     >
                         <GradeBookClassSidebar
@@ -734,6 +848,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                         className={cn(
                             'relative flex min-h-0 flex-1 basis-0 flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5',
                             !selectedClassroomId && 'hidden lg:flex',
+                            isLgOrBelow && selectedClassroomId && 'rounded-none border-0 bg-transparent px-3 pb-4 pt-2 sm:px-3',
                         )}
                     >
                         {(() => {
@@ -765,8 +880,12 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                                 setShowCreateModal(true);
                             };
 
+                            const actionBtnClass =
+                                'flex h-8 flex-1 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-200/50 lg:h-8 lg:w-8 lg:flex-none';
+                            const actionDividerClass = 'mx-1 h-3.5 w-px shrink-0 bg-slate-300/60';
+
                             const headerActions = (
-                                <div className={cn('flex shrink-0 items-center', HEADER_ICON_BTN_GROUP)}>
+                                <div className={cn('flex w-full min-w-0 items-center lg:w-auto lg:shrink-0', HEADER_ICON_BTN_GROUP)}>
                                     {curriculum && (
                                         <span className="hidden sm:inline-flex max-w-[120px] items-center gap-1 truncate rounded-full border border-emerald-100/80 bg-emerald-50 px-2 py-1 text-[9px] font-black text-emerald-600 shadow-sm">
                                             <span className="truncate">{curriculum.name}</span>
@@ -784,41 +903,41 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
                                         </span>
                                     )}
                                     {cls && (
-                                        <div className="flex items-center bg-white rounded-full p-1 border border-slate-200 shadow-[0_1px_2px_rgba(0,0,0,0.03)] shrink-0">
+                                        <div className="flex w-full min-w-0 items-center rounded-full border border-slate-200 bg-white p-1 shadow-[0_1px_2px_rgba(0,0,0,0.03)] lg:w-auto lg:shrink-0">
                                             <button
                                                 type="button"
                                                 onClick={openAddStudentsDrawer}
-                                                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
+                                                className={actionBtnClass}
                                                 title="เพิ่มนักเรียนเข้าห้อง"
                                                 aria-label="เพิ่มนักเรียนเข้าห้อง"
                                             >
                                                 <HiUserPlus size={16} />
                                             </button>
-                                            <div className="w-[1px] h-3.5 bg-slate-300/60 mx-1" />
+                                            <div className={actionDividerClass} aria-hidden />
                                             <button
                                                 type="button"
                                                 onClick={openCurriculumDrawer}
-                                                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
+                                                className={actionBtnClass}
                                                 title="มอบหมายหลักสูตร"
                                                 aria-label="มอบหมายหลักสูตร"
                                             >
                                                 <HiOutlineBookOpen size={16} />
                                             </button>
-                                            <div className="w-[1px] h-3.5 bg-slate-300/60 mx-1" />
+                                            <div className={actionDividerClass} aria-hidden />
                                             <button
                                                 type="button"
                                                 onClick={openEdit}
-                                                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
+                                                className={actionBtnClass}
                                                 title="แก้ไขห้องเรียน"
                                                 aria-label="แก้ไขห้องเรียน"
                                             >
                                                 <HiPencil size={16} />
                                             </button>
-                                            <div className="w-[1px] h-3.5 bg-slate-300/60 mx-1" />
+                                            <div className={actionDividerClass} aria-hidden />
                                             <button
                                                 type="button"
                                                 onClick={() => deleteClassroom(cls.id, count)}
-                                                className="w-8 h-8 rounded-full flex items-center justify-center text-rose-500 hover:bg-rose-50 transition-colors cursor-pointer"
+                                                className={cn(actionBtnClass, 'text-rose-500 hover:bg-rose-50')}
                                                 title="ลบห้องเรียน"
                                                 aria-label="ลบห้องเรียน"
                                             >
@@ -841,16 +960,7 @@ export default function ClassroomAssignmentTab({ headerTabs }: { headerTabs?: Re
 
                         {/* Mobile header when room selected */}
                         {cls && (
-                            <div className="mb-2 flex min-h-[3.25rem] w-full shrink-0 items-center justify-between gap-2 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:hidden">
-                                <button
-                                    type="button"
-                                    onClick={() => setSelectedClassroomId(null)}
-                                    className={HEADER_ICON_BTN}
-                                    title="ย้อนกลับ"
-                                    aria-label="ย้อนกลับ"
-                                >
-                                    <HiArrowLeft size={16} />
-                                </button>
+                            <div className="mb-2 flex min-h-[3.25rem] w-full shrink-0 items-center gap-2 border-b border-border px-0 pb-2 pt-2 sm:pt-2.5 lg:hidden">
                                 {headerActions}
                             </div>
                         )}

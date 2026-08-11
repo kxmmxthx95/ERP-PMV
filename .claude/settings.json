@@ -5,7 +5,23 @@
       "Bash(git commit -m ':*)",
       "Bash(awk 'NR>=5766 && NR<=6200' /Users/kim/school-management-app/src/features/exam/ExamManager.tsx)",
       "Bash(grep -n \"AnimatePresence>\\\\|^          </div>$\\\\|^        \\)}$\" /Users/kim/school-management-app/src/features/exam/ExamManager.tsx)",
-      "Bash(awk -F: '$1 >= 5900 && $1 <= 5930')"
+      "Bash(awk -F: '$1 >= 5900 && $1 <= 5930')",
+      "Bash(grep -n \"myAttempt={isStudent\\\\|onShowSummary={\\(r, a\\)\" /Users/kim/school-management-app/src/features/exam/ExamManager.tsx)",
+      "Bash(grep -n \"HiOutlineXMark,$\" /Users/kim/school-management-app/src/features/exam/ExamManager.tsx)",
+      "Bash(python3 -c \"from PIL import Image; print\\('PIL ok'\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(grep -n \"breadcrumbExtraEl,$\" /Users/kim/school-management-app/src/features/microSyllabus/MicroSyllabusPage.tsx)",
+      "Bash(node -e ' *)",
+      "Bash(rm -rf .claude/skills/graphify *)",
+      "Bash(git commit -m 'prune unused design/branding skills from .claude/skills *)",
+      "Bash(rm -rf .claude/skills/improve-codebase-architecture .claude/skills/request-refactor-plan && git add -A && git status)",
+      "Bash(git reset *)",
+      "Bash(git commit -m 'remove on-demand architecture/refactor skills from .claude/skills *)",
+      "Bash(git commit -m 'aggressive skill prune: keep only project-essential skills *)"
+    ],
+    "additionalDirectories": [
+      "/Users/kim/school-management-app/.claude/skills/graphify",
+      "/Users/kim/school-management-app/.claude/skills/improve-codebase-architecture"
     ]
   }
 }

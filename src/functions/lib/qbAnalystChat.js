@@ -60,20 +60,21 @@ async function buildQuestionBankContext() {
         const bUpdated = Number(b.data().updatedAt) || Number(b.data().createdAt) || 0;
         return bUpdated - aUpdated;
     });
-    const summaries = [];
-    for (const docSnap of sortedDocs.slice(0, 15)) {
+    // ยิง sampleQuestionStats พร้อมกันทั้งชุด แทนที่จะรอทีละชุด (เดิมคือ N+1 sequential)
+    const topDocs = sortedDocs.slice(0, 15);
+    const statsList = await Promise.all(topDocs.map((docSnap) => sampleQuestionStats(docSnap.id)));
+    const summaries = topDocs.map((docSnap, i) => {
         const data = docSnap.data();
-        const stats = await sampleQuestionStats(docSnap.id);
-        summaries.push({
+        return {
             setCode: typeof data.setCode === "string" ? data.setCode : docSnap.id,
             title: typeof data.title === "string" ? data.title : "(ไม่มีชื่อ)",
             subjectGroup: typeof data.subjectGroup === "string" ? data.subjectGroup : "-",
             gradeLevel: typeof data.gradeLevel === "string" ? data.gradeLevel : "-",
             questionCount: Number(data.questionCount) || 0,
             isPublished: data.isPublished === true,
-            ...stats,
-        });
-    }
+            ...statsList[i],
+        };
+    });
     const totalSets = setsSnap.size;
     const totalQuestions = summaries.reduce((sum, s) => sum + s.questionCount, 0);
     const published = summaries.filter((s) => s.isPublished).length;

@@ -23,10 +23,10 @@ export default function ExamQuestionContent({
     <div
       ref={containerRef}
       className={cn(
-        'exam-question-content font-sarabun text-slate-800 leading-relaxed',
+        'exam-question-content text-slate-800 leading-relaxed',
         variant === 'question'
-          ? 'rounded-xl bg-white px-4 py-4 text-[14px] shadow-[inset_0_1px_2px_rgba(15,23,42,0.04)]'
-          : 'min-w-0 flex-1 bg-white py-2 px-4 text-[12px]',
+          ? 'font-sukhumvit rounded-xl bg-white px-4 py-4 text-[14px] font-medium shadow-[inset_0_1px_2px_rgba(15,23,42,0.04)]'
+          : 'font-sarabun min-w-0 flex-1 bg-white py-2 px-4 text-[12px]',
         className,
       )}
       dangerouslySetInnerHTML={{ __html: html }}

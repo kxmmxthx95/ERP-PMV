@@ -452,36 +452,51 @@ export default function ClassCourseTab({ classRoom }: Props) {
       >
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hide pb-24 md:pb-8">
           <div className="flex flex-col gap-3">
-            {/* Mobile */}
-            <div className="flex flex-col gap-2.5 px-0.5 md:hidden">
-              {classSubjects.map((subject, idx) => {
-                const colors = getSubjectColors(subject.subjectGroup);
-                const selectedTeacherIds = courseTeachers[subject.id] ?? [];
-                const selectedTeachers = activeTeachers.filter(t => selectedTeacherIds.includes(t.id));
-                return (
-                  <CourseMobileCard
-                    key={subject.id}
-                    idx={idx}
-                    subject={subject}
-                    colors={colors}
-                    teachers={activeTeachers}
-                    selectedTeacherIds={selectedTeacherIds}
-                    selectedTeachers={selectedTeachers}
-                    isStampMode={isStampMode}
-                    selectedStampTeacherId={selectedStampTeacherId}
-                    onSelect={async (tid) => {
-                      const current = courseTeachers[subject.id] ?? [];
-                      if (!current.includes(tid) && current.length >= MAX_COURSE_TEACHERS) {
-                        toast.error(`รายวิชานี้กำหนดครูได้สูงสุด ${MAX_COURSE_TEACHERS} คน`);
-                        return;
-                      }
-                      const next = current.includes(tid) ? current.filter(id => id !== tid) : [...current, tid];
-                      await setTeacherIds(subject.id, next);
-                    }}
-                    onClear={async () => setTeacherIds(subject.id, [])}
-                  />
-                );
-              })}
+            {/* Mobile — horizontal carousel (วิชาที่นักเรียนเรียน) */}
+            <div className="px-0.5 md:hidden">
+              {classSubjects.length > 0 ? (
+                <div
+                  className={cn(
+                    classSubjects.length > 1
+                      && 'flex snap-x snap-mandatory overflow-x-auto scrollbar-hide pb-1',
+                  )}
+                >
+                  {classSubjects.map((subject, idx) => {
+                    const colors = getSubjectColors(subject.subjectGroup);
+                    const selectedTeacherIds = courseTeachers[subject.id] ?? [];
+                    const selectedTeachers = activeTeachers.filter(t => selectedTeacherIds.includes(t.id));
+                    return (
+                      <div
+                        key={subject.id}
+                        className={cn(
+                          classSubjects.length > 1 && 'min-w-full shrink-0 snap-center snap-always px-0.5',
+                        )}
+                      >
+                        <CourseMobileCard
+                          idx={idx}
+                          subject={subject}
+                          colors={colors}
+                          teachers={activeTeachers}
+                          selectedTeacherIds={selectedTeacherIds}
+                          selectedTeachers={selectedTeachers}
+                          isStampMode={isStampMode}
+                          selectedStampTeacherId={selectedStampTeacherId}
+                          onSelect={async (tid) => {
+                            const current = courseTeachers[subject.id] ?? [];
+                            if (!current.includes(tid) && current.length >= MAX_COURSE_TEACHERS) {
+                              toast.error(`รายวิชานี้กำหนดครูได้สูงสุด ${MAX_COURSE_TEACHERS} คน`);
+                              return;
+                            }
+                            const next = current.includes(tid) ? current.filter(id => id !== tid) : [...current, tid];
+                            await setTeacherIds(subject.id, next);
+                          }}
+                          onClear={async () => setTeacherIds(subject.id, [])}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
 
             {/* Desktop */}

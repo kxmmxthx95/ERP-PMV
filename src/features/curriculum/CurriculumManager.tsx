@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -8,8 +8,11 @@ import {
   HiSparkles,
   HiAcademicCap,
   HiBookOpen,
+  HiChevronLeft,
 } from 'react-icons/hi2';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
+import { useBrowseVisibleDepartments } from '@/hooks/useBrowseVisibleDepartments';
+import { shouldCountDepartment } from '@/lib/departments/homeDepartment';
 
 import CourseEditorPanel from './components/CourseEditorPanel';
 import AddCurriculumVersionModal from './components/AddCurriculumVersionModal';
@@ -17,6 +20,8 @@ import GoogleSheetImportModal from './components/GoogleSheetImportModal';
 import AddCourseModal from './components/AddCourseModal';
 import AssignGradesModal from './components/AssignGradesModal';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
+import CurriculumDeptCoverFlow from './components/CurriculumDeptCoverFlow';
+import CurriculumMobileGradeBrowse from './components/CurriculumMobileGradeBrowse';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
 import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
 import { cn } from '@/lib/utils';
@@ -46,6 +51,7 @@ function getVersionGradient(id: string) {
 }
 
 export default function CurriculumManager() {
+  const { homeDepartment, browseVisibleDepartments, isDeptScoped } = useBrowseVisibleDepartments();
 
   const [selectedVersion, setSelectedVersion] = useState<CurriculumVersion | null>(null);
   const [filterDepartment, setFilterDepartment] = useState('all');
@@ -91,10 +97,12 @@ export default function CurriculumManager() {
   const [sheetImportOpen, setSheetImportOpen] = useState(false);
 
   const [headerCenterMobilePortalEl, setHeaderCenterMobilePortalEl] = useState<HTMLElement | null>(null);
+  const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() => window.innerWidth < 1024);
 
   useEffect(() => {
     setHeaderCenterMobilePortalEl(document.getElementById('header-portal-center-mobile'));
+    setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
   }, []);
 
   useEffect(() => {
@@ -171,15 +179,70 @@ export default function CurriculumManager() {
     });
   }, [versions, searchTerm, sidebarDept, sidebarGrade]);
 
+  const versionCountsByDept = useMemo(() => {
+    const counts: Partial<Record<Department, number>> = {};
+    versions.forEach((v) => {
+      const dept = v.department as Department | undefined;
+      if (dept && shouldCountDepartment(dept, homeDepartment, isDeptScoped)) {
+        counts[dept] = (counts[dept] ?? 0) + 1;
+      }
+    });
+    return counts;
+  }, [versions, homeDepartment, isDeptScoped]);
+
   const sidebarGradeOptions = sidebarDept ? DEPARTMENT_CONFIG[sidebarDept].grades : [];
+
+  const gradeVersionCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (!sidebarDept) return counts;
+    versions.forEach((v) => {
+      if (v.department !== sidebarDept) return;
+      sidebarGradeOptions.forEach((grade) => {
+        if (v.assignedGrades?.includes(grade) || v.level === grade) {
+          counts[grade] = (counts[grade] ?? 0) + 1;
+        }
+      });
+    });
+    return counts;
+  }, [versions, sidebarDept, sidebarGradeOptions]);
+
+  const showMobileDeptCover = isMdOrBelow && !currentVersion && !sidebarDept;
+  const showMobileGradeBrowse = isMdOrBelow && !currentVersion && Boolean(sidebarDept) && !sidebarGrade;
+  const showMobileVersionList = isMdOrBelow && !currentVersion && Boolean(sidebarDept) && Boolean(sidebarGrade);
+  const needsCustomMobileBack = isMdOrBelow && (Boolean(sidebarDept) || Boolean(currentVersion));
+
+  const handleMobileBack = useCallback(() => {
+    if (currentVersion) {
+      setSelectedVersion(null);
+      return;
+    }
+    if (sidebarGrade) {
+      setSidebarGrade('');
+      return;
+    }
+    setSidebarDept('');
+  }, [currentVersion, sidebarGrade]);
+
+  useEffect(() => {
+    const defaultBack = document.getElementById('portal-default-mobile-back');
+    if (!defaultBack) return;
+    defaultBack.style.display = needsCustomMobileBack ? 'none' : '';
+  }, [needsCustomMobileBack]);
+
+  useEffect(() => {
+    if (!isMdOrBelow) return;
+    document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
+  }, [isMdOrBelow, sidebarDept, sidebarGrade, currentVersion?.id]);
 
   const handleSidebarSelectDept = (dept: Department) => {
     setSidebarDept((prev) => (prev === dept ? '' : dept));
     setSidebarGrade('');
+    setSelectedVersion(null);
   };
 
   const handleSidebarSelectGrade = (grade: string) => {
     setSidebarGrade((prev) => (prev === grade ? '' : grade));
+    setSelectedVersion(null);
   };
 
   const currentCourses = currentVersion ? (coursesByVersion[currentVersion.id] || []) : [];
@@ -221,6 +284,19 @@ export default function CurriculumManager() {
       )}
     >
 
+      {needsCustomMobileBack && headerMobileBackEl && createPortal(
+        <button
+          type="button"
+          onClick={handleMobileBack}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-700 transition-colors hover:bg-slate-100"
+          title={currentVersion ? 'กลับรายการหลักสูตร' : 'กลับเลือกแผนก'}
+          aria-label={currentVersion ? 'กลับรายการหลักสูตร' : 'กลับเลือกแผนก'}
+        >
+          <HiChevronLeft size={16} />
+        </button>,
+        headerMobileBackEl,
+      )}
+
       {isMdOrBelow && headerCenterMobilePortalEl && createPortal(
         <div className="pointer-events-none flex items-center gap-1.5 lg:hidden">
           <HiBookOpen className="h-4 w-4 shrink-0 text-black/80" />
@@ -240,9 +316,28 @@ export default function CurriculumManager() {
           exit={{ opacity: 0 }}
           className="flex flex-1 min-w-0 h-full overflow-hidden relative gap-4"
         >
+            {showMobileDeptCover ? (
+              <CurriculumDeptCoverFlow
+                versionCounts={versionCountsByDept}
+                departments={browseVisibleDepartments}
+                onSelectDept={handleSidebarSelectDept}
+              />
+            ) : null}
+
+            {showMobileGradeBrowse && sidebarDept ? (
+              <CurriculumMobileGradeBrowse
+                department={sidebarDept}
+                gradeOptions={sidebarGradeOptions}
+                gradeVersionCounts={gradeVersionCounts}
+                selectedGrade={sidebarGrade}
+                onSelectGrade={handleSidebarSelectGrade}
+              />
+            ) : null}
+
             {/* LEFT — Version Sidebar (แผนก → ชั้น drill-down) */}
             <div className={cn(
-              currentVersion ? 'hidden lg:flex' : 'flex',
+              currentVersion ? 'hidden lg:flex' : (showMobileDeptCover || showMobileGradeBrowse) ? 'hidden lg:flex' : 'flex',
+              showMobileVersionList && 'min-h-0 flex-1',
               sidebarCollapsed ? 'lg:w-20 xl:w-20' : 'lg:w-[300px] xl:w-[320px]',
               'w-full shrink-0 flex-col h-full overflow-hidden'
             )}>
@@ -252,6 +347,11 @@ export default function CurriculumManager() {
                 selectedClassId=""
                 gradeOptions={sidebarGradeOptions}
                 classOptions={[]}
+                departments={browseVisibleDepartments}
+                hideDeptCards={isMdOrBelow}
+                hideFrameOnMobile
+                showGradeRoomNav={!(isMdOrBelow && Boolean(sidebarGrade))}
+                headerActionMobile={isMdOrBelow && Boolean(sidebarGrade)}
                 onSelectDept={handleSidebarSelectDept}
                 onSelectGrade={handleSidebarSelectGrade}
                 onSelectClass={() => {}}
@@ -399,7 +499,13 @@ export default function CurriculumManager() {
             </div>
 
             {/* RIGHT — Detail / Course Editor */}
-            <div className={`${!currentVersion ? 'hidden lg:flex' : 'flex'} flex-1 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card p-4 md:p-6 shadow-sm`}>
+            <div
+              className={cn(
+                !currentVersion ? 'hidden lg:flex' : 'flex',
+                'flex-1 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card p-4 md:p-6 shadow-sm',
+                isMdOrBelow && currentVersion && 'rounded-none border-0 bg-transparent p-0 shadow-none',
+              )}
+            >
               <AnimatePresence mode="wait">
                 {currentVersion ? (
                   <motion.div

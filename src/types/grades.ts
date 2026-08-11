@@ -5,6 +5,16 @@ import type { Department } from '@/types/curriculum';
 
 export type GradeLetter = 'A' | 'B+' | 'B' | 'C+' | 'C' | 'D+' | 'D' | 'F' | '0' | 'ร' | 'มส';
 
+/** ผลวิชาแบบผ่าน/ไม่ผ่าน (หมวดกิจกรรม) — ไม่เข้า GPA */
+export type PassFailResult = 'pass' | 'fail';
+
+/** หมวดกิจกรรมบังคับใช้ผ่าน/ไม่ผ่าน · พื้นฐาน/เพิ่มเติมใช้เกรดเท่านั้น */
+export function isPassFailSubjectCategory(
+  category: string | undefined | null,
+): boolean {
+  return category === 'activity';
+}
+
 // ── Grade Config — สัดส่วนคะแนนต่อวิชา ───────────────────────────────────────
 
 export interface GradeWeightConfig {
@@ -140,6 +150,8 @@ export interface StudentScoreSummary {
   // Weighted total (0–100)
   totalScore: number | null;
   grade: GradeLetter | null;
+  /** เฉพาะวิชาผ่าน/ไม่ผ่าน (activity) — grade จะเป็น null */
+  result?: PassFailResult | null;
 
   // เพิ่มเติม
   absent: boolean;                  // ขาดสอบ
@@ -186,10 +198,12 @@ export interface GradeRecord {
   finalScore: number | null;
   totalScore: number | null;
   grade: GradeLetter | null;
+  /** เฉพาะวิชาผ่าน/ไม่ผ่าน (activity) */
+  result?: PassFailResult | null;
 
   absent: boolean;
   note?: string;
-  publishedAt?: string;    // วันที่ประกาศเกรด
+  publishedAt?: string;    // legacy · ไม่ใช้แล้ว
   updatedAt: string;
 }
 

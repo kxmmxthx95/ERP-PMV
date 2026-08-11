@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
-import type { StudentScoreSummary, GradeWeightConfig } from '@/types/grades';
+import type { StudentScoreSummary, GradeWeightConfig, PassFailResult } from '@/types/grades';
 import { gradeLetterToGpa, formatGpa, gpaStyle, percentScoreStyle } from '@/types/grades';
 import type { AttendanceStatus } from '@/types/teaching';
 import {
@@ -12,6 +12,7 @@ import {
   summarizeStudentSubjectAttendance,
 } from '@/features/grades/utils/studentSubjectAttendanceHistory';
 import type { AttendanceDateRange } from '@/features/grades/components/AttendanceDateRangeFilter';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -19,6 +20,8 @@ interface Props {
   config: GradeWeightConfig;
   editable?: boolean;
   showAsPercentage?: boolean;
+  /** วิชากิจกรรม — ซ่อนคะแนน/เกรด เหลือแค่ผ่าน/ไม่ผ่าน */
+  passFailMode?: boolean;
   /** 'scores' (default) แสดงตารางคะแนน, 'attendance' แสดงสถิติการเข้าเรียนแทน */
   view?: 'scores' | 'attendance';
   /** Required when view === 'attendance' */
@@ -28,6 +31,7 @@ interface Props {
     field: 'classworkScore' | 'midtermScore' | 'finalScore' | 'note' | 'absent',
     value: number | string | boolean | null,
   ) => void;
+  onUpdatePassFail?: (studentId: string, result: PassFailResult | null) => void;
 }
 
 type ClassSessionDoc = {
@@ -53,6 +57,47 @@ const ATTENDANCE_TABLE_COLUMNS =
 
 const TABLE_SHELL = 'rounded-2xl border border-border bg-card overflow-hidden';
 const TABLE_HEADER_CELL = 'text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap';
+
+function PassFailToggle({
+  result,
+  disabled,
+  onChange,
+}: {
+  result: PassFailResult | null;
+  disabled?: boolean;
+  onChange: (next: PassFailResult | null) => void;
+}) {
+  return (
+    <div className="mt-3 flex w-full items-center justify-center gap-2 md:mt-0">
+      <Button
+        type="button"
+        size="sm"
+        variant={result === 'pass' ? 'default' : 'secondary'}
+        className={cn(
+          'h-9 flex-1 rounded-xl text-xs font-bold md:flex-none md:min-w-[5.5rem]',
+          result === 'pass' && 'bg-emerald-600 text-white hover:bg-emerald-600/90',
+        )}
+        disabled={disabled}
+        onClick={() => onChange(result === 'pass' ? null : 'pass')}
+      >
+        ผ่าน
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant={result === 'fail' ? 'default' : 'secondary'}
+        className={cn(
+          'h-9 flex-1 rounded-xl text-xs font-bold md:flex-none md:min-w-[5.5rem]',
+          result === 'fail' && 'bg-destructive text-white hover:bg-destructive/90',
+        )}
+        disabled={disabled}
+        onClick={() => onChange(result === 'fail' ? null : 'fail')}
+      >
+        ไม่ผ่าน
+      </Button>
+    </div>
+  );
+}
 
 function GradePill({ gpa, absent }: { gpa: number | null; absent?: boolean }) {
   if (absent) {
@@ -152,7 +197,9 @@ export default function GradeTable({
   config,
   editable = false,
   onUpdateScore,
+  onUpdatePassFail,
   showAsPercentage = false,
+  passFailMode = false,
   view = 'scores',
   attendanceDateRange = { from: '', to: '' },
 }: Props) {
@@ -248,6 +295,91 @@ export default function GradeTable({
   const tableGridColumns = showClasswork
     ? 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(3, minmax(0, 1fr)) minmax(0, 1fr) minmax(5rem, 0.85fr)'
     : 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(2, minmax(0, 1fr)) minmax(0, 1fr) minmax(5rem, 0.85fr)';
+
+  if (passFailMode && view === 'scores') {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="px-1 text-[11px] font-bold text-muted-foreground font-sukhumvit">
+          วิชากิจกรรม — บันทึกแค่ผ่าน/ไม่ผ่าน · ไม่เข้า GPA
+        </p>
+
+        <div className="flex flex-col gap-2.5 md:hidden">
+          {summaries.map((s, i) => (
+            <motion.div
+              key={s.studentId}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.02 }}
+              className="rounded-2xl border border-border bg-card p-3"
+            >
+              <div className="flex items-center gap-3">
+                <StudentAvatar
+                  studentId={s.studentId}
+                  name={s.studentName}
+                  photoURL={s.photoURL}
+                  className="h-9 w-9 shrink-0 rounded-full"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                    {s.studentName}
+                  </p>
+                  <p className="text-[12px] font-black tabular-nums text-muted-foreground font-sukhumvit">
+                    {s.studentCode || '—'}
+                  </p>
+                </div>
+              </div>
+              <PassFailToggle
+                result={s.result ?? null}
+                disabled={!editable}
+                onChange={(next) => onUpdatePassFail?.(s.studentId, next)}
+              />
+            </motion.div>
+          ))}
+        </div>
+
+        <div className={cn('hidden md:block', TABLE_SHELL)}>
+          <div
+            className="grid gap-3 border-b border-border bg-background px-4 py-3"
+            style={{ gridTemplateColumns: 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) minmax(12rem, 1fr)' }}
+          >
+            <div className={TABLE_HEADER_CELL}>รหัส</div>
+            <div className={TABLE_HEADER_CELL}>ชื่อ</div>
+            <div className={cn(TABLE_HEADER_CELL, 'text-center')}>ผลการเรียน</div>
+          </div>
+          {summaries.map((s, i) => (
+            <motion.div
+              key={s.studentId}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: i * 0.015 }}
+              className="grid items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 hover:bg-muted/40"
+              style={{ gridTemplateColumns: 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) minmax(12rem, 1fr)' }}
+            >
+              <span className="text-[13px] font-black tabular-nums text-foreground font-sukhumvit">
+                {s.studentCode || '—'}
+              </span>
+              <div className="flex min-w-0 items-center gap-3">
+                <StudentAvatar
+                  studentId={s.studentId}
+                  name={s.studentName}
+                  photoURL={s.photoURL}
+                  className="h-9 w-9 shrink-0 rounded-full"
+                />
+                <span className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                  {s.studentName}
+                </span>
+              </div>
+              <PassFailToggle
+                result={s.result ?? null}
+                disabled={!editable}
+                onChange={(next) => onUpdatePassFail?.(s.studentId, next)}
+              />
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">

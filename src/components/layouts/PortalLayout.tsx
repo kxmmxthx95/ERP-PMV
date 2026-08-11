@@ -1,5 +1,5 @@
 // src/components/layouts/PortalLayout.tsx
-import React, { memo, useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LayoutDashboard, Search, LogOut, Plus, ChevronLeft, Home } from 'lucide-react';
@@ -86,49 +86,6 @@ export const GLASS: React.CSSProperties = {
   border: '1px solid rgba(0,0,0,0.05)',
 };
 
-function formatPortalDate(date: Date) {
-  return new Intl.DateTimeFormat('th-TH', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(date);
-}
-
-function formatPortalTime(date: Date) {
-  return new Intl.DateTimeFormat('th-TH', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(date);
-}
-
-/** Isolated 1s tick — re-renders only this block, not PortalLayout / Outlet. */
-const PortalHeaderClock = memo(function PortalHeaderClock() {
-  const [now, setNow] = useState(() => new Date());
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, x: -10 }}
-      animate={{ opacity: 1, x: 0 }}
-      className="hidden lg:flex flex-col items-start px-4 border-l border-slate-200/50 py-0.5"
-    >
-      <p className="text-[13px] font-black text-slate-800 tracking-tight leading-none mb-1 uppercase font-sukhumvit">
-        {formatPortalTime(now)}
-      </p>
-      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-none">
-        {formatPortalDate(now)}
-      </p>
-    </motion.div>
-  );
-});
-
 // ── Props ─────────────────────────────────────────────────────────────────────
 interface PortalLayoutProps {
   /** Optional page title shown in header center (desktop) */
@@ -185,12 +142,24 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
   };
 
   const currentPageTitle = getPageTitle();
-
+  const [centerMobilePortalActive, setCenterMobilePortalActive] = useState(false);
 
   useEffect(() => {
     if (!isHome && showProfilePopup) setShowProfilePopup(false);
   }, [isHome, showProfilePopup]);
+
+  useEffect(() => {
+    setCenterMobilePortalActive(false);
+    const node = document.getElementById('header-portal-center-mobile');
+    if (!node) return;
+    const sync = () => setCenterMobilePortalActive(node.childElementCount > 0);
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(node, { childList: true });
+    return () => observer.disconnect();
+  }, [location.pathname, isHome]);
   const cfg = ROLE_CONFIG[role ?? ''] ?? ROLE_CONFIG.student;
+  const showRoleLabel = role !== 'teacher';
   const isExecutiveRole = role === 'admin' || role === 'sysadmin';
   const mobileHeaderTabs = useMemo(() => {
     const tabs = BOTTOM_TAB_CONFIG[role ?? 'student'] || BOTTOM_TAB_CONFIG.student;
@@ -265,6 +234,18 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
       </>
     );
   };
+
+  const renderLogoutHeaderButton = () => (
+    <button
+      type="button"
+      onClick={() => authService.logout()}
+      className={cn(HEADER_ICON_BTN, 'text-destructive')}
+      title="ออกจากระบบ"
+      aria-label="ออกจากระบบ"
+    >
+      <HiOutlineArrowLeftOnRectangle size={16} />
+    </button>
+  );
 
   const renderMobileHeaderTabButton = (tab: (typeof mobileHeaderTabs)[number], idx: number) => (
     <motion.button
@@ -359,18 +340,20 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
       <button
         type="button"
         onClick={openProfilePopup}
-        className={`flex flex-col gap-0.5 cursor-pointer text-left ${alignRight ? 'items-end text-right' : 'items-start text-left'}`}
+        className={`flex flex-col cursor-pointer text-left ${showRoleLabel ? 'gap-0.5' : ''} ${alignRight ? 'items-end text-right' : 'items-start text-left'}`}
       >
         <p className="text-[12px] font-black text-slate-800 leading-tight truncate max-w-[120px]">
           {displayName}
         </p>
-        <div className="flex items-center gap-1">
-          {!alignRight && <div className={`w-1 h-1 rounded-full bg-gradient-to-br ${cfg.gradient} shadow-xs`} />}
-          <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-none">
-            {cfg.label}
-          </p>
-          {alignRight && <div className={`w-1 h-1 rounded-full bg-gradient-to-br ${cfg.gradient} shadow-xs`} />}
-        </div>
+        {showRoleLabel && (
+          <div className="flex items-center gap-1">
+            {!alignRight && <div className={`w-1 h-1 rounded-full bg-gradient-to-br ${cfg.gradient} shadow-xs`} />}
+            <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-none">
+              {cfg.label}
+            </p>
+            {alignRight && <div className={`w-1 h-1 rounded-full bg-gradient-to-br ${cfg.gradient} shadow-xs`} />}
+          </div>
+        )}
       </button>
 
       {alignRight && (
@@ -415,14 +398,14 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
 
       {/* ── Top Bar ── */}
       <div
-        className="relative z-20 transition-all duration-300 border-none"
+        className="relative z-20 shrink-0 transition-all duration-300 border-none"
         style={{
           background: headerShellBg,
           backdropFilter: 'none',
           WebkitBackdropFilter: 'none',
         }}
       >
-        <div className="max-w-[1600px] mx-auto relative flex min-h-[52px] items-center justify-between px-4 lg:px-6 pb-2 lg:pb-2.5 pt-2">
+        <div className="max-w-[1600px] mx-auto relative flex min-h-[52px] items-center justify-between px-4 lg:px-6 pt-2 pb-2 lg:pb-2.5">
 
           {/* LEFT: Avatar + Name/Role Capsule + Date/Time + Settings */}
           <div className="flex items-center gap-3 flex-1 lg:flex-none">
@@ -457,13 +440,15 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
                         </div>
                       )}
                     </div>
-                    <div className="flex flex-col items-start gap-0.5">
+                    <div className={`flex flex-col items-start ${showRoleLabel ? 'gap-0.5' : ''}`}>
                       <p className="text-[12px] font-black text-white leading-tight truncate max-w-[135px]">
                         {displayName}
                       </p>
-                      <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-none">
-                        {cfg.label}
-                      </p>
+                      {showRoleLabel && (
+                        <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-none">
+                          {cfg.label}
+                        </p>
+                      )}
                     </div>
                   </button>
 
@@ -500,14 +485,14 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
                 </div>
               ) : isHome ? (
                 <>
-                  {/* Left side: Avatar */}
-                  {renderMobileAvatar(false)}
+                  {role !== 'teacher' && renderMobileAvatar(false)}
 
                   {/* Right side: Navigation Tabs */}
-                  <div className="flex items-center gap-1 min-h-10">
+                  <div className={cn('ml-auto flex items-center min-h-10', HEADER_ICON_BTN_GROUP)}>
                     {mobileSecondaryNavTabs.map((tab, idx) => renderMobileHeaderTabButton(tab, idx))}
                     {showAiAgentButton && renderAiAgentHeaderButton('sm')}
                     {mobilePrimaryNavTabs.map((tab, idx) => renderMobileHeaderTabButton(tab, idx))}
+                    {renderLogoutHeaderButton()}
                   </div>
                 </>
               ) : (
@@ -529,12 +514,17 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
                         <ChevronLeft size={20} />
                       </motion.button>
                     </div>
+                    {!centerMobilePortalActive && currentPageTitle ? (
+                      <p className="pointer-events-none absolute inset-x-0 z-[2] flex items-center justify-center truncate px-14 font-sukhumvit text-[13px] font-black leading-snug tracking-tight text-slate-800">
+                        {currentPageTitle}
+                      </p>
+                    ) : null}
                     <div
                       id="header-portal-center-mobile"
-                      className="absolute inset-x-0 top-0 bottom-0 flex items-center justify-center pointer-events-none"
+                      className="absolute inset-x-0 top-0 bottom-0 z-[1] flex items-center justify-center pointer-events-none [&>*]:pointer-events-auto"
                     />
-                    <div className="flex items-center justify-end relative z-10 shrink-0 gap-1">
-                      <div id="header-portal-mobile-actions" className="flex items-center justify-end" />
+                    <div className={cn('relative z-10 flex shrink-0 items-center justify-end', HEADER_ICON_BTN_GROUP)}>
+                      <div id="header-portal-mobile-actions" className={cn('flex items-center justify-end', HEADER_ICON_BTN_GROUP)} />
                     </div>
                   </div>
                 </>
@@ -576,16 +566,18 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
                   style={GLASS}
                   onClick={openProfilePopup}
                 >
-                  <div className="flex flex-col items-start gap-1">
+                  <div className={`flex flex-col items-start ${showRoleLabel ? 'gap-1' : ''}`}>
                     <p className="text-[13px] font-black text-slate-800 leading-none">
                       {displayName}
                     </p>
-                    <div className="flex items-center gap-1.5">
-                      <div className={`w-1.5 h-1.5 rounded-full bg-gradient-to-br ${cfg.gradient} shadow-sm`} />
-                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-none">
-                        {cfg.label}
-                      </p>
-                    </div>
+                    {showRoleLabel && (
+                      <div className="flex items-center gap-1.5">
+                        <div className={`w-1.5 h-1.5 rounded-full bg-gradient-to-br ${cfg.gradient} shadow-sm`} />
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest leading-none">
+                          {cfg.label}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </button>
 
@@ -617,7 +609,9 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
                       </div>
                       <div className="min-w-0">
                         <p className="text-sm font-black text-slate-800 truncate">{displayName}</p>
-                        <p className="text-[11px] font-bold text-slate-500 truncate">{cfg.label}</p>
+                        {showRoleLabel && (
+                          <p className="text-[11px] font-bold text-slate-500 truncate">{cfg.label}</p>
+                        )}
                       </div>
                     </div>
 
@@ -652,14 +646,12 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
 
 
 
-            {/* Time & Date Display (Dashboard only) — isolated tick, no Outlet re-render */}
-            {isHome && view === 'dashboard' && <PortalHeaderClock />}
-
             {/* Page Title (when on menu page) */}
             {!isHome && currentPageTitle && (
-              <div className="hidden lg:flex items-center gap-3 ml-2">
-                <div className="h-4 w-[1px] bg-slate-300" />
-                <p className="text-sm font-bold text-slate-800 tracking-tight">{currentPageTitle}</p>
+              <div className="hidden lg:flex items-center min-w-0 h-11">
+                <p className="text-[13px] font-black text-slate-800 tracking-tight truncate font-sukhumvit leading-snug py-0.5">
+                  {currentPageTitle}
+                </p>
               </div>
             )}
 
@@ -689,27 +681,13 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
             className="pointer-events-none absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 lg:flex items-center justify-center"
           />
 
-          {/* RIGHT: Portal Actions + Home/Menu + Logout (logout after menu) */}
-          <div className="flex items-center gap-3">
-            <div className="hidden lg:flex items-center rounded-full p-1 gap-1 bg-transparent">
-              <div id="header-portal-right-actions" className="flex items-center gap-1" />
-              {showAiAgentButton && renderAiAgentHeaderButton()}
-            </div>
-
-            <div className={cn('hidden lg:flex shrink-0', HEADER_ICON_BTN_GROUP)}>
-              <div id="header-portal-home-actions" className={cn('flex', HEADER_ICON_BTN_GROUP)} />
-              {renderDesktopHomeMenuButtons()}
-              {isHome && (
-                <button
-                  type="button"
-                  onClick={() => authService.logout()}
-                  className={cn(HEADER_ICON_BTN, 'text-rose-500')}
-                  title="ออกจากระบบ"
-                >
-                  <LogOut size={16} />
-                </button>
-              )}
-            </div>
+          {/* RIGHT: feature actions + Home/Menu + Logout — one HEADER_ICON_BTN_GROUP (gap-1.5) */}
+          <div className={cn('hidden lg:flex shrink-0 items-center', HEADER_ICON_BTN_GROUP)}>
+            <div id="header-portal-right-actions" className={cn('flex', HEADER_ICON_BTN_GROUP)} />
+            {showAiAgentButton && renderAiAgentHeaderButton()}
+            <div id="header-portal-home-actions" className={cn('flex', HEADER_ICON_BTN_GROUP)} />
+            {renderDesktopHomeMenuButtons()}
+            {isHome && renderLogoutHeaderButton()}
           </div>
         </div>
       </div>
@@ -768,15 +746,15 @@ export default function PortalLayout({ title }: PortalLayoutProps) {
               'mx-auto flex min-h-full w-full max-w-[1600px] flex-col',
               /* หน้าหลัก: gutter กว้าง + padding แนวตั้ง */
               isHome && 'px-4 pt-2 pb-5 sm:px-5 lg:px-8 lg:pt-3 lg:pb-12',
-              /* หน้าอื่น: ไม่ตัดด้วย pt/pb — min-h-full ให้โตตามเนื้อหา + เต็ม scrollport */
-              !isHome && 'min-h-full px-2 sm:px-2.5 lg:px-3',
+              /* หน้าอื่น: gutter เท่าหน้าหลัก */
+              !isHome && 'min-h-full px-4 pt-2 pb-3 sm:px-5 lg:px-8 lg:pt-3 lg:pb-4',
             )}
           >
             {/* Inner: home มี py; หน้าอื่นไม่ตัดแนวตั้ง ส่งความสูงลง Outlet */}
             <div
               className={cn(
                 'flex w-full min-h-0 flex-1 flex-col',
-                isHome ? 'px-1.5 py-3 sm:px-2 sm:py-4' : 'min-h-full px-0.5 sm:px-1',
+                isHome ? 'px-1.5 py-3 sm:px-2 sm:py-4' : 'flex min-h-full flex-1 flex-col',
               )}
             >
               <Outlet context={outletContext} />

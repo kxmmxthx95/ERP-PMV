@@ -133,24 +133,24 @@ async function loadStaffSummary(date, now = new Date()) {
             docSnap.id;
         staffNameById.set(docSnap.id, name);
     });
+    // กรอง startDate/endDate ที่ query เลย (index status+startDate+endDate มีอยู่แล้ว)
+    // แทนที่จะดึง approved leave_requests ทั้งหมดตั้งแต่เปิดระบบมาโหลดทุกวัน (โตไม่จำกัดตามเวลา)
     const leaveSnap = await db
         .collection("leave_requests")
         .where("status", "==", "approved")
+        .where("startDate", "<=", date)
+        .where("endDate", ">=", date)
         .get();
     const onLeaveIds = new Set();
     leaveSnap.forEach((docSnap) => {
         const row = docSnap.data();
         const requesterId = typeof row.requesterId === "string" ? row.requesterId : "";
-        const startDate = typeof row.startDate === "string" ? row.startDate : "";
-        const endDate = typeof row.endDate === "string" ? row.endDate : "";
         const requesterType = typeof row.requesterType === "string" ? row.requesterType : "";
         if (!requesterId || !staffIds.has(requesterId))
             return;
         if (requesterType === "student")
             return;
-        if (startDate <= date && endDate >= date) {
-            onLeaveIds.add(requesterId);
-        }
+        onLeaveIds.add(requesterId);
     });
     const entriesSnap = await db
         .collection("staff_attendance_by_date")

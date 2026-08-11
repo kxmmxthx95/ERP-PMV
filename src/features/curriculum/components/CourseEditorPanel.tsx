@@ -26,6 +26,8 @@ import { cn } from '@/lib/utils';
 import { DRAWER_HEADER_ICON_BTN, DRAWER_HEADER_RIGHT_ACTIONS } from '@/lib/drawerHeaderBtn';
 import {
   SUBJECT_GROUP_CONFIG,
+  gradingSchemeLabel,
+  isPassFailCourseCategory,
   type CurriculumVersion, type CurriculumCourse, type SubjectGroupId,
   type CourseCategory,
 } from '@/types/curriculum';
@@ -460,13 +462,15 @@ export default function CourseEditorPanel({
       </div>
       {/* ── Course List ── */}
       <div className="flex-1 min-h-0 relative overflow-hidden flex flex-col">
-        <div className="flex-1 overflow-y-auto scrollbar-hide">
+        <div className="flex-1 overflow-auto scrollbar-hide">
           {/* Sticky Table Header */}
-          <div className="sticky top-0 z-10 hidden md:grid grid-cols-[1fr_6rem_6rem_12rem_5rem_5rem_4rem] items-center gap-3 px-5 py-3 text-[11px] font-black text-slate-700 bg-slate-50/90 backdrop-blur-md border-b border-slate-100/80 mb-2 shrink-0">
-            <div className="pl-[60px]">รายวิชา</div>
+          <div className="sticky top-0 z-10 hidden md:grid grid-cols-[6rem_minmax(12rem,1fr)_6rem_6rem_10rem_6rem_5rem_5rem_4rem] min-w-max items-center gap-3 px-5 py-3 text-[11px] font-black text-slate-700 bg-slate-50/90 backdrop-blur-md border-b border-slate-100/80 mb-2 shrink-0">
+            <div>รหัสวิชา</div>
+            <div>รายวิชา</div>
             <div className="text-center">ภาคเรียน</div>
             <div className="text-center">ชั้นเรียน</div>
             <div className="px-3">กลุ่มสาระ</div>
+            <div className="text-center">ประเภทวิชา</div>
             <div className="text-center">คาบ</div>
             <div className="text-center">หน่วยกิต</div>
             <div className="text-center">การจัดการ</div>
@@ -612,125 +616,201 @@ function CourseCard({
   const catStyle = CATEGORY_STYLE[course.category as keyof typeof CATEGORY_STYLE] || CATEGORY_STYLE.basic;
   const groupLabel = getGroupLabelThai(course.subjectGroup || groupCfg.name);
 
-  return (
-    <motion.div
-      onHoverStart={() => setHovered(true)}
-      onHoverEnd={() => setHovered(false)}
+  const semesterPill = (
+    <span className={cn(
+      "inline-flex items-center justify-center px-2.5 py-0.5 rounded-full border text-[10px] font-black transition-colors",
+      course.semester === 2
+        ? hovered
+          ? "bg-indigo-100/50 border-indigo-200/30 text-indigo-900"
+          : "bg-indigo-50/50 border-indigo-100/20 text-indigo-600"
+        : hovered
+          ? "bg-blue-100/50 border-blue-200/30 text-blue-900"
+          : "bg-blue-50/50 border-blue-100/20 text-blue-600"
+    )}>
+      เทอม {course.semester || '–'}
+    </span>
+  );
+
+  const gradePill = (
+    <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full bg-slate-100/80 border border-slate-200/40 text-[10px] font-black transition-colors ${hovered ? 'text-slate-900 bg-slate-200/80' : 'text-slate-600'
+      }`}>
+      {course.gradeLevel || '–'}
+    </span>
+  );
+
+  const categoryPill = (
+    <span className={cn('inline-flex items-center gap-1 text-[10px] font-black px-2.5 py-0.5 rounded-full', catStyle.bg, catStyle.text)}>
+      <span className={cn('w-1.5 h-1.5 rounded-full', catStyle.dot)} />
+      {catStyle.label}
+    </span>
+  );
+
+  const gradingSchemePill = (
+    <span
       className={cn(
-        "group relative flex flex-col md:grid md:grid-cols-[1fr_6rem_6rem_12rem_5rem_5rem_4rem] items-start md:items-center gap-3 p-4 md:px-5 md:py-3 border border-slate-100 md:border-0 md:border-b md:border-slate-100/70 rounded-2xl md:rounded-none transition-all cursor-pointer text-left bg-white hover:bg-slate-50/70"
+        'inline-flex items-center gap-1 text-[10px] font-black px-2.5 py-0.5 rounded-full border',
+        isPassFailCourseCategory(course.category)
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : 'border-slate-200 bg-slate-50 text-slate-600',
       )}
+      title={
+        isPassFailCourseCategory(course.category)
+          ? 'บังคับตามหมวดกิจกรรม · ไม่เข้า GPA'
+          : 'ตัดเกรดตามเกณฑ์'
+      }
     >
-      {/* 1. รายวิชา */}
-      <div className="flex items-start md:items-center gap-4 min-w-0 w-full pr-8 md:pr-0">
-        <div
-          className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 shadow-sm transition-all"
-          style={{
-            background: `linear-gradient(135deg, ${colors[1]} 0%, ${colors[0]} 100%)`,
-          }}
+      {gradingSchemeLabel(course.category)}
+    </span>
+  );
+
+  const actionsMenu = canEdit ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={`p-2 rounded-full transition-colors focus:outline-none ${hovered
+              ? 'text-slate-500 hover:bg-white hover:text-slate-700'
+              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+            }`}
         >
-          <SubjectIcon subjectGroup={course.subjectGroup || groupCfg.name} />
-        </div>
-        <div className="flex flex-col min-w-0">
-          <div className="flex items-center gap-2 mb-0.5 min-w-0 flex-wrap">
+          <HiEllipsisHorizontal size={15} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-40 rounded-2xl bg-white/95 backdrop-blur-xl border-slate-100 shadow-xl shadow-slate-900/10 z-50">
+        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit(); }} className="gap-2 cursor-pointer rounded-xl text-[12px] font-bold text-slate-700 m-1">
+          <HiPencil size={13} className="text-blue-500" />
+          <span>แก้ไข</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDelete(); }} className="gap-2 cursor-pointer rounded-xl text-[12px] font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 focus:text-rose-700 focus:bg-rose-50 m-1">
+          <HiTrash size={13} />
+          <span>ลบวิชา</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : (
+    <HiEllipsisHorizontal size={15} className={hovered ? 'text-slate-400' : 'text-slate-200'} />
+  );
+
+  const subjectIconEl = (
+    <div
+      className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-sm transition-all"
+      style={{
+        background: `linear-gradient(135deg, ${colors[1]} 0%, ${colors[0]} 100%)`,
+      }}
+    >
+      <SubjectIcon subjectGroup={course.subjectGroup || groupCfg.name} size={14} />
+    </div>
+  );
+
+  return (
+    <>
+      {/* ── Mobile Card ── */}
+      <motion.div
+        onHoverStart={() => setHovered(true)}
+        onHoverEnd={() => setHovered(false)}
+        className="group relative flex flex-col gap-3 p-4 border border-slate-100 rounded-2xl transition-all cursor-pointer text-left bg-white hover:bg-slate-50/70 md:hidden"
+      >
+        <div className="flex items-start gap-4 min-w-0 w-full pr-8">
+          {subjectIconEl}
+          <div className="flex flex-col min-w-0">
             <h4 className={`text-[13px] font-black tracking-tight truncate max-w-[200px] sm:max-w-xs transition-colors ${hovered ? 'text-slate-900' : 'text-slate-800'
               }`}>
               {course.courseName}
             </h4>
-            <span className={`inline-flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full shrink-0 ${catStyle.bg} ${catStyle.text}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${catStyle.dot}`} />
-              {catStyle.label}
-            </span>
-          </div>
-          <div>
-            <span className="text-[10px] font-black text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded uppercase tracking-tighter">
+            <span className="text-[10px] font-black text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded uppercase tracking-tighter w-fit mt-0.5">
               {course.courseCode}
             </span>
           </div>
         </div>
-      </div>
 
-      {/* Wrapper for items 2-5 to be flex on mobile, contents on desktop */}
-      <div className="flex flex-wrap items-center gap-2 mt-1 md:mt-0 w-full md:contents">
-        {/* 2. ภาคเรียน */}
-        <div className="flex justify-center shrink-0">
-          <span className={cn(
-            "inline-flex items-center justify-center px-2.5 py-0.5 rounded-full border text-[10px] font-black transition-colors",
-            course.semester === 2
-              ? hovered
-                ? "bg-indigo-100/50 border-indigo-200/30 text-indigo-900"
-                : "bg-indigo-50/50 border-indigo-100/20 text-indigo-600"
-              : hovered
-                ? "bg-blue-100/50 border-blue-200/30 text-blue-900"
-                : "bg-blue-50/50 border-blue-100/20 text-blue-600"
-          )}>
-            เทอม {course.semester || '–'}
+        <div className="flex flex-wrap items-center gap-2 w-full">
+          <div className="shrink-0">{semesterPill}</div>
+          <div className="shrink-0">{gradePill}</div>
+          <div className="min-w-0 shrink-0">
+            <p className={`text-[10px] font-bold font-sarabun truncate transition-colors px-2.5 py-0.5 rounded-full bg-slate-50 border border-slate-200/40 ${hovered ? 'text-slate-900' : 'text-slate-600'
+              }`}>
+              {groupLabel}
+            </p>
+          </div>
+          <div className="shrink-0">{categoryPill}</div>
+          <div className="shrink-0">{gradingSchemePill}</div>
+          <div className="shrink-0 flex items-center gap-1 bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-200/40">
+            <span className="text-[10px] text-slate-500 font-bold">คาบ:</span>
+            <p className={`text-[11px] font-black font-sarabun transition-colors ${hovered ? 'text-slate-900' : 'text-slate-700'}`}>
+              {course.periodsPerWeek || 0}
+            </p>
+          </div>
+          <div className="shrink-0 flex items-center gap-1 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-100/50">
+            <span className="text-[10px] text-blue-600 font-bold">นก.:</span>
+            <p className={`text-[11px] font-black font-sarabun transition-colors ${hovered ? 'text-blue-900' : 'text-blue-700'}`}>
+              {Number(course.credit || 0).toFixed(1)}
+            </p>
+          </div>
+        </div>
+
+        <div className="absolute top-3 right-3 flex justify-center">
+          {actionsMenu}
+        </div>
+      </motion.div>
+
+      {/* ── Desktop Table Row ── */}
+      <motion.div
+        onHoverStart={() => setHovered(true)}
+        onHoverEnd={() => setHovered(false)}
+        className="hidden md:grid md:grid-cols-[6rem_minmax(12rem,1fr)_6rem_6rem_10rem_6rem_5rem_5rem_4rem] min-w-max items-center gap-3 px-5 py-3 border-b border-slate-100/70 transition-all cursor-pointer text-left bg-white hover:bg-slate-50/70"
+      >
+        {/* 1. รหัสวิชา */}
+        <div className="shrink-0">
+          <span className="inline-block rounded-md bg-muted px-2 py-0.5 text-[11px] font-bold text-muted-foreground font-sarabun">
+            {course.courseCode || '-'}
           </span>
         </div>
 
-        {/* 3. ชั้นเรียน */}
-        <div className="flex justify-center shrink-0">
-          <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full bg-slate-100/80 border border-slate-200/40 text-[10px] font-black transition-colors ${hovered ? 'text-slate-900 bg-slate-200/80' : 'text-slate-600'
+        {/* 2. รายวิชา */}
+        <div className="flex items-center gap-2.5 min-w-0">
+          {subjectIconEl}
+          <h4 className={`text-[13px] font-black tracking-tight truncate transition-colors ${hovered ? 'text-slate-900' : 'text-slate-800'
             }`}>
-            {course.gradeLevel || '–'}
-          </span>
+            {course.courseName}
+          </h4>
         </div>
 
-        {/* 3. กลุ่มสาระ */}
-        <div className="px-0 md:px-3 min-w-0 shrink-0">
-          <p className={`text-[10px] md:text-[12px] font-bold font-sarabun truncate transition-colors px-2.5 py-0.5 rounded-full bg-slate-50 md:bg-transparent md:px-0 md:py-0 border border-slate-200/40 md:border-0 ${hovered ? 'text-slate-900' : 'text-slate-600'
+        {/* 3. ภาคเรียน */}
+        <div className="flex justify-center shrink-0">{semesterPill}</div>
+
+        {/* 4. ชั้นเรียน */}
+        <div className="flex justify-center shrink-0">{gradePill}</div>
+
+        {/* 5. กลุ่มสาระ */}
+        <div className="px-3 min-w-0 shrink-0">
+          <p className={`text-[12px] font-bold font-sarabun truncate transition-colors ${hovered ? 'text-slate-900' : 'text-slate-600'
             }`}>
             {groupLabel}
           </p>
         </div>
 
-        {/* 4. คาบ */}
-        <div className="text-center shrink-0 flex items-center md:justify-center md:w-full gap-1 bg-slate-50 md:bg-transparent px-2.5 py-0.5 md:px-0 md:py-0 rounded-full border border-slate-200/40 md:border-0">
-          <span className="md:hidden text-[10px] text-slate-500 font-bold">คาบ:</span>
-          <p className={`text-[11px] md:text-[13px] font-black font-sarabun transition-colors ${hovered ? 'text-slate-900' : 'text-slate-700'
-            }`}>
+        {/* 6. ประเภทวิชา + รูปแบบผลการเรียน */}
+        <div className="flex flex-col items-center justify-center gap-1 shrink-0">
+          {categoryPill}
+          {gradingSchemePill}
+        </div>
+
+        {/* 7. คาบ */}
+        <div className="text-center shrink-0">
+          <p className={`text-[13px] font-black font-sarabun transition-colors ${hovered ? 'text-slate-900' : 'text-slate-700'}`}>
             {course.periodsPerWeek || 0}
           </p>
         </div>
 
-        {/* 5. หน่วยกิต */}
-        <div className="text-center shrink-0 flex items-center md:justify-center md:w-full gap-1 bg-blue-50 md:bg-transparent px-2.5 py-0.5 md:px-0 md:py-0 rounded-full border border-blue-100/50 md:border-0">
-          <span className="md:hidden text-[10px] text-blue-600 font-bold">นก.:</span>
-          <p className={`text-[11px] md:text-[13px] font-black font-sarabun transition-colors ${hovered ? 'text-blue-900 md:text-slate-950' : 'text-blue-700 md:text-slate-800'
-            }`}>
+        {/* 8. หน่วยกิต */}
+        <div className="text-center shrink-0">
+          <p className={`text-[13px] font-black font-sarabun transition-colors ${hovered ? 'text-slate-950' : 'text-slate-800'}`}>
             {Number(course.credit || 0).toFixed(1)}
           </p>
         </div>
-      </div>
 
-      {/* 6. การจัดการ */}
-      <div className="absolute top-3 right-3 md:relative md:top-0 md:right-0 flex justify-center">
-        {canEdit ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className={`p-2 rounded-full transition-colors focus:outline-none ${hovered
-                    ? 'text-slate-500 hover:bg-white hover:text-slate-700'
-                    : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
-                  }`}
-              >
-                <HiEllipsisHorizontal size={15} />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-40 rounded-2xl bg-white/95 backdrop-blur-xl border-slate-100 shadow-xl shadow-slate-900/10 z-50">
-              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit(); }} className="gap-2 cursor-pointer rounded-xl text-[12px] font-bold text-slate-700 m-1">
-                <HiPencil size={13} className="text-blue-500" />
-                <span>แก้ไข</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDelete(); }} className="gap-2 cursor-pointer rounded-xl text-[12px] font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 focus:text-rose-700 focus:bg-rose-50 m-1">
-                <HiTrash size={13} />
-                <span>ลบวิชา</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : (
-          <HiEllipsisHorizontal size={15} className={hovered ? 'text-slate-400' : 'text-slate-200'} />
-        )}
-      </div>
-    </motion.div>
+        {/* 9. การจัดการ */}
+        <div className="flex justify-center">{actionsMenu}</div>
+      </motion.div>
+    </>
   );
 }

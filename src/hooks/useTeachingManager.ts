@@ -546,6 +546,8 @@ export function useTeachingManager(currentTeacherId: string, canViewAllSubjects?
           excusedStudentIds,
           leaveStudentIds,
           totalStudents: sessionRecords.length,
+          // ครูเช็คชื่อจริงแล้ว — เคลียร์ flag leaveSyncOnly เผื่อเอกสารนี้เคยถูกสร้างจาก sync ใบลาล้วนๆ มาก่อน
+          leaveSyncOnly: false,
           updatedAt: recordedAt,
           createdAt: recordedAt,
         },

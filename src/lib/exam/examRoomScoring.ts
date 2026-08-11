@@ -22,6 +22,12 @@ function toDisplayPercent(score: number, maxPoints: number): number | null {
   return Math.round(rawPointsToPercent(score, maxPoints));
 }
 
+/** Display raw points as whole number — hides float noise (e.g. 11.399999999999997 → "11"). */
+export function formatScorePoints(score: number | null | undefined): string {
+  if (score == null || Number.isNaN(Number(score))) return '-';
+  return String(Math.round(Number(score)));
+}
+
 export function resolveAttemptScoreDisplay(
   room: ExamRoom,
   attempt: ExamAttempt,

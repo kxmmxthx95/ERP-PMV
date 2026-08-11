@@ -29,7 +29,9 @@ import { useLeaveRequesterClassMap, type LeaveRequesterProfile } from '@/feature
 import { getInitials } from '@/features/profile/profileLayoutShared';
 import { getGradeLevelBadgeStyle } from '@/lib/school/gradeLevelBadge';
 import { DEPARTMENT_CONFIG, type Department } from '@/types/curriculum';
-import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
+import { getPortalMenuTitle } from '@/lib/portalMenu';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
+import { Button } from '@/components/ui/button';
 
 type StatusFilter = 'all' | LeaveStatus;
 
@@ -44,17 +46,40 @@ const LEAVE_TYPE_LABEL: Record<LeaveType, string> = {
   personal: 'ลากิจ',
 };
 
-const STATUS_CONFIG: Record<LeaveStatus, { label: string; bg: string; border: string; text: string; icon: typeof Check }> = {
-  pending: { label: 'รอพิจารณา', bg: 'bg-amber-50', border: 'border-amber-100', text: 'text-amber-700', icon: Clock },
-  approved: { label: 'อนุมัติแล้ว', bg: 'bg-emerald-50', border: 'border-emerald-100', text: 'text-emerald-700', icon: Check },
-  rejected: { label: 'ไม่อนุมัติ', bg: 'bg-rose-50', border: 'border-rose-100', text: 'text-rose-700', icon: X },
+const STATUS_CONFIG: Record<LeaveStatus, { label: string; pill: string; icon: typeof Check }> = {
+  pending: {
+    label: 'รอพิจารณา',
+    pill: 'bg-secondary text-secondary-foreground',
+    icon: Clock,
+  },
+  approved: {
+    label: 'อนุมัติแล้ว',
+    pill: 'bg-primary/10 text-primary',
+    icon: Check,
+  },
+  rejected: {
+    label: 'ไม่อนุมัติ',
+    pill: 'bg-destructive/10 text-destructive',
+    icon: X,
+  },
 };
 
 const LEAVE_REQUESTS_PER_PAGE = 8;
 
-const LEAVE_CARD_OUTER = 'px-0.5 py-0.5';
-const LEAVE_CARD_SHELL =
-  'rounded-2xl cursor-pointer transition-all overflow-hidden relative';
+/** Desktop grid: ผู้ยื่น | แผนก | ห้อง | ประเภท | วันที่ลา | สถานะ | ผู้อนุมัติ | ดำเนินการ */
+const LEAVE_REVIEW_TABLE_GRID =
+  'minmax(0, 1.15fr) minmax(4.25rem, 0.5fr) minmax(4.75rem, 0.58fr) minmax(5.5rem, 0.62fr) minmax(7.5rem, 0.72fr) minmax(6.5rem, 0.68fr) minmax(0, 0.85fr) minmax(6.25rem, 0.72fr)';
+
+const LEAVE_PANEL_SHELL = cn(
+  'flex min-h-0 flex-1 w-full flex-col overflow-hidden',
+  'rounded-none border-0 bg-transparent px-0 pb-2 pt-0',
+  'md:rounded-2xl md:border md:border-border md:bg-card md:px-2 md:pb-2 md:pt-0 lg:px-2.5 lg:pb-2.5',
+);
+
+const LEAVE_EMPTY_SHELL = cn(
+  'w-full rounded-2xl border border-dashed border-border bg-muted/40',
+  'flex flex-col items-center justify-center px-6 py-10 text-center',
+);
 
 function formatLeaveDateCompact(startDate: string, endDate: string): string {
   if (startDate === endDate) return formatDate(startDate);
@@ -76,17 +101,23 @@ function parseLeaveTimestamp(ts: LeaveRequest['createdAt'] | undefined): Date | 
   return null;
 }
 
-function formatLeaveSubmittedAt(ts: LeaveRequest['createdAt'] | undefined): string {
+function formatLeaveSubmittedParts(
+  ts: LeaveRequest['createdAt'] | undefined,
+): { date: string; time: string } | null {
   const date = parseLeaveTimestamp(ts);
-  if (!date || Number.isNaN(date.getTime())) return '—';
-  return `${date.toLocaleString('th-TH', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })} น.`;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  return {
+    date: date.toLocaleDateString('th-TH', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    }),
+    time: `${date.toLocaleTimeString('th-TH', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })} น.`,
+  };
 }
 
 function resolveLeaveApproverLabels(
@@ -108,12 +139,15 @@ function resolveLeaveApproverLabels(
 // ── Status Badge ─────────────────────────────────────────────────────────────
 function StatusPill({ status }: { status: LeaveStatus }) {
   const c = STATUS_CONFIG[status];
+  const Icon = c.icon;
   return (
-    <span className={cn(
-      'inline-flex min-w-8 items-center justify-center rounded-lg px-2 py-0.5 text-[11px] font-black',
-      c.bg,
-      c.text,
-    )}>
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold font-sukhumvit',
+        c.pill,
+      )}
+    >
+      <Icon size={12} strokeWidth={2.5} aria-hidden />
       {c.label}
     </span>
   );
@@ -135,6 +169,11 @@ function DepartmentBadge({ departmentId }: { departmentId: Department }) {
   );
 }
 
+function resolveLeaveActionByLabel(req: LeaveRequest): string {
+  if (req.status === 'pending') return '';
+  return req.approverName?.trim() || '';
+}
+
 function GradeLevelBadge({ gradeLevel }: { gradeLevel: string }) {
   const style = getGradeLevelBadgeStyle(gradeLevel);
   return (
@@ -148,6 +187,58 @@ function GradeLevelBadge({ gradeLevel }: { gradeLevel: string }) {
     >
       {gradeLevel}
     </span>
+  );
+}
+
+function ClassroomBadge({ className, gradeLevel }: { className: string; gradeLevel?: string }) {
+  const style = getGradeLevelBadgeStyle(gradeLevel || className.split('/')[0] || className);
+  return (
+    <span
+      className="inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-black"
+      style={{
+        color: style.color,
+        backgroundColor: style.bg,
+        border: `1px solid ${style.border}`,
+      }}
+    >
+      {className}
+    </span>
+  );
+}
+
+function LeaveReviewTableDeptRoomCells({
+  profile,
+}: {
+  profile?: LeaveRequesterProfile | null;
+}) {
+  if (!profile?.departmentId && !profile?.className) {
+    return (
+      <>
+        <span className="text-[13px] font-bold text-muted-foreground/40 font-sukhumvit">—</span>
+        <span className="text-[13px] font-bold text-muted-foreground/40 font-sukhumvit">—</span>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div>
+        {profile?.departmentId ? (
+          <DepartmentBadge departmentId={profile.departmentId} />
+        ) : (
+          <span className="text-[13px] font-bold text-muted-foreground/40 font-sukhumvit">—</span>
+        )}
+      </div>
+      <div>
+        {profile?.className ? (
+          <ClassroomBadge className={profile.className} gradeLevel={profile.gradeLevel} />
+        ) : profile?.gradeLevel ? (
+          <GradeLevelBadge gradeLevel={profile.gradeLevel} />
+        ) : (
+          <span className="text-[13px] font-bold text-muted-foreground/40 font-sukhumvit">—</span>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -167,212 +258,222 @@ function LeaveCard({
   onReject?: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [approving, setApproving] = useState(false);
   const days = countDays(req.startDate, req.endDate);
   const displayName = req.requesterName?.trim() || '—';
   const dateLabel = formatLeaveDateCompact(req.startDate, req.endDate);
-  const submittedAtLabel = formatLeaveSubmittedAt(req.createdAt);
+  const submittedAt = formatLeaveSubmittedParts(req.createdAt);
   const showAvatar = showRequester || Boolean(req.requesterPhotoUrl || req.requesterName);
   const approverLabels = resolveLeaveApproverLabels(req, requesterProfile);
   const showApproverList = showRequester || showApprover;
-
-  const statusColor = {
-    pending: '#f59e0b',
-    approved: '#10b981',
-    rejected: '#ef4444',
-  }[req.status] || '#6366f1';
+  const title = showRequester ? displayName : LEAVE_TYPE_LABEL[req.leaveType];
 
   return (
-    <motion.div layout className={LEAVE_CARD_OUTER}>
-      <div
-        className={cn(LEAVE_CARD_SHELL, expanded && 'ring-2 ring-blue-100')}
-        onClick={() => setExpanded(v => !v)}
-        style={{
-          backgroundColor: statusColor,
-          backgroundImage: 'linear-gradient(45deg, rgba(255, 255, 255, 0.28) 0%, rgba(0, 0, 0, 0.25) 100%)',
-        }}
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={cn(
+        'overflow-hidden rounded-2xl border border-border bg-card transition-colors',
+        expanded && 'border-foreground/20',
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full p-3 text-left transition-colors hover:bg-muted/40 active:scale-[0.99]"
+        aria-expanded={expanded}
       >
-        <div className="relative z-10 p-3 flex items-start justify-between gap-2">
-          <div className="flex min-w-0 flex-1 items-start gap-2.5">
-            {showAvatar && (
-              req.requesterPhotoUrl ? (
-                <img
-                  src={req.requesterPhotoUrl}
-                  alt=""
-                  className="h-10 w-10 shrink-0 rounded-xl object-cover"
-                />
-              ) : (
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 text-[11px] font-black text-slate-600">
-                  {getInitials(displayName)}
-                </div>
-              )
-            )}
-
-            <div className="min-w-0 flex-1">
-              <p
-                className="truncate text-[13px] font-bold text-white"
-                title={showRequester ? displayName : LEAVE_TYPE_LABEL[req.leaveType]}
-              >
-                {showRequester ? displayName : LEAVE_TYPE_LABEL[req.leaveType]}
-              </p>
-
-              {showRequester && req.requesterStudentCode && (
-                <p className="mt-0.5 text-[11px] font-medium text-white/80 tabular-nums">
-                  รหัส {req.requesterStudentCode}
-                </p>
-              )}
-
-              {showRequester && requesterProfile && (requesterProfile.departmentId || requesterProfile.gradeLevel) && (
-                <div className="mt-1 flex flex-wrap items-center gap-1">
-                  {requesterProfile.departmentId && (
-                    <DepartmentBadge departmentId={requesterProfile.departmentId} />
-                  )}
-                  {requesterProfile.gradeLevel && (
-                    <GradeLevelBadge gradeLevel={requesterProfile.gradeLevel} />
-                  )}
-                </div>
-              )}
+        <div className="flex items-start gap-3">
+          {showAvatar ? (
+            req.requesterPhotoUrl ? (
+              <img
+                src={req.requesterPhotoUrl}
+                alt=""
+                className="h-10 w-10 shrink-0 rounded-full object-cover"
+              />
+            ) : (
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-black text-muted-foreground font-sukhumvit">
+                {getInitials(displayName)}
+              </div>
+            )
+          ) : (
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <ClipboardList size={18} aria-hidden />
             </div>
-          </div>
+          )}
 
-          <div className="shrink-0 text-center">
-            <p className="mb-0.5 text-[9px] font-black uppercase tracking-wide text-white/60">
-              สถานะ
-            </p>
-            <StatusPill status={req.status} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit" title={title}>
+                  {title}
+                </p>
+                {showRequester && req.requesterStudentCode ? (
+                  <p className="mt-0.5 text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+                    {req.requesterStudentCode}
+                  </p>
+                ) : null}
+              </div>
+              <StatusPill status={req.status} />
+            </div>
+
+            {showRequester && requesterProfile && (requesterProfile.departmentId || requesterProfile.className || requesterProfile.gradeLevel) ? (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                {requesterProfile.departmentId ? (
+                  <DepartmentBadge departmentId={requesterProfile.departmentId} />
+                ) : null}
+                {requesterProfile.className ? (
+                  <ClassroomBadge className={requesterProfile.className} gradeLevel={requesterProfile.gradeLevel} />
+                ) : requesterProfile.gradeLevel ? (
+                  <GradeLevelBadge gradeLevel={requesterProfile.gradeLevel} />
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
 
-        <div className="relative z-10 mt-2.5 px-3 pb-3 grid grid-cols-3 gap-2 border-t border-white/20 pt-2.5">
+        <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-border pt-2.5">
           <div>
-            <p className="text-[9px] font-black uppercase tracking-wide text-white/60">
-              ประเภท
-            </p>
-            <p className="mt-0.5 text-[11px] font-bold text-white">
+            <p className="text-[10px] font-bold text-muted-foreground font-sukhumvit">ประเภท</p>
+            <span className="mt-1 inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary font-sukhumvit">
               {LEAVE_TYPE_LABEL[req.leaveType]}
-            </p>
-          </div>
-
-          <div className="text-center">
-            <p className="text-[9px] font-black uppercase tracking-wide text-white/60">
-              ยื่นคำขอ
-            </p>
-            <p
-              className="mt-0.5 text-[10px] font-bold leading-tight text-white/80 tabular-nums"
-              title={submittedAtLabel}
-            >
-              {submittedAtLabel}
-            </p>
-          </div>
-
-          <div className="text-right">
-            <p className="mb-0.5 text-[9px] font-black uppercase tracking-wide text-white/60">
-              วันที่ลา
-            </p>
-            <span
-              className="inline-flex max-w-[11rem] items-center justify-center rounded-lg bg-white/30 px-2 py-0.5 text-[11px] font-black text-white sm:max-w-none"
-              title={dateLabel}
-            >
-              <span className="truncate">{dateLabel}</span>
-              <span className="ml-1 shrink-0">({days} วัน)</span>
             </span>
           </div>
+          <div>
+            <p className="text-[10px] font-bold text-muted-foreground font-sukhumvit">ยื่นคำขอ</p>
+            {submittedAt ? (
+              <>
+                <p className="mt-1 text-[11px] font-bold leading-snug text-foreground font-sukhumvit tabular-nums">
+                  {submittedAt.date}
+                </p>
+                <p className="text-[11px] font-bold leading-snug text-foreground font-sukhumvit tabular-nums">
+                  {submittedAt.time}
+                </p>
+              </>
+            ) : (
+              <p className="mt-1 text-[11px] font-bold text-muted-foreground/40">—</p>
+            )}
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] font-bold text-muted-foreground font-sukhumvit">วันที่ลา</p>
+            <p className="mt-1 text-[11px] font-black leading-snug text-foreground font-sukhumvit tabular-nums">
+              {dateLabel}
+              <span className="ml-1 font-bold text-muted-foreground">({days} วัน)</span>
+            </p>
+          </div>
         </div>
 
-        {showApproverList && approverLabels.length > 0 && (
-          <div className="relative z-10 mt-2.5 px-3 border-t border-white/20 pt-2.5">
-            <p className="text-[9px] font-black uppercase tracking-wide text-white/60">
-              ผู้อนุมัติ
-            </p>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {approverLabels.map((name) => (
-                <span
-                  key={name}
-                  className="inline-flex items-center rounded-md bg-white/30 px-1.5 py-0.5 text-[10px] font-bold text-white"
-                >
-                  {name}
-                </span>
-              ))}
-            </div>
+        {showApproverList && (approverLabels.length > 0 || resolveLeaveActionByLabel(req)) ? (
+          <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-border pt-2">
+            <span className="shrink-0 text-[11px] font-bold text-muted-foreground font-sukhumvit">
+              {req.status === 'pending' ? 'ผู้อนุมัติ (คาด)' : 'ผู้อนุมัติ'}
+            </span>
+            <span className="truncate text-right text-[12px] font-bold text-foreground font-sukhumvit">
+              {resolveLeaveActionByLabel(req) || approverLabels.join(', ') || '—'}
+            </span>
           </div>
-        )}
+        ) : null}
+      </button>
 
-        {req.status === 'pending' && onApprove && onReject && (
-          <div
-            className="relative z-10 mt-2.5 px-3 pb-3 flex items-center justify-end gap-1.5 border-t border-white/20 pt-2.5"
-            onClick={e => e.stopPropagation()}
+      {req.status === 'pending' && onApprove && onReject ? (
+        <div
+          className="flex gap-2 border-t border-border px-3 pb-3 pt-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 flex-1 rounded-xl text-xs font-bold"
+            disabled={approving}
+            onClick={() => onReject(req.id)}
           >
-            <button
-              type="button"
-              onClick={async () => { await onApprove(req.id); }}
-              className="inline-flex h-7 items-center justify-center rounded-lg bg-white/30 px-3 text-[11px] font-black text-white transition-all hover:bg-white/40"
-            >
-              อนุมัติ
-            </button>
-            <button
-              type="button"
-              onClick={() => onReject(req.id)}
-              className="inline-flex h-7 items-center justify-center rounded-lg bg-white/30 px-3 text-[11px] font-black text-white transition-all hover:bg-white/40"
-            >
-              ปฏิเสธ
-            </button>
-          </div>
-        )}
+            ปฏิเสธ
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-9 flex-1 rounded-xl text-xs font-bold"
+            disabled={approving}
+            onClick={async () => {
+              setApproving(true);
+              try {
+                await onApprove(req.id);
+              } finally {
+                setApproving(false);
+              }
+            }}
+          >
+            {approving ? 'กำลังอนุมัติ...' : 'อนุมัติ'}
+          </Button>
+        </div>
+      ) : null}
 
-      <AnimatePresence>
-        {expanded && (
+      <AnimatePresence initial={false}>
+        {expanded ? (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
+            transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
             className="overflow-hidden"
           >
-            <div className="mt-2.5 space-y-4 border-t border-slate-100 pt-2.5">
-              <div className="space-y-2.5">
-                <label className={modalLabelCls}>เหตุผลการลา</label>
-                <p className="text-sm font-bold text-slate-600 leading-relaxed bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+            <div className="space-y-3 border-t border-border px-3 pb-3 pt-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground font-sukhumvit">
+                  เหตุผลการลา
+                </p>
+                <p className="mt-1.5 rounded-xl bg-muted/50 px-3 py-2.5 text-[13px] font-bold leading-relaxed text-foreground font-sukhumvit">
                   {req.reason || '—'}
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-6">
-                <div className="flex items-center gap-8">
-                  {showApprover && req.approverName && (
-                    <div className="space-y-1">
-                      <label className={modalLabelCls}>ผู้อนุมัติ</label>
-                      <div className="text-sm font-black text-slate-700 flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-blue-500" />
-                        {req.approverName}
-                      </div>
-                    </div>
-                  )}
-                  {req.approverNote && (
-                    <div className="space-y-1">
-                      <label className={modalLabelCls}>หมายเหตุการพิจารณา</label>
-                      <div className="text-sm font-black text-rose-600">
-                        {req.approverNote}
-                      </div>
-                    </div>
-                  )}
+              {req.approverNote ? (
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground font-sukhumvit">
+                    หมายเหตุการพิจารณา
+                  </p>
+                  <p className="mt-1.5 text-[13px] font-bold text-destructive font-sukhumvit">
+                    {req.approverNote}
+                  </p>
                 </div>
+              ) : null}
 
-                {req.attachmentUrl && (
+              {showApprover && req.approverName ? (
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground font-sukhumvit">
+                    ผู้อนุมัติ
+                  </p>
+                  <p className="mt-1 text-[13px] font-bold text-foreground font-sukhumvit">
+                    {req.approverName}
+                  </p>
+                </div>
+              ) : null}
+
+              {req.attachmentUrl ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="h-9 w-full rounded-xl text-xs font-bold"
+                  asChild
+                >
                   <a
                     href={req.attachmentUrl}
                     target="_blank"
                     rel="noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    className="flex items-center gap-2.5 h-11 px-5 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-600 hover:text-white transition-all text-xs font-black shadow-sm"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    <FileText size={16} /> ดูเอกสารแนบ
+                    <FileText size={14} />
+                    ดูเอกสารแนบ
                   </a>
-                )}
-              </div>
+                </Button>
+              ) : null}
             </div>
           </motion.div>
-        )}
+        ) : null}
       </AnimatePresence>
-      </div>
     </motion.div>
   );
 }
@@ -626,6 +727,13 @@ export default function LeaveManagementPage() {
     if (action === 'new') setShowSubmit(true);
   }, [action]);
 
+  const [headerCenterMobileEl, setHeaderCenterMobileEl] = useState<HTMLElement | null>(null);
+  const pageTitle = getPortalMenuTitle('/portal/leave') ?? 'จัดการการลา';
+
+  useEffect(() => {
+    setHeaderCenterMobileEl(document.getElementById('header-portal-center-mobile'));
+  }, []);
+
   useEffect(() => {
     document.getElementById('portal-scroll-container')?.scrollTo({ top: 0 });
   }, [pageTab]);
@@ -648,9 +756,21 @@ export default function LeaveManagementPage() {
         ];
 
   return (
-    <div className="flex h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)] min-h-0 w-full flex-col gap-5 overflow-hidden pb-28 px-3 md:px-6">
+    <>
+      {headerCenterMobileEl && createPortal(
+        <div className="pointer-events-none flex items-center gap-1.5 lg:hidden min-w-0">
+          <ClipboardList size={16} className="shrink-0 text-black/80" aria-hidden />
+          <span className="truncate font-sukhumvit text-[13px] font-black leading-none tracking-tight text-black/80">
+            {pageTitle}
+          </span>
+        </div>,
+        headerCenterMobileEl,
+      )}
+
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
       <LeavePageTabMenu tabs={tabs} pageTab={pageTab} onTabChange={setPageTab} />
 
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {pageTab === 'my' && (
         <MyLeavePanel displayName={displayName} photoUrl={photoUrl} uid={uid} requesterType={requesterType} userData={userData} showSubmit={showSubmit} setShowSubmit={setShowSubmit} />
       )}
@@ -663,7 +783,9 @@ export default function LeaveManagementPage() {
       {pageTab === 'settings' && isAdmin && (
         <SettingsPanel activeAcademicYear={activeAcademicYear} activeYear={activeYear} uid={uid} />
       )}
-    </div>
+      </div>
+      </div>
+    </>
   );
 }
 
@@ -679,9 +801,16 @@ function MyLeavePanel({ displayName, photoUrl, uid, requesterType, userData, sho
 }) {
   const { year } = useActiveAcademicYear();
   const myHook = useMyLeaveRequests(uid, requesterType);
+  const requesterStudentCodes = useMemo(
+    () => (requesterType === 'student' && userData?.studentCode
+      ? { [uid]: String(userData.studentCode) }
+      : {}),
+    [requesterType, uid, userData?.studentCode],
+  );
   const requesterClassMap = useLeaveRequesterClassMap(
     year,
     requesterType === 'student' ? [uid] : [],
+    requesterStudentCodes,
   );
   const activeRequests = useMemo(
     () => sortLeaveRequestsByNewest(myHook.requests),
@@ -706,37 +835,49 @@ function MyLeavePanel({ displayName, photoUrl, uid, requesterType, userData, sho
   return (
     <>
       {headerActionsPortalEl && createPortal(
-        <button
-          type="button"
-          onClick={() => setShowSubmit(true)}
-          className={HEADER_ICON_BTN}
-          title="ยื่นคำขอลาใหม่"
-        >
-          <Plus size={16} />
-        </button>,
-        headerActionsPortalEl
+        <div className={cn('pointer-events-auto flex', HEADER_ICON_BTN_GROUP)}>
+          <button
+            type="button"
+            onClick={() => setShowSubmit(true)}
+            className={HEADER_ICON_BTN}
+            title="ยื่นคำขอลาใหม่"
+            aria-label="ยื่นคำขอลาใหม่"
+          >
+            <Plus size={16} />
+          </button>
+        </div>,
+        headerActionsPortalEl,
       )}
 
-      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
-        <div className="mb-2 flex h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border pb-2 pt-2 sm:pt-2.5">
-          <p className="text-sm font-black text-foreground uppercase tracking-tight font-sukhumvit">
-            {myHook.requests.length > 0 ? `คำขอของฉัน (${activeRequests.length})` : 'ไม่พบคำขอ'}
-          </p>
-        </div>
+      <div className={LEAVE_PANEL_SHELL}>
+        {activeRequests.length > 0 ? (
+          <div className="mb-2 flex h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border pb-2 pt-2 sm:pt-2.5">
+            <p className="text-sm font-black text-foreground uppercase tracking-tight font-sukhumvit">
+              คำขอของฉัน ({activeRequests.length})
+            </p>
+          </div>
+        ) : null}
 
-        <div className="min-h-0 flex-1 overflow-hidden">
+        <div
+          className={cn(
+            'min-h-0 flex-1',
+            myHook.loading || activeRequests.length === 0
+              ? 'flex items-center justify-center overflow-hidden'
+              : 'overflow-hidden',
+          )}
+        >
           {myHook.loading ? (
-            <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
-              <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
-              <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
+            <div className={LEAVE_EMPTY_SHELL}>
+              <div className="mb-3 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" />
+              <p className="text-sm font-bold text-muted-foreground">กำลังดึงข้อมูลรายการลา...</p>
             </div>
           ) : activeRequests.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
-              <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-                <ClipboardList size={32} className="text-slate-300" />
+            <div className={LEAVE_EMPTY_SHELL}>
+              <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
+                <ClipboardList size={28} className="text-muted-foreground/50" />
               </div>
-              <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
-              <p className="text-xs font-bold text-slate-400 mt-1">
+              <p className="text-sm font-black text-foreground">ไม่พบรายการคำขอลา</p>
+              <p className="mt-1 text-xs font-bold text-muted-foreground">
                 เมื่อมีการยื่นคำขอใหม่ รายการจะปรากฏขึ้นที่นี่
               </p>
             </div>
@@ -784,7 +925,15 @@ function StudentLeaveReviewPanel() {
     () => requests.map((r) => r.requesterId).filter(Boolean),
     [requests],
   );
-  const requesterClassMap = useLeaveRequesterClassMap(year, requesterIds);
+  const requesterStudentCodes = useMemo(
+    () => Object.fromEntries(
+      requests
+        .map((r) => [r.requesterId, String(r.requesterStudentCode ?? '').trim()] as const)
+        .filter((entry): entry is [string, string] => Boolean(entry[1])),
+    ),
+    [requests],
+  );
+  const requesterClassMap = useLeaveRequesterClassMap(year, requesterIds, requesterStudentCodes);
 
   const activeRequests = useMemo(() => {
     const filtered = requests.filter((r) => statusFilter === 'all' || r.status === statusFilter);
@@ -816,10 +965,10 @@ function StudentLeaveReviewPanel() {
   };
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
+    <div className={LEAVE_PANEL_SHELL}>
       {/* TOP BAR — identical recipe to MyLeavePanel's top bar */}
       <div className="mb-2 flex h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border pb-2 pt-2 sm:pt-2.5">
-        <div className="flex items-center gap-1 rounded-xl bg-muted p-1 w-fit">
+        <div className="flex w-full items-center gap-1 rounded-xl bg-muted p-1 md:w-fit">
           {([
             { value: 'all' as StatusFilter, label: 'ทั้งหมด' },
             { value: 'pending' as StatusFilter, label: 'รอพิจารณา' },
@@ -833,7 +982,7 @@ function StudentLeaveReviewPanel() {
                 type="button"
                 onClick={() => setStatusFilter(opt.value)}
                 className={cn(
-                  'whitespace-nowrap rounded-lg px-3.5 py-1 text-[11px] font-black font-sukhumvit',
+                  'flex-1 whitespace-nowrap rounded-lg px-1 py-1 text-center text-[10px] font-black font-sukhumvit md:flex-none md:px-3.5 md:text-[11px]',
                   isActive ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -845,19 +994,26 @@ function StudentLeaveReviewPanel() {
       </div>
 
       {/* Single scroll region — everything scrolls together, no nested overflow */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        className={cn(
+          'min-h-0 flex-1',
+          loading || activeRequests.length === 0
+            ? 'flex items-center justify-center overflow-hidden'
+            : 'overflow-y-auto',
+        )}
+      >
         {loading ? (
-          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
-            <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
-            <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
+          <div className={LEAVE_EMPTY_SHELL}>
+            <div className="mb-3 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" />
+            <p className="text-sm font-bold text-muted-foreground">กำลังดึงข้อมูลรายการลา...</p>
           </div>
         ) : activeRequests.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
-            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-              <ClipboardList size={32} className="text-slate-300" />
+          <div className={LEAVE_EMPTY_SHELL}>
+            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
+              <ClipboardList size={28} className="text-muted-foreground/50" />
             </div>
-            <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
-            <p className="text-xs font-bold text-slate-400 mt-1">ยังไม่มีนักเรียนคนใดยื่นคำขอลา</p>
+            <p className="text-sm font-black text-foreground">ไม่พบรายการคำขอลา</p>
+            <p className="mt-1 text-xs font-bold text-muted-foreground">ยังไม่มีนักเรียนคนใดยื่นคำขอลา</p>
           </div>
         ) : (
           <>
@@ -878,40 +1034,49 @@ function StudentLeaveReviewPanel() {
             {/* Desktop: table — no internal scroll, scrolls together with parent */}
             <div className="hidden md:block rounded-xl border border-border overflow-hidden">
               <div
-                style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }}
+                style={{ display: 'grid', gridTemplateColumns: LEAVE_REVIEW_TABLE_GRID }}
                 className="gap-3 border-b border-border bg-muted px-3 py-3"
               >
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ผู้ยื่นคำขอ</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">แผนก</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ห้อง</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ประเภท</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">วันที่ลา</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">สถานะ</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ผู้อนุมัติ</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">การดำเนินการ</p>
               </div>
               {paginatedRequests.map((req) => {
-                const statusCfg = STATUS_CONFIG[req.status];
                 const days = countDays(req.startDate, req.endDate);
+                const requesterProfile = requesterClassMap.get(req.requesterId) ?? null;
+                const actionBy = resolveLeaveActionByLabel(req);
                 return (
                   <div
                     key={req.id}
-                    style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }}
+                    style={{ display: 'grid', gridTemplateColumns: LEAVE_REVIEW_TABLE_GRID }}
                     className="gap-3 border-b border-border px-3 py-3 items-center hover:bg-muted/40 last:border-b-0"
                   >
                     <div className="min-w-0">
                       <p className="text-[13px] font-bold text-foreground font-sukhumvit truncate">{req.requesterName || '—'}</p>
                       {req.requesterStudentCode && (
-                        <p className="text-[11px] font-medium text-blue-600 tabular-nums mt-0.5">รหัส {req.requesterStudentCode}</p>
+                        <p className="text-[11px] font-medium text-primary tabular-nums mt-0.5">รหัส {req.requesterStudentCode}</p>
                       )}
                     </div>
+                    <LeaveReviewTableDeptRoomCells profile={requesterProfile} />
                     <p className="text-[13px] font-bold text-foreground font-sukhumvit">{LEAVE_TYPE_LABEL[req.leaveType]}</p>
                     <div>
                       <p className="text-[13px] font-bold text-foreground font-sukhumvit">{formatLeaveDateCompact(req.startDate, req.endDate)}</p>
                       <p className="text-[11px] font-semibold text-muted-foreground mt-0.5">{days} วัน</p>
                     </div>
                     <div>
-                      <span className={cn('inline-flex min-w-[80px] items-center justify-center rounded-lg px-2 py-0.5 text-[11px] font-black', statusCfg.bg, statusCfg.text)}>
-                        {statusCfg.label}
-                      </span>
+                      <StatusPill status={req.status} />
                     </div>
+                    <p className={cn(
+                      'text-[13px] font-bold font-sukhumvit truncate',
+                      actionBy ? 'text-foreground' : 'text-muted-foreground/40',
+                    )}>
+                      {actionBy || '—'}
+                    </p>
                     <div className="flex items-center gap-1.5">
                       {req.status === 'pending' ? (
                         <>
@@ -1008,7 +1173,15 @@ function TeamLeavePanelContent({
     () => requests.map((r) => r.requesterId).filter(Boolean),
     [requests],
   );
-  const requesterClassMap = useLeaveRequesterClassMap(year, requesterIds);
+  const requesterStudentCodes = useMemo(
+    () => Object.fromEntries(
+      requests
+        .map((r) => [r.requesterId, String(r.requesterStudentCode ?? '').trim()] as const)
+        .filter((entry): entry is [string, string] => Boolean(entry[1])),
+    ),
+    [requests],
+  );
+  const requesterClassMap = useLeaveRequesterClassMap(year, requesterIds, requesterStudentCodes);
 
   const activeRequests = useMemo(() => {
     const filtered = requests.filter((r) => {
@@ -1043,10 +1216,10 @@ function TeamLeavePanelContent({
   };
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-card px-2 pb-2 sm:px-2.5 sm:pb-2.5">
+    <div className={LEAVE_PANEL_SHELL}>
       {/* TOP BAR — Status Filter Tabs */}
       <div className="mb-2 flex h-[3.25rem] w-full shrink-0 items-center gap-3 border-b border-border pb-2 pt-2 sm:pt-2.5">
-        <div className="flex items-center gap-1 rounded-xl bg-muted p-1 w-fit">
+        <div className="flex w-full items-center gap-1 rounded-xl bg-muted p-1 md:w-fit">
           {[
             { value: 'all' as StatusFilter, label: 'ทั้งหมด' },
             { value: 'pending' as StatusFilter, label: 'รอพิจารณา' },
@@ -1060,7 +1233,7 @@ function TeamLeavePanelContent({
                 type="button"
                 onClick={() => setStatusFilter(opt.value)}
                 className={cn(
-                  'whitespace-nowrap rounded-lg px-3.5 py-1 text-[11px] font-black font-sukhumvit',
+                  'flex-1 whitespace-nowrap rounded-lg px-1 py-1 text-center text-[10px] font-black font-sukhumvit md:flex-none md:px-3.5 md:text-[11px]',
                   isActive
                     ? 'bg-card text-foreground shadow-xs'
                     : 'text-muted-foreground hover:text-foreground',
@@ -1074,19 +1247,26 @@ function TeamLeavePanelContent({
       </div>
 
       {/* BODY */}
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div
+        className={cn(
+          'min-h-0 flex-1',
+          loading || activeRequests.length === 0
+            ? 'flex items-center justify-center overflow-hidden'
+            : 'overflow-hidden',
+        )}
+      >
         {loading ? (
-          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
-            <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-4" />
-            <p className="text-sm font-bold text-slate-400">กำลังดึงข้อมูลรายการลา...</p>
+          <div className={LEAVE_EMPTY_SHELL}>
+            <div className="mb-3 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" />
+            <p className="text-sm font-bold text-muted-foreground">กำลังดึงข้อมูลรายการลา...</p>
           </div>
         ) : activeRequests.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/40">
-            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-              <ClipboardList size={32} className="text-slate-300" />
+          <div className={LEAVE_EMPTY_SHELL}>
+            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
+              <ClipboardList size={28} className="text-muted-foreground/50" />
             </div>
-            <p className="text-sm font-black text-slate-800">ไม่พบรายการคำขอลา</p>
-            <p className="text-xs font-bold text-slate-400 mt-1">
+            <p className="text-sm font-black text-foreground">ไม่พบรายการคำขอลา</p>
+            <p className="mt-1 text-xs font-bold text-muted-foreground">
               {isTeacher ? 'ยังไม่มีนักเรียนคนใดยื่นคำขอลา' : 'ยังไม่มีคำขอลาใด ๆ'}
             </p>
           </div>
@@ -1114,24 +1294,28 @@ function TeamLeavePanelContent({
 
             {/* Desktop: table */}
             <div className="hidden h-full flex-col overflow-hidden rounded-2xl border border-border bg-card md:flex">
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }} className="gap-3 border-b border-border bg-muted px-3 py-3 shrink-0">
+              <div style={{ display: 'grid', gridTemplateColumns: LEAVE_REVIEW_TABLE_GRID }} className="gap-3 border-b border-border bg-muted px-3 py-3 shrink-0">
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ผู้ยื่นคำขอ</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">แผนก</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ห้อง</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ประเภท</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">วันที่ลา</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">สถานะ</p>
+                <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">ผู้อนุมัติ</p>
                 <p className="text-[13px] font-black text-foreground font-sukhumvit whitespace-nowrap">การดำเนินการ</p>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
                 {paginatedRequests.map((req, i) => {
-                  const statusCfg = STATUS_CONFIG[req.status];
                   const days = countDays(req.startDate, req.endDate);
+                  const requesterProfile = requesterClassMap.get(req.requesterId) ?? null;
+                  const actionBy = resolveLeaveActionByLabel(req);
                   return (
                     <motion.div
                       key={req.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ delay: i * 0.015 }}
-                      style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(7rem, 0.8fr) minmax(8rem, 0.9fr) minmax(0, 1.2fr) minmax(6rem, 0.7fr)' }}
+                      style={{ display: 'grid', gridTemplateColumns: LEAVE_REVIEW_TABLE_GRID }}
                       className="gap-3 border-b border-border px-3 py-3 items-center hover:bg-muted/40 transition-colors last:border-b-0"
                     >
                       <div className="min-w-0">
@@ -1139,11 +1323,12 @@ function TeamLeavePanelContent({
                           {req.requesterName || '—'}
                         </p>
                         {req.requesterStudentCode && (
-                          <p className="text-[11px] font-medium text-blue-600 tabular-nums mt-0.5">
+                          <p className="text-[11px] font-medium text-primary tabular-nums mt-0.5">
                             รหัส {req.requesterStudentCode}
                           </p>
                         )}
                       </div>
+                      <LeaveReviewTableDeptRoomCells profile={requesterProfile} />
                       <p className="text-[13px] font-bold text-foreground font-sukhumvit">
                         {LEAVE_TYPE_LABEL[req.leaveType]}
                       </p>
@@ -1156,14 +1341,14 @@ function TeamLeavePanelContent({
                         </p>
                       </div>
                       <div>
-                        <span className={cn(
-                          'inline-flex min-w-[80px] items-center justify-center rounded-lg px-2 py-0.5 text-[11px] font-black',
-                          statusCfg.bg,
-                          statusCfg.text,
-                        )}>
-                          {statusCfg.label}
-                        </span>
+                        <StatusPill status={req.status} />
                       </div>
+                      <p className={cn(
+                        'text-[13px] font-bold font-sukhumvit truncate',
+                        actionBy ? 'text-foreground' : 'text-muted-foreground/40',
+                      )}>
+                        {actionBy || '—'}
+                      </p>
                       <div className="flex items-center gap-1.5">
                         {req.status === 'pending' ? (
                           <>

@@ -91,8 +91,8 @@ export default function TeachingReflectionModal({
       await onSubmit({
         planStatus,
         overview,
-        problemStudents: problemStudents.length > 0 ? problemStudents : undefined,
-        additionalRequest: additionalRequest.trim() || undefined,
+        ...(problemStudents.length > 0 ? { problemStudents } : {}),
+        ...(additionalRequest.trim() ? { additionalRequest: additionalRequest.trim() } : {}),
         recordedAt: new Date().toISOString(),
       });
     } finally {

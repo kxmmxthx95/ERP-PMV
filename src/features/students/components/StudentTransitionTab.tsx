@@ -388,16 +388,73 @@ export default function StudentTransitionTab({
         }
     };
 
-    // --- Student Card (List Style — matches ClassroomAssignmentTab) ---
+    // --- Student Card (mobile cards / desktop table rows) ---
     const StudentCard = ({
-        student, isSelected, onToggle, colorScheme = 'blue',
+        student, isSelected, onToggle, colorScheme = 'blue', index = 0,
     }: {
         student: Student;
         isSelected: boolean;
         onToggle: () => void;
         colorScheme?: 'blue' | 'emerald';
+        index?: number;
     }) => {
         const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
+
+        if (isMdOrBelow) {
+            return (
+                <motion.div
+                    layout
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ delay: index * 0.02 }}
+                    onClick={onToggle}
+                    className={cn(
+                        'cursor-pointer rounded-2xl border border-border bg-card p-3 transition-colors active:scale-[0.99]',
+                        isSelected
+                            ? colorScheme === 'emerald'
+                                ? 'border-emerald-200 bg-emerald-50'
+                                : 'border-blue-200 bg-blue-50'
+                            : 'hover:bg-muted/40',
+                    )}
+                >
+                    <div className="flex items-center gap-3">
+                        <StudentAvatar
+                            photoURL={student.photoURL}
+                            studentId={student.id}
+                            name={fullName}
+                            className="h-9 w-9 shrink-0 rounded-full"
+                        />
+                        <div className="min-w-0 flex-1">
+                            <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                {fullName}
+                            </p>
+                            <p className="mt-0.5 text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+                                {student.studentCode || '—'}
+                            </p>
+                        </div>
+                        <div className="flex shrink-0 items-center justify-center">
+                            {colorScheme === 'emerald' ? (
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onToggle();
+                                    }}
+                                    className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-rose-50 hover:text-destructive"
+                                    title="ถอดออกจากคิว"
+                                    aria-label="ถอดออกจากคิว"
+                                >
+                                    <X size={14} />
+                                </button>
+                            ) : isSelected ? (
+                                <CheckCircle2 size={16} className="text-blue-600" />
+                            ) : null}
+                        </div>
+                    </div>
+                </motion.div>
+            );
+        }
 
         return (
             <motion.div
@@ -416,7 +473,6 @@ export default function StudentTransitionTab({
                 )}
                 style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 2rem' }}
             >
-                {/* Code */}
                 <span className={cn(
                     "truncate text-[13px] font-black font-sukhumvit tabular-nums",
                     isSelected ? (colorScheme === 'emerald' ? 'text-emerald-700' : 'text-blue-700') : 'text-slate-500'
@@ -424,7 +480,6 @@ export default function StudentTransitionTab({
                     {student.studentCode || '—'}
                 </span>
 
-                {/* Name & Avatar */}
                 <div className="flex min-w-0 items-center gap-3">
                     <StudentAvatar
                         photoURL={student.photoURL}
@@ -437,7 +492,6 @@ export default function StudentTransitionTab({
                     </span>
                 </div>
 
-                {/* Check / Remove Indicator */}
                 <div className="flex justify-center shrink-0">
                     {colorScheme === 'emerald' ? (
                         <button
@@ -461,31 +515,88 @@ export default function StudentTransitionTab({
         );
     };
 
-    const ProcessedStudentRow = ({ student }: { student: Student }) => (
-        <div
-            className="grid items-center gap-3 px-4 py-2.5 border-b border-slate-100 last:border-b-0 text-slate-700 hover:bg-muted/40 transition-colors"
-            style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 4.5rem' }}
-        >
-            <span className="truncate text-[13px] font-black font-sukhumvit text-slate-500 tabular-nums">
-                {student.studentCode || '—'}
-            </span>
-            <div className="flex min-w-0 items-center gap-3">
-                <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg bg-slate-100">
-                    <img
-                        src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${student.id}&backgroundColor=f8fafc`}
-                        alt="avatar"
-                        className="h-full w-full object-cover"
+    const ProcessedStudentRow = ({ student, index = 0 }: { student: Student; index?: number }) => {
+        const fullName = `${student.prefix ?? ''}${student.firstName} ${student.lastName}`.trim();
+
+        if (isMdOrBelow) {
+            return (
+                <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.02 }}
+                    className="rounded-2xl border border-border bg-card p-3"
+                >
+                    <div className="flex items-center gap-3">
+                        <StudentAvatar
+                            photoURL={student.photoURL}
+                            studentId={student.id}
+                            name={fullName}
+                            className="h-9 w-9 shrink-0 rounded-full"
+                        />
+                        <div className="min-w-0 flex-1">
+                            <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">
+                                {fullName}
+                            </p>
+                            <p className="mt-0.5 text-[13px] font-black text-foreground font-sukhumvit tabular-nums">
+                                {student.studentCode || '—'}
+                            </p>
+                        </div>
+                        <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-0.5 text-[10px] font-bold text-amber-700 font-sukhumvit">
+                            ย้ายออก
+                        </span>
+                    </div>
+                </motion.div>
+            );
+        }
+
+        return (
+            <div
+                className="grid items-center gap-3 px-4 py-2.5 border-b border-slate-100 last:border-b-0 text-slate-700 hover:bg-muted/40 transition-colors"
+                style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 4.5rem' }}
+            >
+                <span className="truncate text-[13px] font-black font-sukhumvit text-slate-500 tabular-nums">
+                    {student.studentCode || '—'}
+                </span>
+                <div className="flex min-w-0 items-center gap-3">
+                    <StudentAvatar
+                        photoURL={student.photoURL}
+                        studentId={student.id}
+                        name={fullName}
+                        className="h-9 w-9 shrink-0 rounded-full"
                     />
+                    <span className="truncate text-[13px] font-bold font-sukhumvit text-slate-800">
+                        {fullName}
+                    </span>
                 </div>
-                <span className="truncate text-[13px] font-bold font-sukhumvit text-slate-800">
-                    {student.prefix ?? ''}{student.firstName} {student.lastName}
-                </span>
+                <div className="flex justify-center shrink-0">
+                    <span className="whitespace-nowrap rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-black text-amber-700">
+                        ย้ายออก
+                    </span>
+                </div>
             </div>
-            <div className="flex justify-center shrink-0">
-                <span className="whitespace-nowrap rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-black text-amber-700">
-                    ย้ายออก
-                </span>
-            </div>
+        );
+    };
+
+    const MobileListToolbar = ({
+        onSelectAll,
+        selectAllTitle,
+    }: {
+        onSelectAll: () => void;
+        selectAllTitle: string;
+    }) => (
+        <div className="mb-1 flex items-center justify-between px-0.5 lg:hidden">
+            <span className="text-[11px] font-black uppercase tracking-wider text-muted-foreground">
+                รายชื่อนักเรียน
+            </span>
+            <button
+                type="button"
+                onClick={onSelectAll}
+                className="flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[10px] font-black text-muted-foreground transition-colors hover:bg-muted/60"
+                title={selectAllTitle}
+            >
+                <CheckSquare size={13} />
+                เลือกทั้งหมด
+            </button>
         </div>
     );
 
@@ -495,7 +606,7 @@ export default function StudentTransitionTab({
 
             {/* ── Tab bar: เลื่อนชั้น | จบการศึกษา | ย้ายออก ── */}
             <div className="mb-4 shrink-0 border-b border-slate-200/80 px-2">
-                <div className="flex items-center gap-6">
+                <div className="flex w-full items-center gap-0 lg:gap-6">
                     {([
                         { id: 'promote', label: 'เลื่อนชั้น' },
                         { id: 'graduate', label: 'จบการศึกษา' },
@@ -508,7 +619,7 @@ export default function StudentTransitionTab({
                                 type="button"
                                 onClick={() => onTransitionActionChange(action.id)}
                                 className={cn(
-                                    'relative pb-2.5 text-[12px] font-bold transition-all cursor-pointer',
+                                    'relative flex-1 pb-2.5 text-center text-[12px] font-bold transition-all cursor-pointer lg:flex-none lg:text-left',
                                     isActive
                                         ? 'text-blue-600 font-black after:absolute after:bottom-0 after:left-0 after:h-0.5 after:w-full after:bg-blue-600 after:rounded-full'
                                         : 'text-slate-400 hover:text-slate-700',
@@ -521,10 +632,7 @@ export default function StudentTransitionTab({
                 </div>
             </div>
 
-            <div className={cn(
-                'relative z-10 flex min-h-0 flex-1 gap-3 lg:gap-4',
-                isMdOrBelow && 'pb-[4.5rem]',
-            )}>
+            <div className="relative z-10 flex min-h-0 flex-1 gap-3 lg:gap-4">
                 <>
                     {/* Source Students */}
                     <div className={cn(
@@ -567,28 +675,41 @@ export default function StudentTransitionTab({
                                     <span className="text-sm font-bold">เลือกห้องเรียนต้นทางก่อน</span>
                                 </div>
                             ) : (
-                                <div className={cn("flex flex-col flex-1 min-h-0 mb-4", TABLE_SHELL)}>
-                                    <div className="border-b border-border bg-slate-100/90 shrink-0">
-                                        <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 2rem' }}>
-                                            <span className={TABLE_HEADER_CELL}>รหัส</span>
-                                            <span className={TABLE_HEADER_CELL}>นักเรียน</span>
-                                            <div className="flex justify-center shrink-0">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => toggleAll(true)}
-                                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
-                                                    title="เลือกทั้งหมด"
-                                                >
-                                                    <CheckSquare size={13} />
-                                                </button>
+                                <div className={cn(
+                                    'flex min-h-0 flex-1 flex-col mb-4',
+                                    isMdOrBelow ? 'gap-2.5' : TABLE_SHELL,
+                                )}>
+                                    {!isMdOrBelow ? (
+                                        <div className="border-b border-border bg-slate-100/90 shrink-0">
+                                            <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 2rem' }}>
+                                                <span className={TABLE_HEADER_CELL}>รหัส</span>
+                                                <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                                                <div className="flex justify-center shrink-0">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => toggleAll(true)}
+                                                        className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
+                                                        title="เลือกทั้งหมด"
+                                                    >
+                                                        <CheckSquare size={13} />
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                    <div className="flex flex-col flex-1 overflow-y-auto">
+                                    ) : (
+                                        <MobileListToolbar
+                                            onSelectAll={() => toggleAll(true)}
+                                            selectAllTitle="เลือกทั้งหมด"
+                                        />
+                                    )}
+                                    <div className={cn(
+                                        'flex flex-1 flex-col overflow-y-auto scrollbar-hide',
+                                        isMdOrBelow && 'gap-2.5',
+                                    )}>
                                         <AnimatePresence>
                                             {filteredSourceStudents
                                                 .sort((a, b) => (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true }) || a.firstName.localeCompare(b.firstName))
-                                                .map((student) => {
+                                                .map((student, i) => {
                                                     const isSelected = selectedSourceIds.has(student.id);
                                                     return (
                                                         <StudentCard
@@ -597,6 +718,7 @@ export default function StudentTransitionTab({
                                                             isSelected={isSelected}
                                                             onToggle={() => stageStudent(student.id)}
                                                             colorScheme="blue"
+                                                            index={i}
                                                         />
                                                     );
                                                 })}
@@ -720,28 +842,41 @@ export default function StudentTransitionTab({
                             ) : (
                                 <>
                                     {stagedStudents.length > 0 && (
-                                        <div className={cn("flex flex-1 min-h-0 flex-col mb-4", TABLE_SHELL)}>
-                                            <div className="border-b border-border bg-slate-100/90 shrink-0">
-                                                <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 2rem' }}>
-                                                    <span className={TABLE_HEADER_CELL}>รหัส</span>
-                                                    <span className={TABLE_HEADER_CELL}>นักเรียน</span>
-                                                    <div className="flex justify-center shrink-0">
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => toggleAll(false)}
-                                                            className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
-                                                            title="เลือกทั้งหมด"
-                                                        >
-                                                            <CheckSquare size={13} />
-                                                        </button>
+                                        <div className={cn(
+                                            'flex min-h-0 flex-1 flex-col mb-4',
+                                            isMdOrBelow ? 'gap-2.5' : TABLE_SHELL,
+                                        )}>
+                                            {!isMdOrBelow ? (
+                                                <div className="border-b border-border bg-slate-100/90 shrink-0">
+                                                    <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 2rem' }}>
+                                                        <span className={TABLE_HEADER_CELL}>รหัส</span>
+                                                        <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                                                        <div className="flex justify-center shrink-0">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => toggleAll(false)}
+                                                                className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/50 transition-colors cursor-pointer"
+                                                                title="เลือกทั้งหมด"
+                                                            >
+                                                                <CheckSquare size={13} />
+                                                            </button>
+                                                        </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                            <div className="flex flex-col flex-1 overflow-y-auto">
+                                            ) : (
+                                                <MobileListToolbar
+                                                    onSelectAll={() => toggleAll(false)}
+                                                    selectAllTitle="เลือกทั้งหมดในคิว"
+                                                />
+                                            )}
+                                            <div className={cn(
+                                                'flex flex-1 flex-col overflow-y-auto scrollbar-hide',
+                                                isMdOrBelow && 'gap-2.5',
+                                            )}>
                                                 <AnimatePresence>
                                                     {stagedStudents
                                                         .sort((a, b) => (a.studentCode || '').localeCompare(b.studentCode || '', undefined, { numeric: true }) || a.firstName.localeCompare(b.firstName))
-                                                        .map((student) => {
+                                                        .map((student, i) => {
                                                             const isSelected = selectedStagedIds.has(student.id);
                                                             return (
                                                                 <StudentCard
@@ -750,6 +885,7 @@ export default function StudentTransitionTab({
                                                                     isSelected={isSelected}
                                                                     onToggle={() => unstageStudent(student.id)}
                                                                     colorScheme="emerald"
+                                                                    index={i}
                                                                 />
                                                             );
                                                         })}
@@ -773,19 +909,27 @@ export default function StudentTransitionTab({
                                                     </p>
                                                 </div>
                                             ) : (
-                                                <div className={cn("flex flex-col flex-1 min-h-0 mb-4", TABLE_SHELL)}>
-                                                    <div className="border-b border-border bg-slate-100/90 shrink-0">
-                                                        <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 4.5rem' }}>
-                                                            <span className={TABLE_HEADER_CELL}>รหัส</span>
-                                                            <span className={TABLE_HEADER_CELL}>นักเรียน</span>
-                                                            <div className="flex h-6 items-center justify-center shrink-0">
-                                                                <span className={cn(TABLE_HEADER_CELL, "text-center whitespace-nowrap")}>สถานะ</span>
+                                                <div className={cn(
+                                                    'flex min-h-0 flex-1 flex-col mb-4',
+                                                    isMdOrBelow ? 'gap-2.5' : TABLE_SHELL,
+                                                )}>
+                                                    {!isMdOrBelow && (
+                                                        <div className="border-b border-border bg-slate-100/90 shrink-0">
+                                                            <div className="grid gap-3 px-4 py-1.5 items-center" style={{ gridTemplateColumns: 'minmax(4.5rem, 0.8fr) minmax(0, 2fr) 4.5rem' }}>
+                                                                <span className={TABLE_HEADER_CELL}>รหัส</span>
+                                                                <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+                                                                <div className="flex h-6 items-center justify-center shrink-0">
+                                                                    <span className={cn(TABLE_HEADER_CELL, "text-center whitespace-nowrap")}>สถานะ</span>
+                                                                </div>
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                    <div className="flex flex-col flex-1 overflow-y-auto">
-                                                        {filteredLeftStudents.map((student) => (
-                                                            <ProcessedStudentRow key={student.id} student={student} />
+                                                    )}
+                                                    <div className={cn(
+                                                        'flex flex-1 flex-col overflow-y-auto scrollbar-hide',
+                                                        isMdOrBelow && 'gap-2.5',
+                                                    )}>
+                                                        {filteredLeftStudents.map((student, i) => (
+                                                            <ProcessedStudentRow key={student.id} student={student} index={i} />
                                                         ))}
                                                     </div>
                                                 </div>
@@ -811,13 +955,103 @@ export default function StudentTransitionTab({
                 </>
             </div>
 
-            {/* ── Mobile bottom navigation ── */}
+            {/* ── Mobile footer: action bars + source/target tabs ── */}
             {isMdOrBelow && (
-                <div className="fixed inset-x-3 bottom-[max(4.75rem,env(safe-area-inset-bottom))] z-40 lg:hidden">
-                    <div className="flex items-center gap-1 rounded-2xl border border-white/80 bg-white/90 p-1 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-xl">
+                <div className="shrink-0 bg-transparent lg:hidden">
+                    <AnimatePresence>
+                        {selectedSourceIds.size > 0 && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                className="overflow-hidden"
+                            >
+                                <div className="mx-2 mb-1.5 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-border bg-card px-3 py-2.5">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">
+                                            {selectedSourceIds.size}
+                                        </div>
+                                        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                                            รายการที่เลือก
+                                        </span>
+                                    </div>
+                                    <motion.button
+                                        whileTap={{ scale: 0.95 }}
+                                        type="button"
+                                        onClick={stageSelectedStudents}
+                                        className="flex items-center gap-2 rounded-full bg-blue-600 px-4 py-1.5 text-[11px] font-black uppercase tracking-tight text-white shadow-lg shadow-blue-600/20"
+                                    >
+                                        <ArrowRight size={12} />
+                                        ย้ายมาคิว ({selectedSourceIds.size})
+                                    </motion.button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedSourceIds(new Set())}
+                                        className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/60"
+                                        aria-label="ล้างการเลือก"
+                                    >
+                                        <X size={14} />
+                                    </button>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    <AnimatePresence>
+                        {stagedStudents.length > 0 && selectedSourceIds.size === 0 && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                className="overflow-hidden"
+                            >
+                                <div className="mx-2 mb-1.5 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-border bg-card px-3 py-2.5">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white">
+                                            {stagedStudents.length}
+                                        </div>
+                                        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                                            รอประมวลผล
+                                        </span>
+                                    </div>
+                                    {selectedStagedIds.size > 0 && (
+                                        <motion.button
+                                            whileTap={{ scale: 0.95 }}
+                                            type="button"
+                                            onClick={unstageSelected}
+                                            className="flex items-center gap-2 rounded-full bg-secondary px-4 py-1.5 text-[11px] font-black uppercase tracking-tight text-secondary-foreground"
+                                        >
+                                            <X size={12} />
+                                            ถอดออก ({selectedStagedIds.size})
+                                        </motion.button>
+                                    )}
+                                    <motion.button
+                                        whileTap={{ scale: 0.95 }}
+                                        type="button"
+                                        disabled={isCommitting}
+                                        onClick={commitTransition}
+                                        className="flex items-center gap-2 rounded-full bg-primary px-4 py-1.5 text-[11px] font-black uppercase tracking-tight text-primary-foreground shadow-lg disabled:opacity-50"
+                                    >
+                                        {isCommitting ? <Loader2 size={12} className="animate-spin" /> : <CheckSquare size={12} />}
+                                        ยืนยัน
+                                    </motion.button>
+                                    <button
+                                        type="button"
+                                        onClick={() => { setStagedStudents([]); setSelectedStagedIds(new Set()); }}
+                                        className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/60"
+                                        aria-label="ล้างคิว"
+                                    >
+                                        <X size={14} />
+                                    </button>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    <div className="mb-[max(0.25rem,env(safe-area-inset-bottom))] flex w-full items-stretch gap-1 px-2 pt-1.5">
                         {([
-                            { id: 'source' as const, label: 'ต้นทาง', count: filteredSourceStudents.length, icon: Search },
-                            { id: 'target' as const, label: 'คิวดำเนินการ', count: stagedStudents.length, icon: UserCheck },
+                            { id: 'source' as const, label: 'ต้นทาง', icon: Search },
+                            { id: 'target' as const, label: 'คิวดำเนินการ', icon: UserCheck },
                         ]).map((tab) => {
                             const Icon = tab.icon;
                             const isActive = mobileView === tab.id;
@@ -827,20 +1061,14 @@ export default function StudentTransitionTab({
                                     type="button"
                                     onClick={() => setMobileView(tab.id)}
                                     className={cn(
-                                        'relative flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-2 transition-all',
-                                        isActive ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50',
+                                        'flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-2.5 transition-all',
+                                        isActive
+                                            ? 'bg-primary text-primary-foreground shadow-sm'
+                                            : 'text-muted-foreground hover:bg-muted/40',
                                     )}
                                 >
-                                    <Icon size={14} className={isActive ? 'text-white' : 'text-slate-400'} />
+                                    <Icon size={14} className={isActive ? 'text-primary-foreground' : 'text-muted-foreground'} />
                                     <span className="text-[10px] font-black leading-none">{tab.label}</span>
-                                    {tab.count > 0 && (
-                                        <span className={cn(
-                                            'absolute right-3 top-1.5 min-w-[16px] rounded-full px-1 text-center text-[8px] font-black leading-4',
-                                            isActive ? 'bg-white/20 text-white' : tab.id === 'target' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-600',
-                                        )}>
-                                            {tab.count > 99 ? '99+' : tab.count}
-                                        </span>
-                                    )}
                                 </button>
                             );
                         })}
@@ -848,14 +1076,14 @@ export default function StudentTransitionTab({
                 </div>
             )}
 
-            {/* Bottom Action Bar — appears when students selected in source */}
+            {/* Bottom Action Bar — desktop only */}
             <AnimatePresence>
                 {selectedSourceIds.size > 0 && (
                     <motion.div
                         initial={{ y: 100, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         exit={{ y: 100, opacity: 0 }}
-                        className="fixed bottom-[max(7.5rem,env(safe-area-inset-bottom))] left-1/2 z-50 flex max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-full border border-white bg-white/80 px-3 py-2 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-2xl lg:absolute lg:bottom-6 lg:mb-[max(0px,env(safe-area-inset-bottom))] lg:max-w-none lg:flex-nowrap lg:gap-4 lg:px-4 lg:scale-100"
+                        className="absolute bottom-6 left-1/2 z-50 hidden max-w-none -translate-x-1/2 flex-nowrap items-center justify-center gap-4 rounded-full border border-white bg-white/80 px-4 py-2 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-2xl lg:flex lg:mb-[max(0px,env(safe-area-inset-bottom))]"
                     >
                         <div className="flex items-center gap-2">
                             <div className="bg-blue-500 w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] text-white">
@@ -886,14 +1114,14 @@ export default function StudentTransitionTab({
                 )}
             </AnimatePresence>
 
-            {/* Bottom Commit Bar — appears when staged students exist */}
+            {/* Bottom Commit Bar — desktop only */}
             <AnimatePresence>
                 {stagedStudents.length > 0 && selectedSourceIds.size === 0 && (
                     <motion.div
                         initial={{ y: 100, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         exit={{ y: 100, opacity: 0 }}
-                        className="fixed bottom-[max(7.5rem,env(safe-area-inset-bottom))] left-1/2 z-50 flex max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-full border border-white bg-white/80 px-3 py-2 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-2xl lg:absolute lg:bottom-6 lg:mb-[max(0px,env(safe-area-inset-bottom))] lg:max-w-none lg:flex-nowrap lg:gap-4 lg:px-4 lg:scale-100"
+                        className="absolute bottom-6 left-1/2 z-50 hidden max-w-none -translate-x-1/2 flex-nowrap items-center justify-center gap-4 rounded-full border border-white bg-white/80 px-4 py-2 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-2xl lg:flex lg:mb-[max(0px,env(safe-area-inset-bottom))]"
                     >
                         <div className="flex items-center gap-2">
                             <div className="bg-emerald-500 w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] text-white">

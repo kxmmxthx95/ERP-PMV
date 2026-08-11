@@ -22,12 +22,12 @@ export default function AcademicCalendar() {
   const { departments } = useSchoolStructure();
   const { activeYear } = useActiveAcademicYear();
 
-  const [headerLeftPortalEl, setHeaderLeftPortalEl] = useState<HTMLElement | null>(null);
+  const [headerHomeActionsEl, setHeaderHomeActionsEl] = useState<HTMLElement | null>(null);
   const [headerMobileCenterPortalEl, setHeaderMobileCenterPortalEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    setHeaderLeftPortalEl(document.getElementById('header-portal-left'));
+    setHeaderHomeActionsEl(document.getElementById('header-portal-home-actions'));
     setHeaderMobileCenterPortalEl(document.getElementById('header-portal-center-mobile'));
   }, []);
 
@@ -342,9 +342,9 @@ export default function AcademicCalendar() {
         );
         return (
           <>
-            {headerLeftPortalEl && createPortal(capsule, headerLeftPortalEl)}
+            {headerHomeActionsEl && createPortal(capsule, headerHomeActionsEl)}
             {headerMobileCenterPortalEl && createPortal(capsule, headerMobileCenterPortalEl)}
-            {!headerLeftPortalEl && !headerMobileCenterPortalEl && capsule}
+            {!headerHomeActionsEl && !headerMobileCenterPortalEl && capsule}
           </>
         );
       })()}

@@ -177,6 +177,15 @@ export const COURSE_CATEGORY_CONFIG: Record<CourseCategory, {
   activity:   { label: 'กิจกรรม',       color: '#10b981', bg: 'rgba(16,185,129,0.10)',  border: 'rgba(16,185,129,0.20)'  },
 };
 
+/** หมวดกิจกรรม = บังคับผ่าน/ไม่ผ่าน · พื้นฐาน/เพิ่มเติม = เกรด A–F เท่านั้น */
+export function isPassFailCourseCategory(category: CourseCategory | string | undefined): boolean {
+  return category === 'activity';
+}
+
+export function gradingSchemeLabel(category: CourseCategory | string | undefined): string {
+  return isPassFailCourseCategory(category) ? 'ผ่าน/ไม่ผ่าน' : 'เกรด A–F';
+}
+
 export interface CurriculumCourse {
   id: string;
   courseCode: string;

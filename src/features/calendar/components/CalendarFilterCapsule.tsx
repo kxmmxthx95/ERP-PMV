@@ -37,7 +37,7 @@ export default function CalendarFilterCapsule({
   ];
 
   return (
-    <div className={isPortal ? "flex items-center" : "fixed bottom-10 left-1/2 -translate-x-1/2 z-50"}>
+    <div className={isPortal ? "flex items-center mr-1.5" : "fixed bottom-10 left-1/2 -translate-x-1/2 z-50"}>
       <motion.div
         initial={{ opacity: 0, y: isPortal ? -10 : 20 }}
         animate={{ opacity: 1, y: 0 }}

@@ -389,6 +389,9 @@ export async function syncStudentLeaveAttendance(leave: LeaveRequest): Promise<v
         topic: typeof existingData?.topic === 'string' ? existingData.topic : '',
         attendance: existingAttendance,
         ...sessionFields,
+        // เอกสารใหม่ที่เกิดจาก sync ใบลาล้วนๆ (ยังไม่มีครูเช็คชื่อจริง) — มีแค่ 1 นักเรียน ไม่นับว่า "เช็คชื่อแล้ว"
+        // ถ้าเอกสารมีอยู่ก่อนแล้ว (ไม่ว่าจะจากครูเช็คจริงหรือ sync ก่อนหน้า) ไม่แตะฟิลด์นี้ ปล่อยให้ merge คงค่าเดิมไว้
+        ...(sessionSnap.exists() ? {} : { leaveSyncOnly: true }),
         updatedAt: now,
         createdAt: typeof existingData?.createdAt === 'string' ? existingData.createdAt : now,
       }, { merge: true });

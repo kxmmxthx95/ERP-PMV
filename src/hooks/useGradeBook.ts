@@ -9,12 +9,12 @@
 
 import { useState, useCallback, useRef } from 'react';
 import {
-  collection, getDoc, getDocs, setDoc, doc, query, where, writeBatch,
+  collection, getDoc, getDocs, setDoc, doc, query, where,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type {
   GradeWeightConfig, GradeRecord, StudentScoreSummary, GradeLetter,
-  GradeThreshold, NewGradeRecord,
+  GradeThreshold, NewGradeRecord, PassFailResult,
 } from '@/types/grades';
 import {
   DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, DEFAULT_MAX_SCORES,
@@ -296,6 +296,7 @@ export function useGradeBook() {
             finalScore: saved.finalScore,
             totalScore: saved.totalScore,
             grade: saved.grade,
+            result: saved.result ?? null,
             absent: saved.absent,
             note: saved.note,
           };
@@ -445,57 +446,73 @@ export function useGradeBook() {
     return reverted;
   }, [config]);
 
-  // ── บันทึก grade_records ทั้งหมดใน batch (ประหยัด quota) ─────────────────────
+  /** บันทึกผ่าน/ไม่ผ่าน ทีละคน (วิชากิจกรรม) */
+  const savePassFailResult = useCallback(async (
+    params: {
+      subjectId: string;
+      subjectName: string;
+      subjectCode: string;
+      classId: string;
+      className: string;
+      teacherId: string;
+      departmentId: Department;
+      academicYearId: string;
+      semester: 1 | 2;
+    },
+    studentId: string,
+    result: PassFailResult | null,
+  ) => {
+    setSummaries((prev) =>
+      prev.map((s) =>
+        s.studentId === studentId
+          ? {
+              ...s,
+              result,
+              grade: null,
+              classworkScore: null,
+              midtermScore: null,
+              finalScore: null,
+              totalScore: null,
+            }
+          : s,
+      ),
+    );
 
-  const publishGrades = useCallback(async (params: {
-    subjectId: string;
-    subjectName: string;
-    subjectCode: string;
-    classId: string;
-    className: string;
-    teacherId: string;
-    departmentId: Department;
-    academicYearId: string;
-    semester: 1 | 2;
-    summariesToPublish?: StudentScoreSummary[];
-  }) => {
-    const toPublish = params.summariesToPublish ?? summaries;
-    if (toPublish.length === 0) return;
+    const stu = summaries.find((s) => s.studentId === studentId);
+    if (!stu) return;
 
-    const batch = writeBatch(db);
     const now = new Date().toISOString();
-
-    toPublish.forEach(s => {
-      const docId = `${params.subjectId}_${params.classId}_${s.studentId}_${params.academicYearId}_${params.semester}`;
-      const ref = doc(db, 'grade_records', docId);
-      const record: NewGradeRecord = {
-        studentId: s.studentId,
-        studentName: s.studentName,
-        studentCode: s.studentCode,
-        subjectId: params.subjectId,
-        subjectName: params.subjectName,
-        subjectCode: params.subjectCode,
-        classId: params.classId,
-        className: params.className,
-        teacherId: params.teacherId,
-        departmentId: params.departmentId,
-        academicYearId: params.academicYearId,
-        semester: params.semester,
-        classworkScore: s.classworkScore,
-        midtermScore: s.midtermScore,
-        finalScore: s.finalScore,
-        totalScore: s.totalScore,
-        grade: s.grade,
-        absent: s.absent,
-        note: s.note,
-        publishedAt: now,
-        updatedAt: now,
-      };
-      batch.set(ref, record, { merge: true });
+    const docId = `${params.subjectId}_${params.classId}_${studentId}_${params.academicYearId}_${params.semester}`;
+    const ref = doc(db, 'grade_records', docId);
+    const record: NewGradeRecord = {
+      studentId: stu.studentId,
+      studentName: stu.studentName,
+      studentCode: stu.studentCode,
+      subjectId: params.subjectId,
+      subjectName: params.subjectName,
+      subjectCode: params.subjectCode,
+      classId: params.classId,
+      className: params.className,
+      teacherId: params.teacherId,
+      departmentId: params.departmentId,
+      academicYearId: params.academicYearId,
+      semester: params.semester,
+      classworkScore: null,
+      midtermScore: null,
+      finalScore: null,
+      totalScore: null,
+      grade: null,
+      result,
+      absent: false,
+      note: stu.note,
+      updatedAt: now,
+    };
+    await setDoc(ref, record, { merge: true });
+    setSavedRecords((prev) => {
+      const without = prev.filter((r) => r.studentId !== studentId);
+      return [...without, { id: docId, ...record }];
     });
-
-    await batch.commit();
-    cacheKey.current = ''; // invalidate cache
+    cacheKey.current = '';
   }, [summaries]);
 
   const invalidateCache = useCallback(() => {
@@ -515,6 +532,6 @@ export function useGradeBook() {
     updateStudentScore,
     applyOnlineExamScores,
     revertOnlineExamScores,
-    publishGrades,
+    savePassFailResult,
   };
 }

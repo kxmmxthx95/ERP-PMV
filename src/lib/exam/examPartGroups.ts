@@ -23,8 +23,8 @@ export function buildExamPartGroups(
   metaById: Map<string, Record<string, unknown>>,
 ): ExamPartGroupMeta[] {
   const { roundConfig } = getRoundQuestionConfigForRound(room, round);
-  const fallbackSetId = roundConfig?.questionSetId || room.questionSetId || '';
-  const selectedIds = roundConfig?.questionIds || room.selectedQuestionIds || [];
+  const fallbackSetId = roundConfig?.questionSetId || '';
+  const selectedIds = roundConfig?.questionIds || [];
   const setByQuestionId = roundConfig?.questionSetByQuestionId || {};
 
   const orderedSetIds = deriveSetOrder(selectedIds, setByQuestionId, fallbackSetId);

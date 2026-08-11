@@ -785,6 +785,54 @@ export function useStaffAttendance(
   };
 }
 
+// ── Admin: override สถานะเข้างานของวันใดวันหนึ่ง (ใช้จากปฏิทินรายบุคคล / รายวัน) ──
+export async function overrideStaffAttendanceStatus(params: {
+  date: string;
+  userId: string;
+  displayName: string;
+  status: AttendanceStatus;
+  note: string;
+  adminUid: string;
+}): Promise<void> {
+  const { date, userId, displayName, status, note, adminUid } = params;
+  const dayRef = getStaffAttendanceDayDocRef(date);
+  const entryRef = getStaffAttendanceEntryRef(date, userId);
+  const existingSnap = await getDoc(entryRef);
+  const existing = existingSnap.exists()
+    ? (existingSnap.data() as Partial<Omit<StaffAttendanceRecord, 'id'>>)
+    : null;
+
+  const batch = writeBatch(db);
+
+  batch.set(dayRef, {
+    date,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+
+  const entryPatch: Record<string, unknown> = {
+    userId,
+    displayName,
+    date,
+    status,
+    note,
+    overrideBy: adminUid,
+  };
+
+  if (!existing) {
+    entryPatch.checkOutTime = null;
+  }
+
+  if (!existing?.checkInTime && (status === 'present' || status === 'late')) {
+    entryPatch.checkInTime = serverTimestamp();
+  } else if (!existing && status === 'absent') {
+    entryPatch.checkInTime = null;
+  }
+
+  batch.set(entryRef, entryPatch, { merge: true });
+  await batch.commit();
+  invalidateStaffWeekHistory(userId);
+}
+
 // ── Admin hook: fetch all staff records for a date range ─────────────────────
 export function useAdminStaffAttendance(date: string) {
   const [records, setRecords] = useState<StaffAttendanceRecord[]>([]);
@@ -949,42 +997,14 @@ export function useAdminStaffAttendance(date: string) {
     note: string,
     adminUid: string,
   ) => {
-    const dayRef = getStaffAttendanceDayDocRef(date);
-    const entryRef = getStaffAttendanceEntryRef(date, targetUserId);
-    const existingSnap = await getDoc(entryRef);
-    const existing = existingSnap.exists()
-      ? (existingSnap.data() as Partial<Omit<StaffAttendanceRecord, 'id'>>)
-      : null;
-
-    const batch = writeBatch(db);
-
-    batch.set(dayRef, {
+    await overrideStaffAttendanceStatus({
       date,
-      updatedAt: serverTimestamp(),
-    }, { merge: true });
-
-    const entryPatch: Record<string, unknown> = {
       userId: targetUserId,
       displayName: targetName,
-      date,
       status,
       note,
-      overrideBy: adminUid,
-    };
-
-    if (!existing) {
-      entryPatch.checkOutTime = null;
-    }
-
-    if (!existing?.checkInTime && (status === 'present' || status === 'late')) {
-      entryPatch.checkInTime = serverTimestamp();
-    } else if (!existing && status === 'absent') {
-      entryPatch.checkInTime = null;
-    }
-
-    batch.set(entryRef, entryPatch, { merge: true });
-
-    await batch.commit();
+      adminUid,
+    });
     await fetch();
   }, [date, fetch]);
 

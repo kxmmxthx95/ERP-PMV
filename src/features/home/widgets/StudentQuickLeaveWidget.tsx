@@ -10,14 +10,14 @@ import { WIDGET_CARD, WIDGET_GLASS } from '../widgetStyles';
 import { cn } from '@/lib/utils';
 import type { LeaveType } from '@/types/leave';
 
-export default function StudentQuickLeaveWidget() {
+export default function StudentQuickLeaveWidget({ defaultView = 'summary' }: { defaultView?: 'summary' | 'form' }) {
 
   const { user, userData } = useAuth();
   const uid = user?.uid ?? '';
   const displayName = userData?.name || userData?.displayName || userData?.email || 'นักเรียน';
   const { requests, submit } = useMyLeaveRequests(uid, 'student');
 
-  const [view, setView] = useState<'summary' | 'form' | 'success'>('summary');
+  const [view, setView] = useState<'summary' | 'form' | 'success'>(defaultView);
   const [leaveType, setLeaveType] = useState<LeaveType>('sick');
   const [reason, setReason] = useState('');
   const earliestStartDate = getEarliestLeaveStartDate();
@@ -155,12 +155,14 @@ export default function StudentQuickLeaveWidget() {
             className="flex flex-col gap-2 h-full relative"
           >
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => setView('summary')}
-                className="w-8 h-8 rounded-full bg-white/60 backdrop-blur-sm border border-black/[0.03] flex items-center justify-center hover:bg-white hover:shadow-sm transition-all shrink-0 text-slate-400 hover:text-slate-600"
-              >
-                <ChevronLeft size={16} />
-              </button>
+              {defaultView !== 'form' && (
+                <button
+                  onClick={() => setView('summary')}
+                  className="w-8 h-8 rounded-full bg-white/60 backdrop-blur-sm border border-black/[0.03] flex items-center justify-center hover:bg-white hover:shadow-sm transition-all shrink-0 text-slate-400 hover:text-slate-600"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+              )}
               <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">รายละเอียดการลา</h3>
             </div>
 

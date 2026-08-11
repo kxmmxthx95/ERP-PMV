@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 import { WIDGET_CARD, WIDGET_GLASS } from '../widgetStyles';
 
-export type WidgetSkeletonVariant = 'default' | 'profile' | 'list' | 'wide';
+export type WidgetSkeletonVariant = 'default' | 'profile' | 'list' | 'wide' | 'staff';
 
 interface WidgetSkeletonProps {
   className?: string;
@@ -24,6 +24,29 @@ export function WidgetSkeleton({ className, variant = 'default' }: WidgetSkeleto
           <Skeleton className="h-3 w-full rounded-lg bg-slate-100" />
           <Skeleton className="h-3 w-2/3 rounded-lg bg-slate-100" />
         </div>
+      </div>
+    );
+  }
+
+  if (variant === 'staff') {
+    return (
+      <div
+        style={WIDGET_GLASS}
+        className={cn('rounded-2xl flex w-full h-[142px] overflow-hidden relative p-0 pl-3', className)}
+      >
+        <div className="flex min-w-0 flex-1 flex-col justify-between py-3 pr-2">
+          <div className="flex flex-col gap-1.5">
+            <Skeleton className="h-3.5 w-[55%] rounded-lg bg-slate-200" />
+            <Skeleton className="h-5 w-[40%] rounded-lg bg-slate-200" />
+            <Skeleton className="h-3 w-[70%] rounded-lg bg-slate-100" />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Skeleton className="h-8 w-8 shrink-0 rounded-full bg-slate-100" />
+            <Skeleton className="h-8 w-8 shrink-0 rounded-full bg-slate-100" />
+            <Skeleton className="h-8 w-8 shrink-0 rounded-full bg-slate-50" />
+          </div>
+        </div>
+        <Skeleton className="h-full w-[34%] max-w-[92px] shrink-0 rounded-none rounded-r-2xl bg-slate-100" />
       </div>
     );
   }
@@ -85,15 +108,19 @@ export function DashboardWidgetsSkeleton({ count = 8 }: { count?: number }) {
 
 export function MenuPageSkeleton() {
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6">
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-3 lg:gap-8 lg:px-4 lg:py-6">
       {[0, 1].map((section) => (
-        <div key={section} className="flex flex-col gap-3.5">
-          <Skeleton className="h-4 w-56 rounded-lg bg-slate-200" />
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+        <div key={section} className="flex flex-col gap-3 lg:gap-3.5">
+          <div className="flex flex-col gap-0.5">
+            <Skeleton className="h-3.5 w-36 rounded-lg bg-muted lg:h-4 lg:w-48" />
+            <Skeleton className="h-2.5 w-28 rounded-lg bg-muted/60 lg:h-3 lg:w-36" />
+          </div>
+          <div className="grid grid-cols-4 justify-items-center gap-x-4 gap-y-6 lg:grid-cols-6 lg:justify-items-stretch lg:gap-4 xl:grid-cols-8">
             {Array.from({ length: 8 }, (_, index) => (
-              <div key={index} className="flex flex-col gap-2">
-                <Skeleton className="aspect-square w-full rounded-2xl bg-slate-200" />
-                <Skeleton className="h-3 w-3/4 rounded-lg bg-slate-100" />
+              <div key={index} className="flex flex-col items-center gap-1 lg:items-stretch lg:gap-2">
+                <Skeleton className="h-[58px] w-[58px] rounded-[14px] bg-muted lg:aspect-square lg:h-auto lg:w-full lg:rounded-2xl" />
+                <Skeleton className="h-[26px] w-12 rounded-lg bg-muted/60 lg:hidden" />
+                <Skeleton className="hidden h-3 w-3/4 rounded-lg bg-muted/60 lg:block" />
               </div>
             ))}
           </div>

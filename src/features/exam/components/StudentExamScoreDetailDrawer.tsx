@@ -20,13 +20,14 @@ import {
   getQuestionMaxPoints,
   resolveAttemptTotalScore,
 } from '@/lib/exam/manualEssayGrading';
-import { describeMissingQuestionsError } from '@/lib/exam/roundQuestions';
+import { describeMissingQuestionsError, getExamRoomRoundTotalPoints } from '@/lib/exam/roundQuestions';
 import { shouldShowExamPartHeaders, type ExamPartGroupMeta } from '@/lib/exam/examPartGroups';
 import { getPartBadgeTheme } from '@/features/exam/utils/partBadgeTheme';
 import { computePartScoreSummaries } from '@/features/exam/utils/partScoreSummary';
 import { db } from '@/lib/firebase';
 import { logActivity } from '@/lib/activityLogger';
 import { approveScoreOverride, rejectScoreOverride } from '@/lib/exam/scoreOverride';
+import { formatScorePoints } from '@/lib/exam/examRoomScoring';
 import { normalizeExamScore } from '@/lib/students/studentIdentity';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
@@ -298,20 +299,14 @@ export function StudentExamScoreDetailDrawer({
     );
   }, [gradeSummary, groupedResults, questions, questionPoints, attempt, draftScores]);
 
-  // คะแนนเต็มจริง = ผลรวม maxPoints ของแต่ละ Part สดๆ (ตรงกับคะแนนต่อข้อปัจจุบันเสมอ)
-  // fallback ไปใช้ค่าที่แคชไว้ตอนตั้งห้องสอบ เฉพาะตอนยังโหลดคำถามไม่เสร็จ
+  // คะแนนเต็ม — ใช้แหล่งเดียวกับสรุปครู (stored config) ก่อน แล้วค่อย fallback ผลรวม live
   const roundTotal = useMemo(() => {
+    const stored = getExamRoomRoundTotalPoints(room, activeRound);
+    if (stored > 0) return stored;
     if (partScoreSummaries.length > 0) {
       return partScoreSummaries.reduce((sum, part) => sum + part.maxPoints, 0);
     }
-    const roundKey = String(activeRound);
-    const points =
-      room.roundQuestions?.[roundKey]?.totalPoints
-      ?? room.roundQuestions?.['∞']?.totalPoints
-      ?? room.roundQuestions?.['1']?.totalPoints
-      ?? room.totalPoints
-      ?? 0;
-    return Number(points) > 0 ? Number(points) : 0;
+    return 0;
   }, [partScoreSummaries, room, activeRound]);
 
   const attemptScore = resolveAttemptTotalScore(attempt);
@@ -380,6 +375,10 @@ export function StudentExamScoreDetailDrawer({
 
   const submitOverrideRequest = useCallback(async () => {
     if (!attempt || !user) return;
+    if (overrideScoreInput.trim() === '') {
+      toast.error('กรุณากรอกคะแนนใหม่');
+      return;
+    }
     const parsed = Number(overrideScoreInput);
     if (!Number.isFinite(parsed) || parsed < 0 || (roundTotal > 0 && parsed > roundTotal)) {
       toast.error(`กรุณากรอกคะแนนระหว่าง 0 - ${roundTotal}`);
@@ -831,8 +830,8 @@ export function StudentExamScoreDetailDrawer({
                       <>
                         <p className="text-[12px] text-indigo-800 font-sarabun leading-snug">
                           <span className="font-black">{pendingOverride.requestedByName}</span> ขอแก้คะแนนเป็น{' '}
-                          <span className="font-black">{pendingOverride.requestedScore}/{pendingOverride.maxPoints}</span>
-                          {' '}(เดิม {pendingOverride.previousScore ?? '-'})
+                          <span className="font-black">{formatScorePoints(pendingOverride.requestedScore)}/{formatScorePoints(pendingOverride.maxPoints)}</span>
+                          {' '}(เดิม {formatScorePoints(pendingOverride.previousScore)})
                         </p>
                         <p className="text-[11px] text-indigo-600 font-sarabun">เหตุผล: {pendingOverride.reason}</p>
                         <div className="flex gap-2">
@@ -855,7 +854,7 @@ export function StudentExamScoreDetailDrawer({
                     ) : (
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-[12px] text-indigo-800 font-sarabun">
-                          ส่งคำขอแก้คะแนนเป็น {pendingOverride.requestedScore}/{pendingOverride.maxPoints} แล้ว — รอ sysadmin/ผู้บริหารอนุมัติ
+                          ส่งคำขอแก้คะแนนเป็น {formatScorePoints(pendingOverride.requestedScore)}/{formatScorePoints(pendingOverride.maxPoints)} แล้ว — รอ sysadmin/ผู้บริหารอนุมัติ
                         </p>
                         {pendingOverride.requestedBy === user?.uid && (
                           <button

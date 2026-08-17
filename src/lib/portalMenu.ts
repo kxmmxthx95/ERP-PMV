@@ -24,7 +24,7 @@ import {
   IoAnalyticsOutline,
   IoSwapHorizontalOutline,
 } from 'react-icons/io5';
-import { HiBookOpen, HiBriefcase, HiClipboardDocument, HiComputerDesktop, HiMiniCalculator, HiMiniEnvelope, HiMiniTableCells, HiMiniUserCircle, HiMiniUserGroup, HiTv } from 'react-icons/hi2';
+import { HiBookOpen, HiBriefcase, HiClipboardDocument, HiComputerDesktop, HiExclamationTriangle, HiMiniCalculator, HiMiniEnvelope, HiMiniTableCells, HiMiniUserCircle, HiMiniUserGroup, HiTv } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
 
 export interface PortalMenuItem {
@@ -58,6 +58,7 @@ export const ALL_MENUS: PortalMenuItem[] = [
   { title: 'PMV Voice', subtitle: 'เสียงของนักเรียน', icon: IoMegaphoneOutline, path: '/portal/feedback', featureKey: 'feedback' },
   { title: 'คะแนนพฤติกรรม', subtitle: 'Behavior & Conduct Score', icon: IoRibbonOutline, path: '/portal/behavior', featureKey: 'behaviorScore' },
   { title: 'ห้องสอบออนไลน์', subtitle: 'Online Exam & Assessment', icon: HiTv, path: '/portal/exams', featureKey: 'exams' },
+  { title: 'ตรวจสอบรายการขาดสอบ', subtitle: 'Missed Exam Checker', icon: HiExclamationTriangle, path: '/portal/exam-absences', featureKey: 'examAbsences' },
   { title: 'คลังข้อสอบ', subtitle: 'Question Bank & Repository', icon: HiBriefcase, path: '/portal/question-bank', featureKey: 'questionBank' },
   { title: 'AI Agent', subtitle: 'Agent Command Center', icon: IoSparklesOutline, path: '/portal/ai-agents', featureKey: 'aiAgents' },
   { title: 'ระบบบันทึกผลการเรียน', subtitle: 'Grade Book & Grade Cutting', icon: HiMiniCalculator, path: '/portal/grades', featureKey: 'grades' },

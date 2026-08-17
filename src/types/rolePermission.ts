@@ -49,6 +49,7 @@ export const FEATURE_LIST: FeaturePermission[] = [
 
   // ── สอบและประเมินผล ──
   { featureKey: 'exams',        label: 'ห้องสอบออนไลน์',       category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'full' },
+  { featureKey: 'examAbsences', label: 'ตรวจสอบรายการขาดสอบ',  category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'view-only' },
   { featureKey: 'questionBank', label: 'คลังข้อสอบ',           category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'full' },
   { featureKey: 'aiAgents',     label: 'AI Agent Command',      category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'view-only' },
   { featureKey: 'grades',       label: 'สมุดคะแนน/ตัดเกรด',   category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'full' },

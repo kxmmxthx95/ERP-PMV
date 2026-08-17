@@ -76,7 +76,7 @@ const MENU_CATEGORIES = [
     id: 'assessment_testing',
     nameTh: 'การวัดผลและข้อสอบ',
     nameEn: 'Assessment & Testing',
-    featureKeys: ['questionBank', 'exams', 'grades'],
+    featureKeys: ['questionBank', 'exams', 'examAbsences', 'grades'],
   },
   {
     id: 'student_affairs',

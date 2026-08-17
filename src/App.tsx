@@ -29,6 +29,7 @@ const CourseMigrationTool = lazy(() => import('@/features/settings/CourseMigrati
 const ExamLayout = lazy(() => import('@/features/exam/ExamLayout'));
 const ExamManager = lazy(() => import('@/features/exam/ExamManager'));
 const StudentExamPage = lazy(() => import('@/features/exam/StudentExamPage'));
+const ExamAbsencesPage = lazy(() => import('@/features/exam/ExamAbsencesPage'));
 const QuestionBankManager = lazy(() => import('@/features/questionBank/QuestionBankManager'));
 const StaffAttendancePage = lazy(() => import('@/features/attendance/StaffAttendancePage'));
 const TeacherKpiPage = lazy(() => import('@/features/teacherKpi/TeacherKpiPage'));
@@ -212,6 +213,11 @@ export default function App() {
             <Route path="grades" element={
               <PermissionGate featureKey="grades">
                 <GradeBookPage />
+              </PermissionGate>
+            } />
+            <Route path="exam-absences" element={
+              <PermissionGate featureKey="examAbsences">
+                <ExamAbsencesPage />
               </PermissionGate>
             } />
             <Route path="student-analytics" element={

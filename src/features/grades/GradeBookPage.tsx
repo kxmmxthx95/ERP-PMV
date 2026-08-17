@@ -770,6 +770,7 @@ export default function GradeBookPage() {
   }, [selectedOnlineRoomId, selectedClassId, teachingMgr, onlineAttemptsByRoomId, onlineRooms]);
 
   const onlineRoomScoreTableRows = useMemo((): ExamRoomScoreRow[] => {
+    const exemptIds = new Set(selectedOnlineRoom?.settings?.examExemptStudentIds ?? []);
     return selectedOnlineRoomRows.map((row) => ({
       studentId: row.studentId,
       studentName: row.studentName,
@@ -782,8 +783,9 @@ export default function GradeBookPage() {
           ? 'submitted'
           : 'none',
       scorePercent: row.scorePercent,
+      isExempt: exemptIds.has(row.studentId),
     }));
-  }, [selectedOnlineRoomRows]);
+  }, [selectedOnlineRoomRows, selectedOnlineRoom]);
 
   const classRosterKey = useMemo(() => {
     if (!selectedClassId) return '';
@@ -824,15 +826,19 @@ export default function GradeBookPage() {
 
       const attempts = onlineAttemptsByRoomId[room.id] ?? [];
       const bestPercents = getBestPercentByStudent(room, attempts, classStudents);
+      const exemptIds = new Set(room.settings?.examExemptStudentIds ?? []);
 
-      bestPercents.forEach((pct, studentId) => {
-        const entry = byStudent.get(studentId);
+      classStudents.forEach(({ student }) => {
+        if (exemptIds.has(student.id)) return; // ครูยกเว้น — ไม่นับห้องนี้เลย
+        // มี attempt ใช้คะแนนจริง, ไม่มี attempt = ขาดสอบ = นับ 0
+        const pct = bestPercents.get(student.id) ?? 0;
+        const entry = byStudent.get(student.id);
         if (!entry) return;
 
         if (field === 'classworkScore') {
-          const pcts = classworkPctsByStudent.get(studentId) ?? [];
+          const pcts = classworkPctsByStudent.get(student.id) ?? [];
           pcts.push(pct);
-          classworkPctsByStudent.set(studentId, pcts);
+          classworkPctsByStudent.set(student.id, pcts);
         } else if (field === 'midtermScore') {
           entry.midtermScore = entry.midtermScore !== null
             ? Math.max(entry.midtermScore, pct)
@@ -929,6 +935,30 @@ export default function GradeBookPage() {
     }
   }, [selectedSubjectId]);
 
+  /** ยกเว้น/ยกเลิกยกเว้น นักเรียนที่ไม่มี attempt ไม่ให้ถูกนับ 0 ในห้องสอบนี้ */
+  const handleToggleExamExempt = useCallback(async (studentId: string) => {
+    if (!selectedOnlineRoom) return;
+    const current = new Set(selectedOnlineRoom.settings?.examExemptStudentIds ?? []);
+    if (current.has(studentId)) {
+      current.delete(studentId);
+    } else {
+      current.add(studentId);
+    }
+    const nextSettings = {
+      ...(selectedOnlineRoom.settings ?? {}),
+      examExemptStudentIds: Array.from(current),
+    };
+
+    try {
+      await updateDoc(doc(db, 'exam_rooms', selectedOnlineRoom.id), { settings: nextSettings });
+      const updatedRoom: ExamRoom = { ...selectedOnlineRoom, settings: nextSettings };
+      setOnlineRooms(prev => prev.map(r => (r.id === updatedRoom.id ? updatedRoom : r)));
+    } catch (err) {
+      console.error(err);
+      toast.error('ไม่สามารถบันทึกการยกเว้นได้');
+    }
+  }, [selectedOnlineRoom]);
+
   // ห้องสอบของระดับชั้น/ห้องนี้ที่ยังไม่ถูกผูกเข้าวิชาที่กำลังดูอยู่ — สำหรับ Drawer "+"
   const unlinkedGradeRooms = useMemo(
     () => allGradeExamRooms.filter(r => !onlineRooms.some(o => o.id === r.id)),
@@ -947,6 +977,13 @@ export default function GradeBookPage() {
 
   const handleLinkRoomToSubject = useCallback(async (room: ExamRoom) => {
     if (!selectedSubjectId || !selectedSubject) return;
+
+    if (room.classId && room.classId !== selectedClassId) {
+      const proceed = window.confirm(
+        `ห้องสอบ "${room.title}" ถูกสร้างไว้สำหรับห้องเรียน "${room.className ?? room.classId}" ไม่ตรงกับห้องเรียนที่กำลังดูอยู่\n\nนักเรียนที่ไม่ได้เข้าสอบห้องนี้จะถูกนับคะแนน 0 โดยอัตโนมัติ\n\nยืนยันเชื่อมต่อคะแนนหรือไม่?`,
+      );
+      if (!proceed) return;
+    }
 
     setLinkingRoomId(room.id);
     try {
@@ -972,7 +1009,7 @@ export default function GradeBookPage() {
     } finally {
       setLinkingRoomId(null);
     }
-  }, [selectedSubjectId, selectedSubject]);
+  }, [selectedSubjectId, selectedSubject, selectedClassId]);
 
   /** นำห้องสอบออกจากคะแนนการสอบของวิชานี้ — ยกเลิกการผูกวิชา ไม่ลบห้องสอบจริงออกจากฐานข้อมูล */
   const handleRemoveRoomFromSubject = useCallback(async (room: ExamRoom, e: React.MouseEvent) => {
@@ -1828,7 +1865,7 @@ export default function GradeBookPage() {
                     {onlineRoomScoreTableRows.length} คน
                   </span>
                 </div>
-                <ExamRoomScoreTable rows={onlineRoomScoreTableRows} />
+                <ExamRoomScoreTable rows={onlineRoomScoreTableRows} onToggleExempt={handleToggleExamExempt} />
               </motion.div>
             ) : (
               /* ── Manual exam detail (เดิม) ── */

@@ -48,6 +48,8 @@ export interface ExamRoomSettings {
   scoreCollectionLinked?: boolean;       // false = ยกเลิกการเชื่อมต่อแล้ว แต่ยังแสดงการ์ดใน Grade Book
   scoreCollectionType?: ScoreCollectionType; // ประเภทการเก็บคะแนน
   scoreCollectionMaxScore?: number;      // คะแนนเต็ม
+  /** studentId ที่ครูยกเว้นไม่ต้องนับห้องสอบนี้ (ไม่ได้เข้าสอบ แต่ไม่ต้องการ 0) */
+  examExemptStudentIds?: string[];
 }
 
 export interface ExamRoom {

@@ -18,6 +18,8 @@ export type ExamRoomScoreRow = {
   status: ExamRoomScoreStatus;
   /** คะแนนดิบ % จากห้องสอบ */
   scorePercent: number | null;
+  /** ครูยกเว้นไม่ต้องนับห้องสอบนี้ (ไม่มีข้อมูล แต่ไม่ถูกนับ 0) */
+  isExempt?: boolean;
 };
 
 /** percent = คะแนนดิบ · tScore = T ในห้องนี้ */
@@ -138,6 +140,8 @@ interface Props {
   className?: string;
   /** default percent · tScore = แปลง T เทียบในตารางนี้ */
   scoreMode?: ExamRoomScoreMode;
+  /** ใส่เพื่อเปิดปุ่ม "ยกเว้น" ต่อแถวที่ status === 'none' (เฉพาะห้องสอบออนไลน์ที่เชื่อมคะแนน) */
+  onToggleExempt?: (studentId: string) => void;
 }
 
 export default function ExamRoomScoreTable({
@@ -145,6 +149,7 @@ export default function ExamRoomScoreTable({
   pageSize = DEFAULT_PAGE_SIZE,
   className,
   scoreMode = 'percent',
+  onToggleExempt,
 }: Props) {
   const [page, setPage] = useState(1);
   const showPercent = scoreMode === 'percent';
@@ -230,6 +235,25 @@ export default function ExamRoomScoreTable({
                     size="md"
                   />
                 </div>
+                {onToggleExempt && row.status === 'none' && (
+                  <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
+                    <p className="text-[11px] font-bold text-muted-foreground font-sukhumvit">
+                      {row.isExempt ? 'ยกเว้น — ไม่นับห้องนี้' : 'ไม่มี attempt — นับ 0'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onToggleExempt(row.studentId)}
+                      className={cn(
+                        'text-[10px] font-bold px-2.5 py-1 rounded-full font-sukhumvit transition-all',
+                        row.isExempt
+                          ? 'bg-muted text-muted-foreground'
+                          : 'bg-amber-500/10 text-amber-600',
+                      )}
+                    >
+                      {row.isExempt ? 'ยกเลิกยกเว้น' : 'ยกเว้น'}
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.div>
           );
@@ -281,8 +305,22 @@ export default function ExamRoomScoreTable({
                   />
                   <p className="truncate text-[13px] font-bold text-foreground font-sukhumvit">{row.studentName}</p>
                 </div>
-                <div className="flex justify-center">
+                <div className="flex flex-col items-center gap-1">
                   <ExamStatusBadge status={row.status} />
+                  {onToggleExempt && row.status === 'none' && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleExempt(row.studentId)}
+                      className={cn(
+                        'text-[9px] font-bold px-2 py-0.5 rounded-full font-sukhumvit transition-all',
+                        row.isExempt
+                          ? 'bg-muted text-muted-foreground'
+                          : 'bg-amber-500/10 text-amber-600',
+                      )}
+                    >
+                      {row.isExempt ? 'ยกเลิกยกเว้น' : 'ยกเว้น'}
+                    </button>
+                  )}
                 </div>
                 <div className="text-center">
                   <ScoreCell

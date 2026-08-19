@@ -12,6 +12,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  runTransaction,
   Timestamp,
   writeBatch,
   type QueryDocumentSnapshot,
@@ -1526,35 +1527,44 @@ export function useExamAttempt(roomId: string) {
         }
       }
 
-      // Create new attempt
-      const newAttemptDoc = await addDoc(collection(db, 'exam_rooms', roomId, 'attempts'), {
-        studentId,
-        studentName,
-        roomId,
-        round: currentRound,
-        status: 'in_progress',
-        answers: {},
-        suspiciousActivities: 0,
-        score: null,
-        startedAt: Timestamp.now(),
-        submittedAt: null,
-        lastSavedAt: Timestamp.now(),
-      });
+      // Create new attempt — deterministic id + transaction so concurrent
+      // joins (double-click, duplicate tab) collapse into a single doc
+      // instead of racing past the "existing attempt" check above.
+      const attemptDocRef = doc(db, 'exam_rooms', roomId, 'attempts', `${studentId}_r${currentRound}`);
+      const newAttempt = await runTransaction(db, async (tx) => {
+        const existingSnap = await tx.get(attemptDocRef);
+        if (existingSnap.exists()) {
+          const existingRaw = existingSnap.data();
+          return {
+            ...existingRaw,
+            id: existingSnap.id,
+            startedAt: normalizeTimestamp(existingRaw?.startedAt),
+            submittedAt: existingRaw?.submittedAt ? normalizeTimestamp(existingRaw?.submittedAt) : null,
+            lastSavedAt: normalizeTimestamp(existingRaw?.lastSavedAt),
+          } as ExamAttempt;
+        }
 
-      const newAttempt: ExamAttempt = {
-        id: newAttemptDoc.id,
-        studentId,
-        studentName,
-        roomId,
-        round: currentRound,
-        status: 'in_progress',
-        answers: {},
-        suspiciousActivities: 0,
-        score: null,
-        startedAt: Date.now(),
-        submittedAt: null,
-        lastSavedAt: Date.now(),
-      };
+        const attemptData = {
+          studentId,
+          studentName,
+          roomId,
+          round: currentRound,
+          status: 'in_progress' as const,
+          answers: {},
+          suspiciousActivities: 0,
+          score: null,
+          startedAt: Timestamp.now(),
+          submittedAt: null,
+          lastSavedAt: Timestamp.now(),
+        };
+        tx.set(attemptDocRef, attemptData);
+        return {
+          ...attemptData,
+          id: attemptDocRef.id,
+          startedAt: Date.now(),
+          lastSavedAt: Date.now(),
+        } as ExamAttempt;
+      });
 
       localStorage.setItem(`exam_attempt_${roomId}_${studentId}`, JSON.stringify(newAttempt));
       setAttempt(newAttempt);

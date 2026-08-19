@@ -865,6 +865,15 @@ function ProctoringModal({
     [classStudents, attempts],
   );
 
+  const studentIdentityLookup = useMemo(
+    () => enrichStudentIdentityLookupFromAttempts(
+      buildStudentIdentityLookup(classStudents),
+      classStudents,
+      attempts,
+    ),
+    [classStudents, attempts],
+  );
+
   const [isRecalculating, setIsRecalculating] = useState(false);
   const canRecalculateScores = Boolean(onRecalculateScores && room.status !== 'active');
 
@@ -887,10 +896,15 @@ function ProctoringModal({
   }, [attempts, onRecalculateScores, room.currentRound, room.id, room.status]);
 
   const proctorRound = normalizeExamRound(room.currentRound);
-  const roundAttempts = useMemo(
-    () => attempts.filter((a) => normalizeExamRound(a.round) === proctorRound),
-    [attempts, proctorRound],
-  );
+  const roundAttempts = useMemo(() => {
+    const byStudent = indexAttemptsByStudentRound(attempts, studentIdentityLookup);
+    const deduped: ExamAttempt[] = [];
+    byStudent.forEach((rounds) => {
+      const att = rounds.get(proctorRound);
+      if (att) deduped.push(att);
+    });
+    return deduped;
+  }, [attempts, studentIdentityLookup, proctorRound]);
 
   const inProgress = roundAttempts.filter(a => a.status === 'in_progress').length;
   const submitted = roundAttempts.filter(a => a.status === 'submitted' || a.status === 'graded').length;

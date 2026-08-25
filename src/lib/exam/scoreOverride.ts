@@ -30,11 +30,11 @@ async function syncApprovedScoreToGradeBook(
   if (!isLinkedToGradeBook(room)) return;
 
   const link = room.settings.gradeBookSubjects?.[0];
-  const subjectId = room.settings.gradeBookSubjectId ?? link?.subjectId ?? room.subjectId;
-  const subjectName = room.settings.gradeBookSubjectName ?? link?.subjectName ?? room.subjectName;
-  const subjectCode = room.settings.gradeBookSubjectCode ?? link?.subjectCode;
+  const subjectId = room.settings.gradeBookSubjectId || link?.subjectId || room.subjectId;
+  const subjectName = room.settings.gradeBookSubjectName || link?.subjectName || room.subjectName;
+  const subjectCode = room.settings.gradeBookSubjectCode || link?.subjectCode || '';
   const { classId, className } = room;
-  if (!subjectId || !subjectName || !subjectCode || !classId || !className) return;
+  if (!subjectId || !subjectName || !classId || !className) return;
 
   const field = scoreCollectionTypeToGradeField(room.settings.scoreCollectionType ?? room.settings.gradeBookScoreType);
   const percent = rawPointsToPercent(request.requestedScore, request.maxPoints);

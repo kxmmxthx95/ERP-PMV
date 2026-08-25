@@ -67,11 +67,11 @@ async function backfillApprovedScoreOverrides() {
             continue;
         }
         const link = settings.gradeBookSubjects?.[0];
-        const subjectId = settings.gradeBookSubjectId ?? link?.subjectId ?? room.subjectId;
-        const subjectName = settings.gradeBookSubjectName ?? link?.subjectName ?? room.subjectName;
-        const subjectCode = settings.gradeBookSubjectCode ?? link?.subjectCode;
+        const subjectId = settings.gradeBookSubjectId || link?.subjectId || room.subjectId;
+        const subjectName = settings.gradeBookSubjectName || link?.subjectName || room.subjectName;
+        const subjectCode = settings.gradeBookSubjectCode || link?.subjectCode || "";
         const { classId, className } = room;
-        if (!subjectId || !subjectName || !subjectCode || !classId || !className) {
+        if (!subjectId || !subjectName || !classId || !className) {
             skippedUnlinked += 1;
             continue;
         }

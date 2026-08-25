@@ -1028,7 +1028,7 @@ export default function GradeBookPage() {
         ...restSettings,
         ...(keepDirectLink ? { gradeBookSubjectId, gradeBookSubjectName, gradeBookSubjectCode } : {}),
         gradeBookSubjects: nextGradeBookSubjects,
-        ...(room.subjectId === selectedSubjectId
+        ...(!keepDirectLink
           ? { scoreCollectionEnabled: false, scoreCollectionLinked: true }
           : {}),
       };

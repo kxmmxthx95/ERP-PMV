@@ -117,15 +117,15 @@ export interface ExamAttempt {
   objectiveScore?: number | null;
   /** คะแนนข้ออัตนัยที่ครูให้แล้ว (questionId → คะแนน) */
   manualScores?: Record<string, number>;
-  /** คะแนนถูกแก้ไขด้วยมือผ่านการอนุมัติคำขอ (exam_score_overrides) */
+  /** คะแนนถูกแก้ไขด้วยมือโดยครู (ดูประวัติที่ score_edit_history) */
   manuallyOverridden?: boolean;
   startedAt: number;
   submittedAt: number | null;
   lastSavedAt: number;
 }
 
-/** คำขอแก้ไขคะแนนสอบด้วยมือ — ครูยื่นคำขอ, sysadmin/admin อนุมัติ */
-export interface ExamScoreOverrideRequest {
+/** ประวัติการแก้ไขคะแนนสอบด้วยมือ — เขียนพร้อมกับการแก้คะแนนจริง ไม่มีขั้นตอนอนุมัติ */
+export interface ScoreEditHistoryEntry {
   id: string;
   roomId: string;
   roomTitle: string;
@@ -133,18 +133,13 @@ export interface ExamScoreOverrideRequest {
   studentId: string;
   studentName: string;
   round: number;
-  requestedScore: number;
-  maxPoints: number;
   previousScore: number | null;
+  newScore: number;
+  maxPoints: number;
   reason: string;
-  requestedBy: string;
-  requestedByName: string;
-  status: 'pending' | 'approved' | 'rejected';
-  approverId?: string;
-  approverName?: string;
-  approverNote?: string;
+  editedBy: string;
+  editedByName: string;
   createdAt: number;
-  updatedAt?: number;
 }
 
 // Client-safe question (no correctOptionId)

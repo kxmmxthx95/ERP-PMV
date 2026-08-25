@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense, type
 import { useNavigate, useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
+import { collection, doc, getDocs, query, where, writeBatch } from 'firebase/firestore';
 import {
   ClipboardList, Plus, Play, Square, Trash2, Eye,
   X, Pencil,
@@ -46,6 +46,7 @@ import {
   HiMinus,
   HiArrowsPointingOut,
   HiArrowsPointingIn,
+  HiClipboardDocumentList,
 } from 'react-icons/hi2';
 import {
   Drawer,
@@ -269,7 +270,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useBrowseVisibleDepartments } from '@/hooks/useBrowseVisibleDepartments';
 import { shouldCountDepartment } from '@/lib/departments/homeDepartment';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
-import type { ExamRoom, ExamAttempt, ExamScoreOverrideRequest, GradeScoreType, GradeBookSubjectLink, ScoreCollectionType } from '@/types/exam';
+import type { ExamRoom, ExamAttempt, GradeScoreType, GradeBookSubjectLink, ScoreCollectionType, ScoreEditHistoryEntry } from '@/types/exam';
 import { rawPointsToPercent } from '@/types/grades';
 import { formatScorePoints, resolveAttemptScoreDisplay } from '@/lib/exam/examRoomScoring';
 import { resolveExamRoomIconSrc } from '@/lib/exam/examRoomIcons';
@@ -325,7 +326,7 @@ import {
 import type { Subject } from '@/types/curriculum';
 import { db } from '@/lib/firebase';
 import { logActivity } from '@/lib/activityLogger';
-import { approveScoreOverride } from '@/lib/exam/scoreOverride';
+import { logScoreEdit } from '@/lib/exam/scoreEditHistory';
 import {
   buildStudentIdentityLookup,
   buildStudentDisplayNameByIdentityKey,
@@ -3497,7 +3498,7 @@ function ScoreCollectionBadgeButton({
   );
 }
 
-const DRAWER_QUICK_TABS: SettingsTab[] = ['takers', 'questions', 'score-settings', 'score-summary', 'score-config'];
+const DRAWER_QUICK_TABS: SettingsTab[] = ['takers', 'questions', 'score-settings', 'score-summary', 'score-config', 'score-history'];
 
 const ROOM_DETAIL_DRAWER_CONTENT_CLASS = cn(
   'flex h-dvh max-h-dvh flex-col overflow-hidden bg-transparent p-2 before:hidden',
@@ -5715,8 +5716,70 @@ function ScoreConfigPanel({ room, onSave }: {
   );
 }
 
+function ScoreEditHistoryPanel({ room }: { room: ExamRoom }) {
+  const [entries, setEntries] = useState<ScoreEditHistoryEntry[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    setIsLoading(true);
+    getDocs(query(collection(db, 'score_edit_history'), where('roomId', '==', room.id)))
+      .then((snap) => {
+        const list = snap.docs.map((d) => {
+          const raw = d.data();
+          return {
+            ...raw,
+            id: d.id,
+            createdAt: raw.createdAt?.toMillis ? raw.createdAt.toMillis() : Date.now(),
+          } as ScoreEditHistoryEntry;
+        });
+        list.sort((a, b) => b.createdAt - a.createdAt);
+        setEntries(list);
+      })
+      .catch(() => toast.error('โหลดประวัติการแก้คะแนนไม่สำเร็จ'))
+      .finally(() => setIsLoading(false));
+  }, [room.id]);
+
+  if (isLoading) {
+    return <div className="py-16 text-center text-[13px] text-muted-foreground font-sarabun">กำลังโหลด...</div>;
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div className="py-16 text-center text-slate-400">
+        <HiClipboardDocumentList size={32} className="mx-auto mb-3 text-slate-300" />
+        <p className="text-[14px] font-sarabun">ยังไม่มีประวัติการแก้คะแนนในห้องสอบนี้</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {entries.map((entry) => (
+        <div key={entry.id} className="rounded-2xl border border-border bg-card px-4 py-3 flex flex-col gap-1">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[13px] font-bold text-foreground font-sukhumvit">
+              {entry.studentName} <span className="text-muted-foreground font-normal">รอบ {entry.round}</span>
+            </p>
+            <p className="text-[11px] text-muted-foreground font-sarabun tabular-nums shrink-0">
+              {new Date(entry.createdAt).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })}
+            </p>
+          </div>
+          <p className="text-[14px] font-black font-sukhumvit tabular-nums">
+            <span className="text-muted-foreground">{formatScorePoints(entry.previousScore)}</span>
+            <span className="mx-1.5 text-muted-foreground">→</span>
+            <span className="text-primary">{formatScorePoints(entry.newScore)}</span>
+            <span className="text-muted-foreground text-[11px]"> / {formatScorePoints(entry.maxPoints)}</span>
+          </p>
+          <p className="text-[12px] text-muted-foreground font-sarabun">เหตุผล: {entry.reason}</p>
+          <p className="text-[11px] text-muted-foreground/70 font-sarabun">แก้โดย {entry.editedByName}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Room Detail View (inline 4-tab settings) ──────────────────────────────────
-type SettingsTab = 'takers' | 'questions' | 'score-settings' | 'score-config' | 'score-summary';
+type SettingsTab = 'takers' | 'questions' | 'score-settings' | 'score-config' | 'score-summary' | 'score-history';
 
 const TAB_CONFIG: Record<SettingsTab, { label: string; icon: IconType }> = {
   takers: { label: 'รายชื่อ', icon: HiUsers },
@@ -5724,6 +5787,7 @@ const TAB_CONFIG: Record<SettingsTab, { label: string; icon: IconType }> = {
   'score-settings': { label: 'เชื่อมต่อ', icon: HiLink },
   'score-config': { label: 'เก็บคะแนน', icon: HiAdjustmentsHorizontal },
   'score-summary': { label: 'สรุปคะแนน', icon: HiPresentationChartLine },
+  'score-history': { label: 'ประวัติแก้คะแนน', icon: HiClipboardDocumentList },
 };
 
 function RoomDetailView({
@@ -5841,7 +5905,7 @@ function RoomDetailView({
 
   const visibleTabs = (Object.entries(TAB_CONFIG) as [SettingsTab, typeof TAB_CONFIG[SettingsTab]][])
     .filter(([key]) => {
-      if (key === 'questions' || key === 'score-settings' || key === 'score-config') return canEdit;
+      if (key === 'questions' || key === 'score-settings' || key === 'score-config' || key === 'score-history') return canEdit;
       return true;
     });
 
@@ -6130,28 +6194,7 @@ function RoomDetailView({
     [roundNumbers],
   );
 
-  // ── Pending score-override requests for this room (live — powers old→new badges everywhere) ──
-  const [pendingOverridesByAttemptId, setPendingOverridesByAttemptId] = useState<Map<string, ExamScoreOverrideRequest>>(new Map());
-
-  useEffect(() => {
-    if (activeTab !== 'score-summary') return;
-    const q = query(
-      collection(db, 'exam_score_overrides'),
-      where('roomId', '==', room.id),
-      where('status', '==', 'pending'),
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const map = new Map<string, ExamScoreOverrideRequest>();
-      snap.docs.forEach((d) => {
-        const raw = d.data();
-        map.set(raw.attemptId as string, { ...raw, id: d.id } as ExamScoreOverrideRequest);
-      });
-      setPendingOverridesByAttemptId(map);
-    });
-    return () => unsub();
-  }, [activeTab, room.id]);
-
-  // ── Bulk score-override edit mode (whole-table manual score entry) ─────────
+  // ── Bulk manual score edit mode (whole-table direct score entry) ─────────
   const [bulkEditMode, setBulkEditMode] = useState(false);
   const [bulkEditValues, setBulkEditValues] = useState<Record<string, string>>({});
   const [bulkReason, setBulkReason] = useState('');
@@ -6171,7 +6214,7 @@ function RoomDetailView({
     setBulkEditMode(true);
   }, []);
 
-  const submitBulkOverrides = useCallback(async () => {
+  const submitBulkScoreEdits = useCallback(async () => {
     if (!user) return;
     const entries = Object.entries(bulkEditValues).filter(([, v]) => v.trim() !== '');
     if (entries.length === 0) {
@@ -6185,77 +6228,57 @@ function RoomDetailView({
     setIsBulkSubmitting(true);
     try {
       const batch = writeBatch(db);
-      let count = 0;
+      const historyEntries: Parameters<typeof logScoreEdit>[0][] = [];
       for (const [key, rawValue] of entries) {
         const [studentId, roundStr] = key.split(':');
         const round = Number(roundStr);
         const row = pagedSummaryRows.find((r) => r.student.id === studentId);
         const roundData = row?.rounds.find((r) => r.round === round);
         if (!row || !roundData || !roundData.att || !roundData.hasScore) continue;
-        if (pendingOverridesByAttemptId.has(roundData.att.id)) continue;
         const parsed = Number(rawValue);
         if (!Number.isFinite(parsed) || parsed < 0 || (roundData.roundTotal > 0 && parsed > roundData.roundTotal)) continue;
         if (parsed === roundData.roundScore) continue;
-        const ref = doc(collection(db, 'exam_score_overrides'));
-        batch.set(ref, {
+        batch.update(doc(db, 'exam_rooms', room.id, 'attempts', roundData.att.id), {
+          score: parsed,
+          objectiveScore: parsed,
+          manuallyOverridden: true,
+        });
+        historyEntries.push({
           roomId: room.id,
           roomTitle: room.title,
           attemptId: roundData.att.id,
           studentId,
           studentName: row.student.fullName,
           round,
-          requestedScore: parsed,
-          maxPoints: roundData.roundTotal,
           previousScore: roundData.roundScore,
+          newScore: parsed,
+          maxPoints: roundData.roundTotal,
           reason: bulkReason.trim(),
-          requestedBy: user.uid,
-          requestedByName: currentUserName,
-          status: 'pending',
-          createdAt: serverTimestamp(),
+          editedBy: user.uid,
+          editedByName: currentUserName,
         });
-        count += 1;
       }
-      if (count === 0) {
+      if (historyEntries.length === 0) {
         toast.info('ไม่มีคะแนนที่เปลี่ยนแปลง หรือคะแนนอยู่นอกช่วงที่กำหนด');
         return;
       }
       await batch.commit();
+      await Promise.all(historyEntries.map((entry) => logScoreEdit(entry)));
       await logActivity({
-        action: 'request_score_override_bulk',
+        action: 'edit_exam_score_bulk',
         category: 'academic',
         status: 'success',
         targetId: room.id,
-        metadata: { roomId: room.id, count },
+        metadata: { roomId: room.id, count: historyEntries.length },
       });
-      toast.success(`ส่งคำขอแก้ไขคะแนน ${count} รายการแล้ว รอ sysadmin/ผู้บริหารอนุมัติ`);
+      toast.success(`บันทึกคะแนนใหม่ ${historyEntries.length} รายการแล้ว`);
       cancelBulkEditMode();
     } catch {
-      toast.error('ส่งคำขอไม่สำเร็จ');
+      toast.error('บันทึกคะแนนไม่สำเร็จ');
     } finally {
       setIsBulkSubmitting(false);
     }
-  }, [bulkEditValues, bulkReason, user, pagedSummaryRows, pendingOverridesByAttemptId, room.id, room.title, currentUserName, cancelBulkEditMode]);
-
-  const [isApprovingAll, setIsApprovingAll] = useState(false);
-
-  const approveAllPending = useCallback(async () => {
-    if (!user) return;
-    const requests = Array.from(pendingOverridesByAttemptId.values());
-    if (requests.length === 0) return;
-    if (!window.confirm(`อนุมัติคำขอแก้ไขคะแนนทั้งหมด ${requests.length} รายการ?`)) return;
-    setIsApprovingAll(true);
-    try {
-      const results = await Promise.allSettled(
-        requests.map((req) => approveScoreOverride(req, user.uid, currentUserName)),
-      );
-      const failed = results.filter((r) => r.status === 'rejected').length;
-      const succeeded = results.length - failed;
-      if (succeeded > 0) toast.success(`อนุมัติคะแนนแล้ว ${succeeded} รายการ`);
-      if (failed > 0) toast.error(`อนุมัติไม่สำเร็จ ${failed} รายการ`);
-    } finally {
-      setIsApprovingAll(false);
-    }
-  }, [pendingOverridesByAttemptId, user, currentUserName]);
+  }, [bulkEditValues, bulkReason, user, pagedSummaryRows, room.id, room.title, currentUserName, cancelBulkEditMode]);
 
   const openScoreDetail = useCallback((
     student: {
@@ -6903,6 +6926,9 @@ function RoomDetailView({
                   onSave={handleSaveScoreConfig}
                 />
               )}
+              {activeTab === 'score-history' && (
+                <ScoreEditHistoryPanel room={room} />
+              )}
               {activeTab === 'score-summary' && (
                 isClassRosterLoading ? (
                   <ScoreSummarySkeleton />
@@ -7078,10 +7104,10 @@ function RoomDetailView({
                                 <button
                                   type="button"
                                   disabled={isBulkSubmitting}
-                                  onClick={() => void submitBulkOverrides()}
+                                  onClick={() => void submitBulkScoreEdits()}
                                   className="h-9 rounded-xl bg-primary px-4 text-[12px] font-black text-primary-foreground font-sukhumvit hover:bg-primary/90 disabled:opacity-60"
                                 >
-                                  {isBulkSubmitting ? 'กำลังส่ง...' : 'ส่งคำขอทั้งหมด'}
+                                  {isBulkSubmitting ? 'กำลังบันทึก...' : 'บันทึกคะแนนทั้งหมด'}
                                 </button>
                                 <button
                                   type="button"
@@ -7111,20 +7137,6 @@ function RoomDetailView({
                                       title={bulkEditMode ? 'ออกจากโหมดแก้ไขคะแนน' : 'กรอกคะแนนเองทั้งตาราง'}
                                     >
                                       <HiMiniPencil size={12} />
-                                    </button>
-                                  )}
-                                  {(role === 'admin' || role === 'sysadmin') && pendingOverridesByAttemptId.size > 0 && (
-                                    <button
-                                      type="button"
-                                      disabled={isApprovingAll}
-                                      onClick={() => void approveAllPending()}
-                                      className="flex h-6 items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 text-emerald-600 transition-colors hover:bg-emerald-500/20 disabled:opacity-60"
-                                      title="อนุมัติคำขอแก้ไขคะแนนทั้งหมดในห้องนี้"
-                                    >
-                                      <HiCheckCircle size={12} />
-                                      <span className="text-[10px] font-bold font-sukhumvit">
-                                        {isApprovingAll ? 'กำลังอนุมัติ...' : `อนุมัติทั้งหมด (${pendingOverridesByAttemptId.size})`}
-                                      </span>
                                     </button>
                                   )}
                                 </div>
@@ -7191,44 +7203,25 @@ function RoomDetailView({
                                     </div>
 
                                     {row.rounds.map(({ round, att, roundScore, roundScorePercent, hasScore, isPending, isInProgress, needsManualReview, roundTotal }) => {
-                                      const pendingReq = att ? pendingOverridesByAttemptId.get(att.id) : undefined;
                                       return (
                                       <div key={`${row.student.id}-${round}`} className="text-center">
                                         {bulkEditMode && hasScore && att ? (
-                                          pendingReq ? (
-                                            <span
-                                              className="inline-flex rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-bold text-muted-foreground font-sukhumvit"
-                                              title={`รออนุมัติ: ${formatScorePoints(pendingReq.previousScore)} → ${formatScorePoints(pendingReq.requestedScore)}`}
-                                            >
-                                              รออนุมัติ
-                                            </span>
-                                          ) : (
-                                            <div className="inline-flex items-center gap-1">
-                                              <input
-                                                type="number"
-                                                min={0}
-                                                max={roundTotal}
-                                                step={0.5}
-                                                defaultValue={roundScore ?? undefined}
-                                                onChange={(e) => {
-                                                  const key = bulkEditKey(row.student.id, round);
-                                                  setBulkEditValues((prev) => ({ ...prev, [key]: e.target.value }));
-                                                }}
-                                                className="h-8 w-16 rounded-xl border border-border bg-card px-1 text-center text-[12px] font-black text-foreground font-sukhumvit tabular-nums outline-none focus:ring-2 focus:ring-ring/30"
-                                                aria-label={`คะแนนใหม่ ${row.student.fullName} รอบ ${round}`}
-                                              />
-                                              <span className="text-[10px] text-muted-foreground font-sarabun">/{roundTotal}</span>
-                                            </div>
-                                          )
-                                        ) : hasScore && pendingReq ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => openScoreDetail(row.student, row.attemptsByRound, round)}
-                                            className="inline-flex items-center justify-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-bold text-primary font-sukhumvit tabular-nums hover:bg-primary/20"
-                                            title={`รอ sysadmin/ผู้บริหารอนุมัติ — เหตุผล: ${pendingReq.reason}`}
-                                          >
-                                            {formatScorePoints(pendingReq.previousScore)} → {formatScorePoints(pendingReq.requestedScore)}
-                                          </button>
+                                          <div className="inline-flex items-center gap-1">
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={roundTotal}
+                                              step={0.5}
+                                              defaultValue={roundScore ?? undefined}
+                                              onChange={(e) => {
+                                                const key = bulkEditKey(row.student.id, round);
+                                                setBulkEditValues((prev) => ({ ...prev, [key]: e.target.value }));
+                                              }}
+                                              className="h-8 w-16 rounded-xl border border-border bg-card px-1 text-center text-[12px] font-black text-foreground font-sukhumvit tabular-nums outline-none focus:ring-2 focus:ring-ring/30"
+                                              aria-label={`คะแนนใหม่ ${row.student.fullName} รอบ ${round}`}
+                                            />
+                                            <span className="text-[10px] text-muted-foreground font-sarabun">/{roundTotal}</span>
+                                          </div>
                                         ) : hasScore ? (
                                           <button
                                             type="button"

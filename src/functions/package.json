@@ -12,6 +12,8 @@
     "migrate:schedule-teacher-ids:dry-run": "npm run build && node lib/migrateScheduleTeacherIds.js --dry-run",
     "backfill:class-teacher-ids": "npm run build && node lib/backfillClassTeacherIds.js",
     "backfill:class-teacher-ids:dry-run": "npm run build && node lib/backfillClassTeacherIds.js --dry-run",
+    "backfill:approved-score-overrides": "npm run build && node lib/backfillApprovedScoreOverrides.js",
+    "backfill:approved-score-overrides:dry-run": "npm run build && node lib/backfillApprovedScoreOverrides.js --dry-run",
     "migrate:database": "npm run build && node lib/scripts/migrateDatabase.js",
     "serve": "npm run build && firebase emulators:start --only functions",
     "shell": "npm run build && firebase functions:shell",

@@ -709,6 +709,7 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
       attemptsSnap.docs.forEach((attemptDoc) => {
         const attemptData = attemptDoc.data() as ExamAttempt;
         const status = attemptData.status;
+        if (attemptData.manuallyOverridden) return;
         const canGrade =
           status === 'submitted'
           || (options?.includeGraded === true && status === 'graded');
@@ -1010,7 +1011,8 @@ export function useExamRoom(options: UseExamRoomOptions = {}) {
       }
 
       // One-time re-grade for attempts wrongly scored 0 (legacy Cloud Function bug)
-      if (a.status === 'graded' && normalizeExamScore(a.score) === 0) {
+      // — never touch a score a human deliberately set via the override-approval flow.
+      if (a.status === 'graded' && !a.manuallyOverridden && normalizeExamScore(a.score) === 0) {
         const answerCount = a.answers ? Object.keys(a.answers).length : 0;
         if (answerCount === 0) return false;
         const manualTotal = Object.values(a.manualScores ?? {}).reduce(

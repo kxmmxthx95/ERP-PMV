@@ -1,12 +1,12 @@
 import {
-  doc, getDoc, serverTimestamp, setDoc, updateDoc,
+  collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { logActivity } from '@/lib/activityLogger';
-import { rawPointsToPercent } from '@/types/grades';
 import type { NewGradeRecord } from '@/types/grades';
 import { scoreCollectionTypeToGradeField } from '@/lib/students/studentIdentity';
-import type { ExamRoom, ExamScoreOverrideRequest } from '@/types/exam';
+import { resolveAttemptScoreDisplay } from '@/lib/exam/examRoomScoring';
+import type { ExamAttempt, ExamRoom, ExamScoreOverrideRequest } from '@/types/exam';
 
 /** Mirrors GradeBookPage's shouldSyncExamRoomScores — room must be linked to a grade-book subject. */
 function isLinkedToGradeBook(room: ExamRoom): boolean {
@@ -37,7 +37,21 @@ async function syncApprovedScoreToGradeBook(
   if (!subjectId || !subjectName || !classId || !className) return;
 
   const field = scoreCollectionTypeToGradeField(room.settings.scoreCollectionType ?? room.settings.gradeBookScoreType);
-  const percent = rawPointsToPercent(request.requestedScore, request.maxPoints);
+
+  // Grade book takes the BEST score across all of this student's attempts in the
+  // room (see getBestPercentByStudent in examRoomScoring.ts) — a single approved
+  // override can't just be written as-is, since another attempt/round may score
+  // higher and that's what the grade book actually shows.
+  const attemptsSnap = await getDocs(
+    query(collection(db, 'exam_rooms', room.id, 'attempts'), where('studentId', '==', request.studentId)),
+  );
+  const attempts = attemptsSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as ExamAttempt);
+  const bestPercent = attempts.reduce<number | null>((best, att) => {
+    const pct = resolveAttemptScoreDisplay(room, att).percent;
+    if (pct === null) return best;
+    return best === null || pct > best ? pct : best;
+  }, null);
+  if (bestPercent === null) return;
 
   const docId = `${subjectId}_${classId}_${request.studentId}_${room.academicYearId}_${room.semester}`;
   const ref = doc(db, 'grade_records', docId);
@@ -65,7 +79,7 @@ async function syncApprovedScoreToGradeBook(
     absent: existing?.absent ?? false,
     note: existing?.note,
     updatedAt: new Date().toISOString(),
-    [field]: percent,
+    [field]: bestPercent,
   };
   await setDoc(ref, record, { merge: true });
 }

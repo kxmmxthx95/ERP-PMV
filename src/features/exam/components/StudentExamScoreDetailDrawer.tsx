@@ -549,7 +549,11 @@ export function StudentExamScoreDetailDrawer({
             <div className="py-12 text-center text-rose-500 font-sarabun text-[13px]">
               {loadError}
             </div>
-          ) : gradeSummary ? (
+          ) : gradeSummary ? !canEditScores ? (
+            <div className="py-12 text-center text-slate-400 font-sarabun text-[13px]">
+              ดูคะแนนรวมได้ที่ด้านบน
+            </div>
+          ) : (
             <div className="flex flex-col gap-3">
               {showPartHeaders ? (
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

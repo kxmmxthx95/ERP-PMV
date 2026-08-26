@@ -7392,6 +7392,16 @@ export default function ExamManager() {
       prevSuspiciousRef.current.set(att.id, currentCount);
     });
   }, [attempts, rooms, teachingMgr]);
+  const [showStudentIntroPopup, setShowStudentIntroPopup] = useState(false);
+  useEffect(() => {
+    if (!isStudent) return;
+    if (sessionStorage.getItem('examRoomsIntroShown')) return;
+    sessionStorage.setItem('examRoomsIntroShown', '1');
+    setShowStudentIntroPopup(true);
+    const timer = window.setTimeout(() => setShowStudentIntroPopup(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [isStudent]);
+
   const [showCreate, setShowCreate] = useState(false);
   const [createPrefill, setCreatePrefill] = useState<CreateRoomPrefill | null>(null);
   const [editingRoom, setEditingRoom] = useState<ExamRoom | null>(null);
@@ -8338,6 +8348,21 @@ export default function ExamManager() {
         'h-[calc(100dvh-4.25rem)] max-h-[calc(100dvh-4.25rem)]',
       )}
     >
+      {showStudentIntroPopup && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40">
+          <div className="relative">
+            <img src="/tuidui.webp" alt="" className="max-h-[70vh] max-w-[80vw] rounded-2xl object-contain shadow-2xl" />
+            <button
+              type="button"
+              onClick={() => setShowStudentIntroPopup(false)}
+              className="absolute -top-3 -right-3 flex h-8 w-8 items-center justify-center rounded-full bg-white text-slate-700 shadow-lg hover:bg-slate-50"
+              aria-label="ปิด"
+            >
+              <HiXMark size={18} />
+            </button>
+          </div>
+        </div>
+      )}
       {headerCenterMobilePortalEl && !liveDetailRoom && createPortal(
         <span className="lg:hidden truncate text-[13px] font-black font-sukhumvit text-slate-800">
           {PORTAL_MENU_TITLES['/portal/exams']}

@@ -60,17 +60,27 @@ function attendanceTone(pct: number | null): { text: string; bg: string } {
   return { text: '#e11d48', bg: '#ffe4e6' };
 }
 
+const GRADE_POINTS: Record<string, number> = {
+  A: 4, 'B+': 3.5, B: 3, 'C+': 2.5, C: 2, 'D+': 1.5, D: 1, F: 0,
+};
+
 function formatGradeDisplay(grade: string | null): string {
   if (!grade) return '—';
-  if (grade === 'A') return '4';
-  if (grade === 'B+') return '3.5';
-  if (grade === 'B') return '3';
-  if (grade === 'C+') return '2.5';
-  if (grade === 'C') return '2';
-  if (grade === 'D+') return '1.5';
-  if (grade === 'D') return '1';
-  if (grade === 'F') return '0';
-  return grade;
+  return grade in GRADE_POINTS ? String(GRADE_POINTS[grade]) : grade;
+}
+
+function calcGpaForSemester(cards: StudentSubjectGradeCard[], semester: 1 | 2): number | null {
+  let creditSum = 0;
+  let pointSum = 0;
+  cards.forEach((card) => {
+    if (card.semester !== semester) return;
+    if (isPassFailSubjectCategory(card.category)) return;
+    if (!card.grade || !(card.grade in GRADE_POINTS)) return;
+    if (card.credits <= 0) return;
+    creditSum += card.credits;
+    pointSum += GRADE_POINTS[card.grade] * card.credits;
+  });
+  return creditSum > 0 ? pointSum / creditSum : null;
 }
 
 function formatPassFailDisplay(result: PassFailResult | null | undefined): string {
@@ -207,6 +217,9 @@ function SubjectStat({
 export default function StudentGradeBookPanel() {
   const { user } = useAuth();
   const { loading, error, student, classRoom, subjectCards, academicYear, yearStartDate, yearEndDate, reload } = useStudentGradeBook();
+
+  const gpaSem1 = useMemo(() => calcGpaForSemester(subjectCards, 1), [subjectCards]);
+  const gpaSem2 = useMemo(() => calcGpaForSemester(subjectCards, 2), [subjectCards]);
 
   const [selectedSubject, setSelectedSubject] = useState<StudentSubjectGradeCard | null>(null);
   const [examLoading, setExamLoading] = useState(false);
@@ -542,14 +555,43 @@ export default function StudentGradeBookPanel() {
                 ห้อง {classRoom?.className ?? '—'} · ปีการศึกษา {academicYear} · ทั้ง 2 เทอม
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => void reload()}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
-              title="โหลดข้อมูลใหม่"
-            >
-              <RefreshCw size={15} />
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="rounded-xl border border-white/70 bg-white/80 px-3 py-1.5 text-center shadow-sm">
+                <p className="text-[9px] font-bold text-slate-400 font-sukhumvit">GPA เทอม 1</p>
+                <p className="text-[15px] font-black tabular-nums leading-none mt-0.5 font-sukhumvit text-slate-700">
+                  {gpaSem1 !== null ? gpaSem1.toFixed(2) : '—'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-white/70 bg-white/80 px-3 py-1.5 text-center shadow-sm">
+                <p className="text-[9px] font-bold text-slate-400 font-sukhumvit">GPA เทอม 2</p>
+                <p className="text-[15px] font-black tabular-nums leading-none mt-0.5 font-sukhumvit text-slate-700">
+                  {gpaSem2 !== null ? gpaSem2.toFixed(2) : '—'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void reload()}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
+                title="โหลดข้อมูลใหม่"
+              >
+                <RefreshCw size={15} />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex md:hidden gap-2">
+            <div className="flex-1 rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-center shadow-sm">
+              <p className="text-[9px] font-bold text-slate-400 font-sukhumvit">GPA เทอม 1</p>
+              <p className="text-[15px] font-black tabular-nums leading-none mt-0.5 font-sukhumvit text-slate-700">
+                {gpaSem1 !== null ? gpaSem1.toFixed(2) : '—'}
+              </p>
+            </div>
+            <div className="flex-1 rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-center shadow-sm">
+              <p className="text-[9px] font-bold text-slate-400 font-sukhumvit">GPA เทอม 2</p>
+              <p className="text-[15px] font-black tabular-nums leading-none mt-0.5 font-sukhumvit text-slate-700">
+                {gpaSem2 !== null ? gpaSem2.toFixed(2) : '—'}
+              </p>
+            </div>
           </div>
 
           {subjectCards.length === 0 ? (

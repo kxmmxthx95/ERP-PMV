@@ -79,6 +79,7 @@ export interface StudentSubjectGradeCard {
   attendancePct: number | null;
   totalScore: number | null;
   grade: GradeLetter | null;
+  credits: number;
   /** วิชากิจกรรม — ผ่าน/ไม่ผ่าน (ไม่เข้า GPA) */
   result?: PassFailResult | null;
   classId: string;
@@ -409,6 +410,7 @@ export function useStudentGradeBook() {
               totalScore: null,
               grade: null,
               result: passFailResult,
+              credits: subject?.credits ?? 0,
               classId,
               className: cls.className,
             });
@@ -570,6 +572,7 @@ export function useStudentGradeBook() {
             totalScore,
             grade: calculatedGrade,
             result: null,
+            credits: subject?.credits ?? 0,
             classId,
             className: cls.className,
           });

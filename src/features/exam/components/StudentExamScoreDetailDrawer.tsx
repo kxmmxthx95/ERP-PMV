@@ -730,7 +730,7 @@ export function StudentExamScoreDetailDrawer({
                               <span>ตอบ: </span>
                               <GradedAnswerDisplay value={result.yourAnswerLabel} />
                             </div>
-                            {!isManualEssay && result.status === 'wrong' && (
+                            {!isManualEssay && result.status === 'wrong' && canEditScores && (
                               <div className="text-[11px] text-emerald-600 font-sarabun mt-0.5">
                                 <span>เฉลย: </span>
                                 <GradedAnswerDisplay value={result.correctAnswerLabel} tone="correct" />

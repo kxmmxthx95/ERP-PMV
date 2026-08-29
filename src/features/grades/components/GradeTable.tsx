@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { collection, getDocs, query, where } from 'firebase/firestore';
+import { HiChevronDown, HiChevronUp } from 'react-icons/hi2';
 import { db } from '@/lib/firebase';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import type { StudentScoreSummary, GradeWeightConfig, PassFailResult } from '@/types/grades';
@@ -130,6 +131,54 @@ function isLowGpa(gpa: number | null): boolean {
 }
 
 const LOW_GPA_ROW = 'bg-destructive/5';
+
+type ScoreSortKey = 'code' | 'name' | 'classwork' | 'midterm' | 'final' | 'total' | 'grade';
+type SortDir = 'asc' | 'desc';
+
+function compareNullable(a: number | null, b: number | null, dir: SortDir): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return dir === 'desc' ? b - a : a - b;
+}
+
+function SortHeaderButton({
+  label,
+  active,
+  dir,
+  onClick,
+  align = 'left',
+}: {
+  label: string;
+  active: boolean;
+  dir: SortDir;
+  onClick: () => void;
+  align?: 'left' | 'center';
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${label} — คลิกเรียงลำดับ`}
+      className={cn(
+        TABLE_HEADER_CELL,
+        'inline-flex min-w-0 items-center gap-0.5 rounded-md px-0.5 py-0.5 transition-colors hover:bg-muted/60',
+        align === 'center' ? 'justify-center' : 'justify-start',
+        active && 'text-primary',
+      )}
+    >
+      <span className="min-w-0 truncate">{label}</span>
+      <span className="inline-flex shrink-0 flex-col leading-none" aria-hidden>
+        <HiChevronUp
+          className={cn('-mb-0.5 h-3 w-3', active && dir === 'asc' ? 'text-primary' : 'text-muted-foreground/35')}
+        />
+        <HiChevronDown
+          className={cn('-mt-0.5 h-3 w-3', active && dir === 'desc' ? 'text-primary' : 'text-muted-foreground/35')}
+        />
+      </span>
+    </button>
+  );
+}
 
 function ScoreCell({
   value, editable, onChange, showAsPercentage, weightPercent,
@@ -292,6 +341,49 @@ export default function GradeTable({
     return map;
   }, [attendanceRaw, summaries, attendanceDateRange.from, attendanceDateRange.to, config.academicYearId]);
 
+  // ── Sort (ตารางคะแนนรวม header) ──────────────────────────────────────────
+  const [sortKey, setSortKey] = useState<ScoreSortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+
+  const toggleSort = (key: ScoreSortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedSummaries = useMemo(() => {
+    if (!sortKey) return summaries;
+    const rows = [...summaries];
+    const dirMul = sortDir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      switch (sortKey) {
+        case 'code':
+          return dirMul * (a.studentCode || '').localeCompare(b.studentCode || '', 'th', { numeric: true });
+        case 'name':
+          return dirMul * a.studentName.localeCompare(b.studentName, 'th');
+        case 'classwork':
+          return compareNullable(a.classworkScore, b.classworkScore, sortDir);
+        case 'midterm':
+          return compareNullable(a.midtermScore, b.midtermScore, sortDir);
+        case 'final':
+          return compareNullable(a.finalScore, b.finalScore, sortDir);
+        case 'total':
+          return compareNullable(a.totalScore, b.totalScore, sortDir);
+        case 'grade': {
+          const ga = a.grade !== null ? gradeLetterToGpa(a.grade) : null;
+          const gb = b.grade !== null ? gradeLetterToGpa(b.grade) : null;
+          return compareNullable(ga, gb, sortDir);
+        }
+        default:
+          return 0;
+      }
+    });
+    return rows;
+  }, [summaries, sortKey, sortDir]);
+
   const tableGridColumns = showClasswork
     ? 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(3, minmax(0, 1fr)) minmax(0, 1fr) minmax(5rem, 0.85fr)'
     : 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(2, minmax(0, 1fr)) minmax(0, 1fr) minmax(5rem, 0.85fr)';
@@ -397,7 +489,7 @@ export default function GradeTable({
 
       {/* Mobile: card list */}
       <div className="md:hidden flex flex-col gap-2.5 px-0.5">
-        {summaries.map((s, i) => {
+        {sortedSummaries.map((s, i) => {
           const gpa = s.grade !== null ? gradeLetterToGpa(s.grade) : null;
           const scoreMetrics = [
             ...(showClasswork
@@ -579,23 +671,46 @@ export default function GradeTable({
             gridTemplateColumns: view === 'scores' ? tableGridColumns : ATTENDANCE_TABLE_COLUMNS,
           }}
         >
-          <span className={TABLE_HEADER_CELL}>รหัส</span>
-          <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+          {view === 'scores' ? (
+            <SortHeaderButton label="รหัส" active={sortKey === 'code'} dir={sortDir} onClick={() => toggleSort('code')} />
+          ) : (
+            <span className={TABLE_HEADER_CELL}>รหัส</span>
+          )}
+          {view === 'scores' ? (
+            <SortHeaderButton label="นักเรียน" active={sortKey === 'name'} dir={sortDir} onClick={() => toggleSort('name')} />
+          ) : (
+            <span className={TABLE_HEADER_CELL}>นักเรียน</span>
+          )}
           {view === 'scores' ? (
             <>
               {showClasswork && (
-                <span className={TABLE_HEADER_CELL}>
-                  เก็บ ({config.weights.classwork}%)
-                </span>
+                <SortHeaderButton
+                  label={`เก็บ (${config.weights.classwork}%)`}
+                  active={sortKey === 'classwork'}
+                  dir={sortDir}
+                  onClick={() => toggleSort('classwork')}
+                />
               )}
-              <span className={TABLE_HEADER_CELL}>
-                กลางภาค ({config.weights.midterm}%)
-              </span>
-              <span className={TABLE_HEADER_CELL}>
-                ปลายภาค ({config.weights.final}%)
-              </span>
-              <span className={TABLE_HEADER_CELL}>รวม (%)</span>
-              <span className={cn(TABLE_HEADER_CELL, 'text-center')}>เกรด</span>
+              <SortHeaderButton
+                label={`กลางภาค (${config.weights.midterm}%)`}
+                active={sortKey === 'midterm'}
+                dir={sortDir}
+                onClick={() => toggleSort('midterm')}
+              />
+              <SortHeaderButton
+                label={`ปลายภาค (${config.weights.final}%)`}
+                active={sortKey === 'final'}
+                dir={sortDir}
+                onClick={() => toggleSort('final')}
+              />
+              <SortHeaderButton label="รวม (%)" active={sortKey === 'total'} dir={sortDir} onClick={() => toggleSort('total')} />
+              <SortHeaderButton
+                label="เกรด"
+                active={sortKey === 'grade'}
+                dir={sortDir}
+                onClick={() => toggleSort('grade')}
+                align="center"
+              />
             </>
           ) : (
             <>
@@ -611,7 +726,7 @@ export default function GradeTable({
 
         {/* Rows */}
         <div className="flex flex-col">
-          {summaries.map((s, i) => {
+          {sortedSummaries.map((s, i) => {
             const gpa = s.grade !== null ? gradeLetterToGpa(s.grade) : null;
             const att = attendanceByStudent.get(s.studentId) ?? null;
             return (

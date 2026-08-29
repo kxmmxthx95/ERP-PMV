@@ -71,6 +71,7 @@ import type { TeacherProfile } from '@/types/teacher';
 import type { ClassRoom, EnrolledCourse } from '@/types/class';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
 import TeacherDeptCoverFlow from './components/TeacherDeptCoverFlow';
 import AddTeacherModal from './components/AddTeacherModal';
 import TeacherTransferModal, { swapHomeroomTeacherIds } from './components/TeacherTransferModal';
@@ -843,10 +844,23 @@ export default function TeacherManager() {
                       />
                     </div>
                   )}
-                  <SidebarCollapseButton
-                    collapsed={sidebarCollapsed}
-                    onToggle={() => setSidebarCollapsed((v) => !v)}
-                  />
+                  <div className={cn('flex shrink-0', HEADER_ICON_BTN_GROUP)}>
+                    {!sidebarCollapsed && (
+                      <button
+                        type="button"
+                        onClick={() => { setIsEditing(false); setModalOpen(true); }}
+                        className={HEADER_ICON_BTN}
+                        title="เพิ่มครู"
+                        aria-label="เพิ่มครู"
+                      >
+                        <HiPlus size={16} />
+                      </button>
+                    )}
+                    <SidebarCollapseButton
+                      collapsed={sidebarCollapsed}
+                      onToggle={() => setSidebarCollapsed((v) => !v)}
+                    />
+                  </div>
                 </div>
               ) : undefined}
               collapsedExtra={(

@@ -59,6 +59,7 @@ type ExamAttempt = {
   round: number;
   score: number | null;
   objectiveScore?: number | null;
+  objectiveMaxPoints?: number | null;
   manualScores?: Record<string, number>;
   pendingManualGrading?: boolean;
 };
@@ -192,8 +193,15 @@ function getExamRoomRoundTotalPoints(room: ExamRoom, round: number): number {
 }
 
 // ── Ported from src/lib/exam/examRoomScoring.ts (resolveAttemptScoreDisplay) ──
+// Room-level questionPoints/totalPoints freeze once a round has attempts, so if the
+// question set changed size after that lock, this drifts stale. attempt.objectiveMaxPoints
+// is computed against the actual graded question list at grading time — prefer it.
 function attemptScorePercent(room: ExamRoom, attempt: ExamAttempt): number | null {
-  const maxPoints = getExamRoomRoundTotalPoints(room, normalizeExamRound(attempt.round));
+  const roomMaxPoints = getExamRoomRoundTotalPoints(room, normalizeExamRound(attempt.round));
+  const maxPoints =
+    typeof attempt.objectiveMaxPoints === "number" && attempt.objectiveMaxPoints > 0
+      ? attempt.objectiveMaxPoints
+      : roomMaxPoints;
   const score = resolveAttemptTotalScore(attempt);
   if (score === null || maxPoints <= 0) return null;
   return Math.round(rawPointsToPercent(score, maxPoints));

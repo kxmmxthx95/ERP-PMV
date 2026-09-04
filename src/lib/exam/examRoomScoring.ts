@@ -32,7 +32,15 @@ export function resolveAttemptScoreDisplay(
   room: ExamRoom,
   attempt: ExamAttempt,
 ): AttemptScoreDisplay {
-  const maxPoints = getExamRoomRoundTotalPoints(room, normalizeExamRound(attempt.round));
+  const roomMaxPoints = getExamRoomRoundTotalPoints(room, normalizeExamRound(attempt.round));
+  // Room-level questionPoints/totalPoints freeze once a round has attempts (see
+  // saveRoomRoundQuestions), so if the question set changed size after that lock,
+  // this drifts stale. attempt.objectiveMaxPoints is computed against the actual
+  // graded question list at grading time — prefer it. Same pattern as rebuildAcademicStats.ts.
+  const maxPoints =
+    typeof attempt.objectiveMaxPoints === 'number' && attempt.objectiveMaxPoints > 0
+      ? attempt.objectiveMaxPoints
+      : roomMaxPoints;
   const score = resolveAttemptTotalScore(attempt);
   if (score === null) {
     return { score: null, maxPoints, percent: null };

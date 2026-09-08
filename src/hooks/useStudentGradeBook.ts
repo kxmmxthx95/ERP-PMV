@@ -24,15 +24,7 @@ import {
 } from '@/types/grades';
 import { attemptScorePercent } from '@/lib/exam/examRoomScoring';
 import { scoreCollectionTypeToGradeField, normalizeExamScore } from '@/lib/students/studentIdentity';
-
-function calcGrade(pct: number, thresholds: { minScore: number; grade: GradeLetter }[]): GradeLetter {
-  const sorted = [...thresholds].sort((a, b) => b.minScore - a.minScore);
-  for (const t of sorted) {
-    if (pct >= t.minScore) return t.grade;
-  }
-  return 'F';
-}
-
+import { mergeOnlineExamScores } from '@/hooks/useGradeBook';
 
 function looksLikeUnresolvedSubjectId(value: string): boolean {
   const trimmed = value.trim();
@@ -384,7 +376,7 @@ export function useStudentGradeBook() {
           // ── Dynamic Grade Calculation ──
           let totalScore: number | null = null;
           let calculatedGrade: GradeLetter | null = null;
-          let passFailResult: PassFailResult | null = grade?.result ?? null;
+          const passFailResult: PassFailResult | null = grade?.result ?? null;
 
           if (category === 'activity') {
             // วิชากิจกรรม: ใช้แค่ result · ไม่คำนวณคะแนน/เกรด
@@ -417,46 +409,51 @@ export function useStudentGradeBook() {
             return;
           }
 
-          if (grade) {
-            totalScore = grade.totalScore ?? null;
-            calculatedGrade = grade.grade ?? null;
-          } else {
-            // Find grade config for this subject & semester
-            const cfg = configBySubjectSem.get(`${ec.subjectId}_${semester}`) || {
-              weights: DEFAULT_WEIGHTS,
-              thresholds: DEFAULT_THRESHOLDS,
-            };
+          // Find grade config for this subject & semester
+          const cfg = configBySubjectSem.get(`${ec.subjectId}_${semester}`) || {
+            weights: DEFAULT_WEIGHTS,
+            thresholds: DEFAULT_THRESHOLDS,
+          } as GradeWeightConfig;
 
-            // Get offline exams for this subject & semester
-            const subjectExams = exams.filter((e) => e.subjectId === ec.subjectId && e.semester === semester);
-            const subjectExamIds = subjectExams.map((e) => e.id);
+          // Get offline exams for this subject & semester
+          const subjectExams = exams.filter((e) => e.subjectId === ec.subjectId && e.semester === semester);
+          const subjectExamIds = subjectExams.map((e) => e.id);
 
-            // Get offline exam scores for this student
-            const scores = examScores.filter((s) => subjectExamIds.includes(s.examId));
-            const scoresByExamId = new Map(scores.map((s) => [s.examId, s]));
+          // Get offline exam scores for this student
+          const scores = examScores.filter((s) => subjectExamIds.includes(s.examId));
+          const scoresByExamId = new Map(scores.map((s) => [s.examId, s]));
 
-            // Filter exams by type
-            const examsByType = new Map<string, Exam[]>();
-            subjectExams.forEach((e) => {
-              const arr = examsByType.get(e.type) ?? [];
-              arr.push(e);
-              examsByType.set(e.type, arr);
-            });
+          // Filter exams by type
+          const examsByType = new Map<string, Exam[]>();
+          subjectExams.forEach((e) => {
+            const arr = examsByType.get(e.type) ?? [];
+            arr.push(e);
+            examsByType.set(e.type, arr);
+          });
 
-            const getLatestOfflineScore = (examType: string): number | null => {
-              const typeExams = examsByType.get(examType) ?? [];
-              if (typeExams.length === 0) return null;
-              const sorted = [...typeExams].sort((a, b) => b.examDate.localeCompare(a.examDate));
-              for (const exam of sorted) {
-                const sc = scoresByExamId.get(exam.id);
-                if (sc && !sc.absent && sc.score !== undefined) {
-                  return rawPointsToPercent(sc.score, exam.maxScore);
-                }
+          const getLatestOfflineScore = (examType: string): number | null => {
+            const typeExams = examsByType.get(examType) ?? [];
+            if (typeExams.length === 0) return null;
+            const sorted = [...typeExams].sort((a, b) => b.examDate.localeCompare(a.examDate));
+            for (const exam of sorted) {
+              const sc = scoresByExamId.get(exam.id);
+              if (sc && !sc.absent && sc.score !== undefined) {
+                return rawPointsToPercent(sc.score, exam.maxScore);
               }
-              return null;
-            };
+            }
+            return null;
+          };
 
-            // Calculate offline classwork scores
+          // Base scores: ครูบันทึกไว้แล้ว (grade_records) ใช้ค่านั้น ไม่งั้นคำนวณจาก exam offline
+          let baseClasswork: number | null;
+          let baseMidterm: number | null;
+          let baseFinal: number | null;
+
+          if (grade) {
+            baseClasswork = grade.classworkScore ?? null;
+            baseMidterm = grade.midtermScore ?? null;
+            baseFinal = grade.finalScore ?? null;
+          } else {
             const classworkOfflinePcts: number[] = [];
             const classworkExams = [...(examsByType.get('quiz') ?? []), ...(examsByType.get('makeup') ?? [])];
             classworkExams.forEach((exam) => {
@@ -465,90 +462,97 @@ export function useStudentGradeBook() {
                 classworkOfflinePcts.push(rawPointsToPercent(sc.score, exam.maxScore));
               }
             });
-
-            // Get online exam rooms for this subject & semester
-            const subjectOnlineRooms = rooms.filter((room) => {
-              const linked = room.settings?.gradeBookSubjects ?? [];
-              if (linked.length > 0) {
-                return linked.some((item) => item.subjectId === ec.subjectId);
-              }
-              const legacyId = room.settings?.gradeBookSubjectId ?? room.subjectId;
-              return legacyId === ec.subjectId;
-            });
-
-            // Map of attempts for this student, grouped by roomId
-            const attemptsByRoomId = new Map<string, ExamAttempt[]>();
-            studentAttempts.forEach((att) => {
-              const arr = attemptsByRoomId.get(att.roomId) ?? [];
-              arr.push(att);
-              attemptsByRoomId.set(att.roomId, arr);
-            });
-
-            // Get online score percentages
-            const classworkOnlinePcts: number[] = [];
-            let midtermOnlinePct: number | null = null;
-            let finalOnlinePct: number | null = null;
-
-            subjectOnlineRooms.forEach((room) => {
-              // Check if room score linking is enabled
-              if (room.settings?.scoreCollectionLinked === false) return;
-              if (room.settings?.scoreCollectionEnabled === false) return;
-
-              const collectionType = room.settings?.scoreCollectionType
-                ?? room.settings?.gradeBookScoreType
-                ?? 'classwork';
-              const field = scoreCollectionTypeToGradeField(collectionType);
-
-              const roomAttempts = attemptsByRoomId.get(room.id) ?? [];
-              if (roomAttempts.length === 0) return;
-
-              // Find best attempt
-              const bestPct = roomAttempts
-                .map((att) => attemptScorePercent(room, att))
-                .filter((pct): pct is number => pct !== null)
-                .sort((a, b) => b - a)[0] ?? null;
-
-              if (bestPct !== null) {
-                if (field === 'classworkScore') {
-                  classworkOnlinePcts.push(bestPct);
-                } else if (field === 'midtermScore') {
-                  midtermOnlinePct = midtermOnlinePct !== null ? Math.max(midtermOnlinePct, bestPct) : bestPct;
-                } else if (field === 'finalScore') {
-                  finalOnlinePct = finalOnlinePct !== null ? Math.max(finalOnlinePct, bestPct) : bestPct;
-                }
-              }
-            });
-
-            // Combine offline and online scores
-            const classworkPcts = [...classworkOfflinePcts, ...classworkOnlinePcts];
-            const classworkScore = averagePercentScores(classworkPcts);
-
-            const midtermOffline = getLatestOfflineScore('midterm');
-            const midtermScore = midtermOnlinePct !== null
-              ? (midtermOffline !== null ? Math.max(midtermOffline, midtermOnlinePct) : midtermOnlinePct)
-              : midtermOffline;
-
-            const finalOffline = getLatestOfflineScore('final');
-            const finalScore = finalOnlinePct !== null
-              ? (finalOffline !== null ? Math.max(finalOffline, finalOnlinePct) : finalOnlinePct)
-              : finalOffline;
-
-            // Recalculate totals
-            if (classworkScore !== null || midtermScore !== null || finalScore !== null) {
-              const weights = cfg.weights ?? DEFAULT_WEIGHTS;
-              const wCw = (weights.classwork ?? 0) / 100;
-              const wMid = (weights.midterm ?? 0) / 100;
-              const wFin = (weights.final ?? 0) / 100;
-
-              let weightedSum = 0;
-              if (classworkScore !== null) weightedSum += classworkScore * wCw;
-              if (midtermScore !== null) weightedSum += midtermScore * wMid;
-              if (finalScore !== null) weightedSum += finalScore * wFin;
-
-              totalScore = Math.round(weightedSum * 10) / 10;
-              calculatedGrade = calcGrade(totalScore, cfg.thresholds ?? DEFAULT_THRESHOLDS);
-            }
+            baseClasswork = averagePercentScores(classworkOfflinePcts);
+            baseMidterm = getLatestOfflineScore('midterm');
+            baseFinal = getLatestOfflineScore('final');
           }
+
+          // Get online exam rooms for this subject & semester
+          const subjectOnlineRooms = rooms.filter((room) => {
+            const linked = room.settings?.gradeBookSubjects ?? [];
+            if (linked.length > 0) {
+              return linked.some((item) => item.subjectId === ec.subjectId);
+            }
+            const legacyId = room.settings?.gradeBookSubjectId ?? room.subjectId;
+            return legacyId === ec.subjectId;
+          });
+
+          // Map of attempts for this student, grouped by roomId
+          const attemptsByRoomId = new Map<string, ExamAttempt[]>();
+          studentAttempts.forEach((att) => {
+            const arr = attemptsByRoomId.get(att.roomId) ?? [];
+            arr.push(att);
+            attemptsByRoomId.set(att.roomId, arr);
+          });
+
+          // เดียวกับ onlineExamScoreSync ในฝั่งครู (GradeBookPage.tsx): ไม่มี attempt =
+          // ขาดสอบ = นับ 0, เช็ค exempt list ด้วย — ไม่งั้นเกรดสองพอร์ทัลจะไม่ตรงกัน
+          const onlineEntry: { classworkScore: number | null; midtermScore: number | null; finalScore: number | null } = {
+            classworkScore: null,
+            midtermScore: null,
+            finalScore: null,
+          };
+          const linkedFields = { classwork: false, midterm: false, final: false };
+          const classworkOnlinePcts: number[] = [];
+
+          subjectOnlineRooms.forEach((room) => {
+            // Check if room score linking is enabled
+            if (room.settings?.scoreCollectionLinked === false) return;
+            if (room.settings?.scoreCollectionEnabled === false) return;
+
+            const collectionType = room.settings?.scoreCollectionType
+              ?? room.settings?.gradeBookScoreType
+              ?? 'classwork';
+            const field = scoreCollectionTypeToGradeField(collectionType);
+            if (field === 'classworkScore') linkedFields.classwork = true;
+            if (field === 'midtermScore') linkedFields.midterm = true;
+            if (field === 'finalScore') linkedFields.final = true;
+
+            const exemptIds = room.settings?.examExemptStudentIds ?? [];
+            if (exemptIds.includes(resolvedStudent.id)) return; // ครูยกเว้น — ไม่นับห้องนี้เลย
+
+            const roomAttempts = attemptsByRoomId.get(room.id) ?? [];
+            const pct = roomAttempts.length > 0
+              ? (roomAttempts
+                  .map((att) => attemptScorePercent(room, att))
+                  .filter((p): p is number => p !== null)
+                  .sort((a, b) => b - a)[0] ?? 0)
+              : 0;
+
+            if (field === 'classworkScore') {
+              classworkOnlinePcts.push(pct);
+            } else if (field === 'midtermScore') {
+              onlineEntry.midtermScore = onlineEntry.midtermScore !== null ? Math.max(onlineEntry.midtermScore, pct) : pct;
+            } else {
+              onlineEntry.finalScore = onlineEntry.finalScore !== null ? Math.max(onlineEntry.finalScore, pct) : pct;
+            }
+          });
+
+          if (classworkOnlinePcts.length > 0) {
+            onlineEntry.classworkScore = averagePercentScores(classworkOnlinePcts);
+          }
+
+          // ผสานเข้ากับ helper ตัวเดียวกับที่ฝั่งครูใช้ (useGradeBook.mergeOnlineExamScores)
+          // เพื่อให้ยอดรวม/เกรดคำนวณเหมือนกันทุกจุด ไม่ต้องคง logic ซ้ำสองที่
+          const [merged] = mergeOnlineExamScores(
+            [{
+              studentId: resolvedStudent.id,
+              studentName: '',
+              studentCode: '',
+              classworkScore: baseClasswork,
+              midtermScore: baseMidterm,
+              finalScore: baseFinal,
+              totalScore: null,
+              grade: null,
+              absent: false,
+            }],
+            cfg,
+            new Map([[resolvedStudent.id, onlineEntry]]),
+            linkedFields,
+          );
+
+          totalScore = merged.totalScore;
+          calculatedGrade = merged.grade;
 
           cards.push({
             key,

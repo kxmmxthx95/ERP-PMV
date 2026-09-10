@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Heart, User } from 'lucide-react';
+import { HiPlus } from 'react-icons/hi2';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
@@ -10,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { countDays } from '@/hooks/useLeaveRequests';
 
 export default function LeaveQuotaWidget() {
+  const navigate = useNavigate();
   const { user, role } = useAuth();
   const { year: activeYear } = useActiveAcademicYear();
   const [quota, setQuota] = useState<{ sick: number; personal: number }>({ sick: 0, personal: 0 });
@@ -91,9 +94,18 @@ export default function LeaveQuotaWidget() {
 
   return (
     <div style={WIDGET_GLASS} className={WIDGET_CARD}>
-      <div className="shrink-0 min-w-0">
-        <p className="text-sm font-black text-slate-800 truncate">โควต้าการลา</p>
-        <p className="text-[9px] font-bold text-slate-400 truncate">ปีการศึกษา {activeYear}</p>
+      <div className="flex items-center justify-between gap-2 shrink-0 min-w-0">
+        <div className="min-w-0">
+          <p className="text-sm font-black text-slate-800 truncate">โควต้าการลา</p>
+          <p className="text-[9px] font-bold text-slate-400 truncate">ปีการศึกษา {activeYear}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate('/portal/leave?action=new')}
+          className="w-7 h-7 shrink-0 rounded-full bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 transition-all active:scale-95"
+        >
+          <HiPlus size={16} />
+        </button>
       </div>
 
       <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">

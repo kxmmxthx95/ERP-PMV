@@ -127,6 +127,10 @@ export default defineConfig(({ mode }) => {
       ],
     },
     build: {
+      // Hidden sourcemaps: generated in dist/ for decoding minified production
+      // stack traces (e.g. "Minified React error #185"), but not referenced from
+      // the shipped JS — browsers/devtools never fetch them for end users.
+      sourcemap: "hidden",
       rollupOptions: {
         output: {
           manualChunks(id) {

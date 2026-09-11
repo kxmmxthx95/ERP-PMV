@@ -5369,8 +5369,10 @@ function RoomCard({
             alt=""
             draggable={false}
             onClick={() => {
-              if (isStudent) onOpenStudentScores?.();
-              else setShowDetail(true);
+              if (isStudent) {
+                if (showStudentTakeExam) onTakeExam?.();
+                else onOpenStudentScores?.();
+              } else setShowDetail(true);
             }}
             className={cn(
               'h-48 w-48 shrink-0 object-contain drop-shadow-sm cursor-pointer',

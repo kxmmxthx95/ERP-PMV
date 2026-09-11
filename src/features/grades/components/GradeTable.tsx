@@ -6,7 +6,8 @@ import { HiChevronDown, HiChevronUp } from 'react-icons/hi2';
 import { db } from '@/lib/firebase';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import type { StudentScoreSummary, GradeWeightConfig, PassFailResult } from '@/types/grades';
-import { gradeLetterToGpa, formatGpa, gpaStyle, percentScoreStyle } from '@/types/grades';
+import { gradeLetterToGpa, formatGpa, gpaStyle, percentScoreStyle, applyBonusToTotal } from '@/types/grades';
+import { calcGrade } from '@/hooks/useGradeBook';
 import type { AttendanceStatus } from '@/types/teaching';
 import {
   buildStudentSubjectAttendanceHistory,
@@ -33,6 +34,29 @@ interface Props {
     value: number | string | boolean | null,
   ) => void;
   onUpdatePassFail?: (studentId: string, result: PassFailResult | null) => void;
+  /** sysadmin เปิดโหมดคะแนนพิเศษ + ครูมีสิทธิ์แก้ไข — โชว์คอลัมน์ % พิเศษ (ไม่ใช้กับ passFailMode) */
+  bonusEnabled?: boolean;
+  onUpdateBonus?: (studentId: string, value: number | null) => void;
+}
+
+function BonusCell({
+  value, onChange,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5">
+      <input
+        type="number" min={0} max={100}
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        placeholder="—"
+        className="h-8 w-14 rounded-xl border border-input bg-background px-1 text-center text-xs font-bold text-foreground outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring font-sukhumvit"
+      />
+      <span className="text-[10px] text-muted-foreground font-sarabun">%</span>
+    </div>
+  );
 }
 
 type ClassSessionDoc = {
@@ -251,8 +275,26 @@ export default function GradeTable({
   passFailMode = false,
   view = 'scores',
   attendanceDateRange = { from: '', to: '' },
+  bonusEnabled = false,
+  onUpdateBonus,
 }: Props) {
   const showClasswork = config.weights.classwork > 0;
+  const showBonus = bonusEnabled && !passFailMode;
+
+  // % พิเศษบวกเข้า totalScore/grade ตอนแสดงผลเท่านั้น — ไม่แก้ค่าที่บันทึกจริงใน summaries
+  const displaySummaries = useMemo(() => {
+    if (!showBonus) return summaries;
+    return summaries.map((s) => {
+      if (!s.bonusPercent) return s;
+      const boostedTotal = applyBonusToTotal(s.totalScore, s.bonusPercent);
+      if (boostedTotal === s.totalScore) return s;
+      return {
+        ...s,
+        totalScore: boostedTotal,
+        grade: boostedTotal !== null ? calcGrade(boostedTotal, config.thresholds) : s.grade,
+      };
+    });
+  }, [summaries, showBonus, config.thresholds]);
 
   // ── Attendance view ──────────────────────────────────────────────────────
   const [attendanceLoading, setAttendanceLoading] = useState(false);
@@ -355,8 +397,8 @@ export default function GradeTable({
   };
 
   const sortedSummaries = useMemo(() => {
-    if (!sortKey) return summaries;
-    const rows = [...summaries];
+    if (!sortKey) return displaySummaries;
+    const rows = [...displaySummaries];
     const dirMul = sortDir === 'asc' ? 1 : -1;
     rows.sort((a, b) => {
       switch (sortKey) {
@@ -382,11 +424,12 @@ export default function GradeTable({
       }
     });
     return rows;
-  }, [summaries, sortKey, sortDir]);
+  }, [displaySummaries, sortKey, sortDir]);
 
+  const bonusColTemplate = showBonus ? ' minmax(4rem, 0.7fr)' : '';
   const tableGridColumns = showClasswork
-    ? 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(3, minmax(0, 1fr)) minmax(0, 1fr) minmax(5rem, 0.85fr)'
-    : 'minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(2, minmax(0, 1fr)) minmax(0, 1fr) minmax(5rem, 0.85fr)';
+    ? `minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(3, minmax(0, 1fr))${bonusColTemplate} minmax(0, 1fr) minmax(5rem, 0.85fr)`
+    : `minmax(4.5rem, 0.7fr) minmax(0, 2.2fr) repeat(2, minmax(0, 1fr))${bonusColTemplate} minmax(0, 1fr) minmax(5rem, 0.85fr)`;
 
   if (passFailMode && view === 'scores') {
     return (
@@ -597,6 +640,18 @@ export default function GradeTable({
                       ))}
                     </div>
 
+                    {showBonus && (
+                      <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
+                        <p className="text-[11px] font-bold text-muted-foreground font-sukhumvit">
+                          % พิเศษ
+                        </p>
+                        <BonusCell
+                          value={s.bonusPercent ?? null}
+                          onChange={v => onUpdateBonus?.(s.studentId, v)}
+                        />
+                      </div>
+                    )}
+
                     <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
                       <p className="text-[11px] font-bold text-muted-foreground font-sukhumvit">
                         รวม (%)
@@ -703,6 +758,7 @@ export default function GradeTable({
                 dir={sortDir}
                 onClick={() => toggleSort('final')}
               />
+              {showBonus && <span className={TABLE_HEADER_CELL}>% พิเศษ</span>}
               <SortHeaderButton label="รวม (%)" active={sortKey === 'total'} dir={sortDir} onClick={() => toggleSort('total')} />
               <SortHeaderButton
                 label="เกรด"
@@ -845,6 +901,16 @@ export default function GradeTable({
                     onChange={v => onUpdateScore?.(s.studentId, 'finalScore', v)}
                   />
                 </div>
+
+                {/* Bonus % */}
+                {showBonus && (
+                  <div>
+                    <BonusCell
+                      value={s.bonusPercent ?? null}
+                      onChange={v => onUpdateBonus?.(s.studentId, v)}
+                    />
+                  </div>
+                )}
 
                 {/* Total */}
                 <div>

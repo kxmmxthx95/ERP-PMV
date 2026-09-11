@@ -16,6 +16,9 @@ import { collection, collectionGroup, doc, getDocs, query, updateDoc, where } fr
 import { db } from '@/lib/firebase';
 import { chunkIds } from '@/lib/firestoreShared/fetchStudentsByIds';
 import { useAuth } from '@/hooks/useAuth';
+import { useMyPermissions } from '@/hooks/useMyPermissions';
+import { useGradingConfig } from '@/hooks/useGradingConfig';
+import { logActivity } from '@/lib/activityLogger';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeachingManager } from '@/hooks/useTeachingManager';
 import { useGradeBook, mergeOnlineExamScores } from '@/hooks/useGradeBook';
@@ -268,6 +271,10 @@ function normalizeExamTs(val: unknown): number {
 
 export default function GradeBookPage() {
   const { user, role } = useAuth();
+  const { canEdit: canEditFeature } = useMyPermissions();
+  const canEditGrades = canEditFeature('grades');
+  const { config: gradingConfig } = useGradingConfig();
+  const bonusEnabled = gradingConfig.bonusScoreEnabled && canEditGrades;
   const { year: academicYear, activeSemester, activeYear } = useActiveAcademicYear();
   const canViewAllSubjects = role === 'admin' || role === 'sysadmin';
   const teachingMgr = useTeachingManager(user?.uid ?? '', canViewAllSubjects);
@@ -1987,6 +1994,36 @@ export default function GradeBookPage() {
                         showAsPercentage
                         passFailMode={passFailMode}
                         editable={passFailMode}
+                        bonusEnabled={bonusEnabled}
+                        onUpdateBonus={
+                          bonusEnabled
+                            ? (studentId, value) => {
+                                if (!selectedClass || !selectedSubject || !academicYear) return;
+                                void gradeBook.updateBonusScore(
+                                  {
+                                    subjectId: selectedSubjectId,
+                                    classId: selectedClassId,
+                                    teacherId: user?.uid ?? '',
+                                    departmentId: (selectedClass.departmentId ?? 'secondary') as Department,
+                                    academicYearId: String(academicYear),
+                                    semester: selectedSemester,
+                                  },
+                                  studentId,
+                                  value,
+                                ).then(() => {
+                                  logActivity({
+                                    action: 'แก้ไขคะแนนพิเศษ',
+                                    category: 'academic',
+                                    targetId: studentId,
+                                    detail: `${selectedSubject.name} · ${selectedClass.className} · ${value ?? 0}%`,
+                                  });
+                                }).catch((err) => {
+                                  console.error(err);
+                                  toast.error('บันทึกคะแนนพิเศษไม่สำเร็จ');
+                                });
+                              }
+                            : undefined
+                        }
                         onUpdatePassFail={
                           passFailMode
                             ? (studentId, result) => {

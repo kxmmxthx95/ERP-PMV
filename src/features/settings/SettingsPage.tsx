@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { useOutletContext } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  GraduationCap, School, Info, BookOpen, Calendar, Database, Loader2, CheckCircle2, AlertCircle
+  GraduationCap, School, Info, BookOpen, Calendar, Database, Loader2, CheckCircle2, AlertCircle, Sparkles
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useGradingConfig } from '@/hooks/useGradingConfig';
 import { httpsCallable } from 'firebase/functions';
 
 import { doc, getDoc, setDoc, collection, getDocs, writeBatch } from 'firebase/firestore';
@@ -382,6 +383,19 @@ export default function SettingsPage() {
   const { showSearch } = useOutletContext<{ showSearch: boolean }>();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>('general');
+  const { config: gradingConfig, saveConfig: saveGradingConfig } = useGradingConfig();
+  const [savingBonusToggle, setSavingBonusToggle] = useState(false);
+  const handleToggleBonusScore = async (next: boolean) => {
+    setSavingBonusToggle(true);
+    try {
+      await saveGradingConfig({ ...gradingConfig, bonusScoreEnabled: next });
+    } catch (err) {
+      console.error(err);
+      toast.error('บันทึกการตั้งค่าไม่สำเร็จ');
+    } finally {
+      setSavingBonusToggle(false);
+    }
+  };
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   useEffect(() => {
     setPortalTarget(document.getElementById('header-portal-center'));
@@ -1028,6 +1042,27 @@ export default function SettingsPage() {
                     </div>
                   </SectionCard>
                 </div>
+
+                <SectionCard title="คะแนนพิเศษ" icon={Sparkles} accent="#7c3aed">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-[13px] font-bold text-slate-700 font-sukhumvit">
+                        เปิดให้ครูใส่ % คะแนนพิเศษ
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-400 font-sarabun">
+                        ครูผู้สอนจะบวก % เพิ่มเองในสมุดคะแนนเพื่อปรับเกรดนักเรียนได้ (ปิดไว้เป็นค่าเริ่มต้น)
+                      </p>
+                    </div>
+                    <Toggle
+                      value={gradingConfig.bonusScoreEnabled}
+                      onChange={handleToggleBonusScore}
+                      color="#7c3aed"
+                    />
+                  </div>
+                  {savingBonusToggle && (
+                    <p className="mt-2 text-[10px] text-slate-400 font-sarabun">กำลังบันทึก...</p>
+                  )}
+                </SectionCard>
               </motion.div>
             )}
 

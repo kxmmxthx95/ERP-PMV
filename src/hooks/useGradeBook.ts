@@ -9,12 +9,12 @@
 
 import { useState, useCallback, useRef } from 'react';
 import {
-  collection, getDoc, getDocs, setDoc, doc, query, where,
+  collection, getDoc, getDocs, setDoc, deleteDoc, doc, query, where,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type {
   GradeWeightConfig, GradeRecord, StudentScoreSummary, GradeLetter,
-  GradeThreshold, NewGradeRecord, PassFailResult,
+  GradeThreshold, NewGradeRecord, PassFailResult, GradeBonusRecord,
 } from '@/types/grades';
 import {
   DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, DEFAULT_MAX_SCORES,
@@ -239,6 +239,21 @@ export function useGradeBook() {
       setSavedRecords(records);
       const recordMap = new Map(records.map(r => [r.studentId, r]));
 
+      // ── 4b. อ่าน grade_bonuses — % พิเศษที่ครูใส่เอง (แยกจาก grade_records) ────
+      const bonusesSnap = await getDocs(
+        query(
+          collection(db, 'grade_bonuses'),
+          where('subjectId', '==', params.subjectId),
+          where('classId', '==', params.classId),
+          where('academicYearId', '==', params.academicYearId),
+          where('semester', '==', params.semester),
+        )
+      ).catch(() => null);
+      const bonusMap = new Map<string, number>(
+        (bonusesSnap?.docs.map(d => d.data() as GradeBonusRecord) ?? [])
+          .map(b => [b.studentId, b.bonusPercent]),
+      );
+
       const identityLookup = buildStudentIdentityLookup(
         params.students.map(stu => ({
           student: {
@@ -283,6 +298,8 @@ export function useGradeBook() {
       const built: StudentScoreSummary[] = params.students.map(stu => {
         const saved = findScoreRecordForStudent(recordMap, rosterStudent(stu), identityLookup);
 
+        const bonusPercent = bonusMap.get(stu.studentId) ?? null;
+
         // ถ้ามี saved record แล้ว — ใช้เลย (ครูตรวจแล้ว)
         if (saved) {
           return {
@@ -299,6 +316,7 @@ export function useGradeBook() {
             result: saved.result ?? null,
             absent: saved.absent,
             note: saved.note,
+            bonusPercent,
           };
         }
 
@@ -347,6 +365,7 @@ export function useGradeBook() {
           totalScore: null,
           grade: null,
           absent: false,
+          bonusPercent,
         }, cfg);
       });
 
@@ -515,6 +534,42 @@ export function useGradeBook() {
     cacheKey.current = '';
   }, [summaries]);
 
+  /** ครูใส่/แก้ % พิเศษต่อคน — เก็บแยกใน grade_bonuses ไม่แตะ grade_records */
+  const updateBonusScore = useCallback(async (
+    params: {
+      subjectId: string;
+      classId: string;
+      teacherId: string;
+      departmentId: Department;
+      academicYearId: string;
+      semester: 1 | 2;
+    },
+    studentId: string,
+    bonusPercent: number | null,
+  ) => {
+    setSummaries(prev => prev.map(s => (
+      s.studentId === studentId ? { ...s, bonusPercent } : s
+    )));
+
+    const docId = `${params.subjectId}_${params.classId}_${studentId}_${params.academicYearId}_${params.semester}`;
+    if (bonusPercent === null) {
+      await deleteDoc(doc(db, 'grade_bonuses', docId));
+      return;
+    }
+    const record: Omit<GradeBonusRecord, 'id'> = {
+      studentId,
+      subjectId: params.subjectId,
+      classId: params.classId,
+      departmentId: params.departmentId,
+      academicYearId: params.academicYearId,
+      semester: params.semester,
+      teacherId: params.teacherId,
+      bonusPercent,
+      updatedAt: new Date().toISOString(),
+    };
+    await setDoc(doc(db, 'grade_bonuses', docId), record);
+  }, []);
+
   const invalidateCache = useCallback(() => {
     cacheKey.current = '';
   }, []);
@@ -533,5 +588,6 @@ export function useGradeBook() {
     applyOnlineExamScores,
     revertOnlineExamScores,
     savePassFailResult,
+    updateBonusScore,
   };
 }

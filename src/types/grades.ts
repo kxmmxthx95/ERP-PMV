@@ -156,6 +156,17 @@ export interface StudentScoreSummary {
   // เพิ่มเติม
   absent: boolean;                  // ขาดสอบ
   note?: string;
+  /** % พิเศษที่ครูใส่เองเพื่อปรับเกรด (ต้องเปิดโหมดจาก sysadmin) — บวกเข้า totalScore ตอนแสดงผล */
+  bonusPercent?: number | null;
+}
+
+/** totalScore + bonusPercent, ปัดไม่เกิน 100 — ใช้ตอนแสดงผล/คำนวณเกรดสุดท้ายเท่านั้น (ไม่แก้ totalScore ที่เก็บจริง) */
+export function applyBonusToTotal(
+  totalScore: number | null,
+  bonusPercent: number | null | undefined,
+): number | null {
+  if (totalScore === null || !bonusPercent) return totalScore;
+  return Math.min(100, Math.round((totalScore + bonusPercent) * 10) / 10);
 }
 
 // ── Grade Book ─────────────────────────────────────────────────────────────────
@@ -208,3 +219,20 @@ export interface GradeRecord {
 }
 
 export type NewGradeRecord = Omit<GradeRecord, 'id'>;
+
+// ── Bonus Score (Firestore: grade_bonuses collection) ──────────────────────────
+// แยกจาก grade_records เพราะ grade_records ที่มี record จะทับคะแนนอัตโนมัติทั้งแถว —
+// bonus ต้องเป็น layer เสริมที่ apply ได้ทั้งกับคะแนน auto-compute และคะแนนที่บันทึกแล้ว
+
+export interface GradeBonusRecord {
+  id: string;
+  studentId: string;
+  subjectId: string;
+  classId: string;
+  departmentId: Department;
+  academicYearId: string;
+  semester: 1 | 2;
+  teacherId: string;
+  bonusPercent: number;
+  updatedAt: string;
+}

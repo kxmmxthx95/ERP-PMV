@@ -7363,6 +7363,9 @@ export default function ExamManager() {
   const prevSuspiciousRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
+    // Proctoring-only alert — a student's own device must never speak their own
+    // suspicious-activity count back at them.
+    if (isStudent) return;
     attempts.forEach((att) => {
       const prevCount = prevSuspiciousRef.current.get(att.id);
       const currentCount = att.suspiciousActivities ?? 0;
@@ -7393,7 +7396,7 @@ export default function ExamManager() {
       }
       prevSuspiciousRef.current.set(att.id, currentCount);
     });
-  }, [attempts, rooms, teachingMgr]);
+  }, [attempts, rooms, teachingMgr, isStudent]);
   const [showStudentIntroPopup, setShowStudentIntroPopup] = useState(false);
   useEffect(() => {
     if (!isStudent) return;

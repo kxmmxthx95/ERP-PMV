@@ -498,13 +498,13 @@ function ExamInterface({
   useEffect(() => {
     const handleVisibility = () => {
       if (document.hidden) {
-        if (suppressSuspiciousRef.current || Date.now() < suppressSuspiciousUntilRef.current) {
+        if (readOnly || suppressSuspiciousRef.current || Date.now() < suppressSuspiciousUntilRef.current) {
           return;
         }
         const nextSuspiciousCount = suspiciousActivities + 1;
         onRecordSuspicious();
 
-        if (nextSuspiciousCount > 2 && !readOnly && !hasAutoSubmittedRef.current) {
+        if (nextSuspiciousCount > 2 && !hasAutoSubmittedRef.current) {
           hasAutoSubmittedRef.current = true;
           setWarningMsg('ตรวจพบการสลับหน้าจอเกิน 2 ครั้ง ระบบจะส่งข้อสอบอัตโนมัติ');
           setShowWarning(true);

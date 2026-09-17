@@ -24,7 +24,7 @@ import {
   IoAnalyticsOutline,
   IoSwapHorizontalOutline,
 } from 'react-icons/io5';
-import { HiBookOpen, HiBriefcase, HiClipboardDocument, HiComputerDesktop, HiExclamationTriangle, HiMiniCalculator, HiMiniEnvelope, HiMiniTableCells, HiMiniUserCircle, HiMiniUserGroup, HiTv } from 'react-icons/hi2';
+import { HiBookOpen, HiBriefcase, HiClipboardDocument, HiClipboardDocumentCheck, HiComputerDesktop, HiExclamationTriangle, HiMiniCalculator, HiMiniEnvelope, HiMiniTableCells, HiMiniUserCircle, HiMiniUserGroup, HiTv } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
 
 export interface PortalMenuItem {
@@ -50,6 +50,7 @@ export const ALL_MENUS: PortalMenuItem[] = [
   { title: 'บันทึกเวลาปฏิบัติงาน', subtitle: 'Staff Attendance', icon: IoTimeOutline, path: '/portal/staff-attendance', featureKey: 'staffAttendance' },
   { title: 'จัดการอุปกรณ์เชื่อมต่อ', subtitle: 'Fingerprint Terminals', icon: IoFingerPrintOutline, path: '/portal/fingerprint-devices', featureKey: 'fingerprintDevices' },
   { title: 'ประเมินผลการปฏิบัติงาน', subtitle: 'Teacher KPI Evaluation', icon: IoBarChartOutline, path: '/portal/teacher-kpi', featureKey: 'teacherKpi' },
+  { title: 'รายงานเช็คชื่อเข้าชั้นเรียน', subtitle: 'Class Attendance Report', icon: HiClipboardDocumentCheck, path: '/portal/class-attendance-report', featureKey: 'classAttendanceReport' },
   { title: 'จัดการการลา', subtitle: 'Leave Requests', icon: HiMiniEnvelope, path: '/portal/leave', featureKey: 'leave' },
   { title: 'จัดการเวรประจำวัน', subtitle: 'Duty Teacher Schedule', icon: IoShieldCheckmarkOutline, path: '/portal/duty-schedule', featureKey: 'dutySchedule' },
   { title: 'มอบหมายการสอนแทน', subtitle: 'Substitute Teaching', icon: IoSwapHorizontalOutline, path: '/portal/substitute-teaching', featureKey: 'substituteTeaching' },

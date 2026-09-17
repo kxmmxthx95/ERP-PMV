@@ -33,6 +33,7 @@ const ExamAbsencesPage = lazy(() => import('@/features/exam/ExamAbsencesPage'));
 const QuestionBankManager = lazy(() => import('@/features/questionBank/QuestionBankManager'));
 const StaffAttendancePage = lazy(() => import('@/features/attendance/StaffAttendancePage'));
 const TeacherKpiPage = lazy(() => import('@/features/teacherKpi/TeacherKpiPage'));
+const ClassAttendanceReportPage = lazy(() => import('@/features/classAttendanceReport/ClassAttendanceReportPage'));
 const FingerprintDeviceManagerPage = lazy(() => import('@/features/fingerprintDevices/FingerprintDeviceManagerPage'));
 const AttendanceCenterPage = lazy(() => import('@/features/attendance/AttendanceCenterPage'));
 const ProfilePage = lazy(() => import('@/features/profile/ProfilePage'));
@@ -243,6 +244,11 @@ export default function App() {
             <Route path="teacher-kpi" element={
               <PermissionGate featureKey="teacherKpi">
                 <TeacherKpiPage />
+              </PermissionGate>
+            } />
+            <Route path="class-attendance-report" element={
+              <PermissionGate featureKey="classAttendanceReport">
+                <ClassAttendanceReportPage />
               </PermissionGate>
             } />
             <Route path="morning-rollcall" element={

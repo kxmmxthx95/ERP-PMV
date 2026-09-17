@@ -46,6 +46,7 @@ export const FEATURE_LIST: FeaturePermission[] = [
   { featureKey: 'staffAttendance', label: 'ลงเวลาทำงานบุคลากร',   category: 'เกรดและการเข้าเรียน',    enabled: true, accessLevel: 'full' },
   { featureKey: 'fingerprintDevices', label: 'จัดการเครื่องสแกน', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'full' },
   { featureKey: 'teacherKpi',   label: 'ประเมิน KPI ครู',        category: 'เกรดและการเข้าเรียน',    enabled: true, accessLevel: 'view-only' },
+  { featureKey: 'classAttendanceReport', label: 'รายงานเช็คชื่อเข้าชั้นเรียน', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'view-only' },
 
   // ── สอบและประเมินผล ──
   { featureKey: 'exams',        label: 'ห้องสอบออนไลน์',       category: 'สอบและประเมินผล',         enabled: true, accessLevel: 'full' },

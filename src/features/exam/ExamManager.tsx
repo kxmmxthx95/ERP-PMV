@@ -1307,6 +1307,7 @@ function QuestionsPanel({
   // Per-round: one whole question set (all questions in the set)
   const [selectingSetId, setSelectingSetId] = useState<string | null>(null);
   const [expandedPartSetId, setExpandedPartSetId] = useState<string | null>(null);
+  const [equalPointsInput, setEqualPointsInput] = useState<Record<string, string>>({});
   const [pdfPreview, setPdfPreview] = useState<{ url: string; title: string } | null>(null);
   const [simulatingSet, setSimulatingSet] = useState<QuestionSet | null>(null);
   const [filterGroup, setFilterGroup] = useState<SubjectGroupId | 'all'>('all');
@@ -1505,6 +1506,22 @@ function QuestionsPanel({
 
   const toggleExpandedPart = (setId: string) => {
     setExpandedPartSetId(prev => (prev === setId ? null : setId));
+  };
+
+  const applyEqualPointsToRound = (rk: string, raw: string) => {
+    if (isRoundLocked(rk)) return;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    setRoundDraft(prev => {
+      const round = prev[rk];
+      if (!round) return prev;
+      const nextPoints: Record<string, number> = { ...round.questionPoints };
+      round.questionIds.forEach(qid => { nextPoints[qid] = parsed; });
+      return {
+        ...prev,
+        [rk]: { ...round, questionPoints: nextPoints },
+      };
+    });
   };
 
   const updateQuestionPoint = (rk: string, qid: string, raw: string) => {
@@ -1889,23 +1906,55 @@ function QuestionsPanel({
     const totalPts = getDraftTotalPoints(draft);
     const totalCount = draft.questionIds.size;
 
+    const roundLocked = isRoundLocked(rk);
+    const equalPointsRaw = equalPointsInput[rk] ?? '';
+    const equalPointsValid = equalPointsRaw !== '' && Number.isFinite(Number(equalPointsRaw)) && Number(equalPointsRaw) >= 0;
+
     return (
       <div className="flex flex-col gap-3 flex-1 min-h-0">
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg shrink-0 bg-blue-50 border border-blue-200">
-          <HiCheckCircle className="w-3 h-3 text-blue-600 shrink-0" />
-          <p className="text-[11px] font-black text-blue-700 font-sukhumvit">
-            {setOrder.length} part · {totalCount} ข้อ · รวม {Math.round(totalPts)} คะแนน
-          </p>
-          {!isRoundLocked(rk) && (
-            <button
-              type="button"
-              onClick={() => clearRound(rk)}
-              className="ml-auto flex h-7 w-7 items-center justify-center rounded-full border border-rose-200 bg-white text-rose-500 transition-colors hover:bg-rose-50"
-              title="ล้างทั้งหมด"
-              aria-label="ล้างทั้งหมด"
-            >
-              <HiMiniTrash className="h-3.5 w-3.5" />
-            </button>
+        <div className="flex flex-col gap-2 px-3 py-2 rounded-lg shrink-0 bg-blue-50 border border-blue-200">
+          <div className="flex items-center gap-2">
+            <HiCheckCircle className="w-3 h-3 text-blue-600 shrink-0" />
+            <p className="text-[11px] font-black text-blue-700 font-sukhumvit">
+              {setOrder.length} part · {totalCount} ข้อ · รวม {Math.round(totalPts)} คะแนน
+            </p>
+            {!roundLocked && (
+              <button
+                type="button"
+                onClick={() => clearRound(rk)}
+                className="ml-auto flex h-7 w-7 items-center justify-center rounded-full border border-rose-200 bg-white text-rose-500 transition-colors hover:bg-rose-50"
+                title="ล้างทั้งหมด"
+                aria-label="ล้างทั้งหมด"
+              >
+                <HiMiniTrash className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          {totalCount > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="number"
+                min={0}
+                step={1}
+                value={equalPointsRaw}
+                onChange={(e) => setEqualPointsInput(prev => ({ ...prev, [rk]: e.target.value }))}
+                disabled={roundLocked}
+                placeholder="คะแนน/ข้อ"
+                className="h-8 w-24 rounded-lg border-blue-200 bg-white text-center text-[11px] font-bold font-sukhumvit disabled:opacity-50"
+                aria-label="คะแนนเท่ากันทุกข้อ"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={roundLocked || !equalPointsValid}
+                onClick={() => applyEqualPointsToRound(rk, equalPointsRaw)}
+                className="h-8 rounded-lg text-[11px] font-bold"
+              >
+                ใช้คะแนนนี้ทุกข้อ
+              </Button>
+            </div>
           )}
         </div>
 

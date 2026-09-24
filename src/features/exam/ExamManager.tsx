@@ -5289,7 +5289,7 @@ function RoomIconDetailDrawer({
 function RoomCard({
   room, onProctor, onChangeStatus, onFinish, onDelete, onEdit, onOpenSettings, isStudent, onTakeExam,
   onOpenStudentScores,
-  canEdit, canDelete, alert, onUpdateRoom,
+  canEdit, canDelete, alert, alertQueueCount, onUpdateRoom,
   attempts, loadRoomAttempts, onRecalculateScores,
 }: {
   room: ExamRoom;
@@ -5307,6 +5307,8 @@ function RoomCard({
   canDelete?: boolean;
   /** ตรวจพบนักเรียนสลับหน้าจอ — การ์ดจะเปลี่ยนหน้าแสดงชื่อชั่วคราว (ไม่ใช้กับมุมมองนักเรียน) */
   alert?: { studentName: string; key: number } | null;
+  /** จำนวนคนที่ยังรอคิวแสดง (รวมคนที่กำลังแสดงอยู่) — โชว์ "+N คนอื่น" ถ้ามากกว่า 1 */
+  alertQueueCount?: number;
   onUpdateRoom?: (roomId: string, data: Partial<ExamRoom>) => Promise<void>;
   attempts?: ExamAttempt[];
   loadRoomAttempts?: (roomId: string) => Promise<void>;
@@ -5351,6 +5353,11 @@ function RoomCard({
             <p className="px-3 text-[15px] font-black text-slate-800 font-sukhumvit leading-snug line-clamp-2">
               {alert.studentName}
             </p>
+            {Boolean(alertQueueCount && alertQueueCount > 1) && (
+              <p className="text-[10px] font-bold text-rose-400 font-sukhumvit">
+                +{(alertQueueCount ?? 1) - 1} คนอื่นรอคิว
+              </p>
+            )}
           </motion.div>
         ) : (
           <motion.div
@@ -7359,8 +7366,33 @@ export default function ExamManager() {
   // student's name + reads it aloud every time any attempt's suspiciousActivities
   // counter goes up (tab-switch detected in StudentExamPage). Keyed per attempt so
   // the first snapshot (existing counts) never fires — only later increments do.
-  const [cardAlerts, setCardAlerts] = useState<Record<string, { studentName: string; key: number }>>({});
+  // Each room holds a FIFO queue (not a single slot) so a busy room with several
+  // students switching close together shows them one at a time instead of either
+  // dropping later ones or getting stuck re-showing the same slot forever.
+  const [cardAlerts, setCardAlerts] = useState<Record<string, Array<{ studentName: string; key: number }>>>({});
+  const alertTimerActiveRef = useRef<Record<string, boolean>>({});
   const prevSuspiciousRef = useRef<Map<string, number>>(new Map());
+
+  const scheduleAlertShift = useCallback((roomId: string) => {
+    window.setTimeout(() => {
+      setCardAlerts((prev) => {
+        const queue = prev[roomId];
+        if (!queue || queue.length === 0) {
+          alertTimerActiveRef.current[roomId] = false;
+          return prev;
+        }
+        const rest = queue.slice(1);
+        if (rest.length === 0) {
+          alertTimerActiveRef.current[roomId] = false;
+          const next = { ...prev };
+          delete next[roomId];
+          return next;
+        }
+        scheduleAlertShift(roomId);
+        return { ...prev, [roomId]: rest };
+      });
+    }, 6000);
+  }, []);
 
   useEffect(() => {
     // Proctoring-only alert — a student's own device must never speak their own
@@ -7376,15 +7408,14 @@ export default function ExamManager() {
         const displayNameByKey = buildStudentDisplayNameByIdentityKey(classStudents, roomAttempts);
         const studentName = resolveAttemptDisplayName(att, displayNameByKey);
         const alertKey = Date.now();
-        setCardAlerts((prev) => ({ ...prev, [att.roomId]: { studentName, key: alertKey } }));
-        window.setTimeout(() => {
-          setCardAlerts((prev) => {
-            if (prev[att.roomId]?.key !== alertKey) return prev;
-            const next = { ...prev };
-            delete next[att.roomId];
-            return next;
-          });
-        }, 6000);
+        setCardAlerts((prev) => ({
+          ...prev,
+          [att.roomId]: [...(prev[att.roomId] ?? []), { studentName, key: alertKey }],
+        }));
+        if (!alertTimerActiveRef.current[att.roomId]) {
+          alertTimerActiveRef.current[att.roomId] = true;
+          scheduleAlertShift(att.roomId);
+        }
 
         try {
           const utterance = new SpeechSynthesisUtterance(`นักเรียน ${studentName} สลับหน้าจอ`);
@@ -7396,7 +7427,7 @@ export default function ExamManager() {
       }
       prevSuspiciousRef.current.set(att.id, currentCount);
     });
-  }, [attempts, rooms, teachingMgr, isStudent]);
+  }, [attempts, rooms, teachingMgr, isStudent, scheduleAlertShift]);
   const [showStudentIntroPopup, setShowStudentIntroPopup] = useState(false);
   useEffect(() => {
     if (!isStudent) return;
@@ -8699,7 +8730,8 @@ export default function ExamManager() {
                           onOpenSettings={(tab) => { setDetailRoom(room); setDetailRoomTab(tab); }}
                           canEdit={canEdit}
                           canDelete={canDelete}
-                          alert={cardAlerts[room.id] ?? null}
+                          alert={cardAlerts[room.id]?.[0] ?? null}
+                          alertQueueCount={cardAlerts[room.id]?.length}
                           onUpdateRoom={updateRoom}
                           attempts={getAttemptsForRoom(room.id)}
                           loadRoomAttempts={loadRoomAttempts}
@@ -8767,7 +8799,8 @@ export default function ExamManager() {
                             }}
                             canEdit={canEdit}
                             canDelete={canDelete}
-                            alert={!isStudent ? cardAlerts[room.id] ?? null : null}
+                            alert={!isStudent ? cardAlerts[room.id]?.[0] ?? null : null}
+                            alertQueueCount={!isStudent ? cardAlerts[room.id]?.length : undefined}
                             onUpdateRoom={updateRoom}
                             attempts={getAttemptsForRoom(room.id)}
                             loadRoomAttempts={loadRoomAttempts}

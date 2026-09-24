@@ -8,7 +8,7 @@ import {
 import {
   HiBookOpen, HiAdjustmentsHorizontal, HiClipboardDocumentList, HiCalendarDays,
   HiBars3, HiOutlineFunnel, HiChevronRight, HiChevronLeft, HiArrowLeft,
-  HiAcademicCap, HiPlus, HiXMark,
+  HiAcademicCap, HiPlus, HiXMark, HiArrowDownTray,
 } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
 import { toast } from 'sonner';
@@ -26,6 +26,7 @@ import { rawPointsToPercent, averagePercentScores, isPassFailSubjectCategory } f
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import GradeTable from './components/GradeTable';
+import { exportGradeExcel } from './utils/exportGradeExcel';
 import ExamRoomScoreTable, { type ExamRoomScoreRow } from './components/ExamRoomScoreTable';
 import GradeConfigPanel from './components/GradeConfigPanel';
 import StudentGradeBookPanel from './components/StudentGradeBookPanel';
@@ -1644,12 +1645,39 @@ export default function GradeBookPage() {
 
                 {attendanceDateFilter}
 
+                {activeTab === 'table' && !passFailMode && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="ml-auto gap-1.5 text-xs font-bold"
+                    onClick={() => {
+                      if (!selectedClass || !selectedSubject || !academicYear) return;
+                      exportGradeExcel({
+                        semester: selectedSemester,
+                        academicYear: String(academicYear),
+                        className: selectedClass.className,
+                        subjectCode: selectedSubject.code ?? '',
+                        subjectName: selectedSubject.name,
+                        credits: selectedSubject.credits ?? 0,
+                        summaries: displaySummaries,
+                      });
+                    }}
+                  >
+                    <HiArrowDownTray className="h-4 w-4" />
+                    ส่งออก Excel
+                  </Button>
+                )}
+
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   type="button"
                   onClick={handleReload}
-                  className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground transition-colors hover:bg-muted/80"
+                  className={cn(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground transition-colors hover:bg-muted/80',
+                    !(activeTab === 'table' && !passFailMode) && 'ml-auto',
+                  )}
                 >
                   <RefreshCw size={13} />
                 </motion.button>

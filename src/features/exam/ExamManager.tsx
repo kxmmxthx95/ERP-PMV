@@ -4061,6 +4061,13 @@ function ScoreSummaryDrawerPanel({
     initialRound?: number;
   } | null>(null);
   const [loadingAttempts, setLoadingAttempts] = useState(false);
+  // กันเรียก onRecalculateScores ซ้ำไม่รู้จบ — เขียนคะแนน 0 ที่ถูกต้องอยู่แล้วซ้ำทุกครั้ง
+  // ก็ยัง trigger snapshot ใหม่ของ attempts ทำให้ effect นี้วนไม่จบ (ดู useExamRoom.ts guard เดียวกัน)
+  const attemptedRecalcRoundsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    attemptedRecalcRoundsRef.current.clear();
+  }, [room.id]);
 
   useEffect(() => {
     if (!loadRoomAttempts) return;
@@ -4092,8 +4099,15 @@ function ScoreSummaryDrawerPanel({
         roundsToRecalc.add(round);
       }
     });
-    if (roundsToRecalc.size === 0) return;
-    void Promise.all([...roundsToRecalc].map((round) => onRecalculateScores(room.id, round)));
+
+    const freshRounds = [...roundsToRecalc].filter((round) => {
+      const key = `${room.id}:${round}`;
+      if (attemptedRecalcRoundsRef.current.has(key)) return false;
+      attemptedRecalcRoundsRef.current.add(key);
+      return true;
+    });
+    if (freshRounds.length === 0) return;
+    void Promise.all(freshRounds.map((round) => onRecalculateScores(room.id, round)));
   }, [room.id, attempts, onRecalculateScores]);
 
   const classStudents = useMemo(() => {

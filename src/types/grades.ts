@@ -160,13 +160,13 @@ export interface StudentScoreSummary {
   bonusPercent?: number | null;
 }
 
-/** totalScore + bonusPercent, ปัดไม่เกิน 100 — ใช้ตอนแสดงผล/คำนวณเกรดสุดท้ายเท่านั้น (ไม่แก้ totalScore ที่เก็บจริง) */
+/** totalScore + bonusPercent (ติดลบได้ = หักคะแนน), ครอบ 0–100 — ใช้ตอนแสดงผล/คำนวณเกรดสุดท้ายเท่านั้น (ไม่แก้ totalScore ที่เก็บจริง) */
 export function applyBonusToTotal(
   totalScore: number | null,
   bonusPercent: number | null | undefined,
 ): number | null {
   if (totalScore === null || !bonusPercent) return totalScore;
-  return Math.min(100, Math.round((totalScore + bonusPercent) * 10) / 10);
+  return Math.min(100, Math.max(0, Math.round((totalScore + bonusPercent) * 10) / 10));
 }
 
 // ── Grade Book ─────────────────────────────────────────────────────────────────

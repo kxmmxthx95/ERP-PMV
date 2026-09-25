@@ -48,10 +48,16 @@ function BonusCell({
   return (
     <div className="flex items-center gap-0.5">
       <input
-        type="number" min={0} max={100}
+        type="number" min={-100} max={100}
         value={value ?? ''}
-        onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        onChange={(e) => {
+          if (e.target.value === '') { onChange(null); return; }
+          const parsed = Number(e.target.value);
+          if (!Number.isFinite(parsed)) return;
+          onChange(Math.min(100, Math.max(-100, parsed)));
+        }}
         placeholder="—"
+        title="ใส่ค่าลบเพื่อหักคะแนน"
         className="h-8 w-14 rounded-xl border border-input bg-background px-1 text-center text-xs font-bold text-foreground outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring font-sukhumvit"
       />
       <span className="text-[10px] text-muted-foreground font-sarabun">%</span>

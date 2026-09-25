@@ -4,6 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 import App from './App.tsx'
 
+// ปลด V8 default (10 frame) เพื่อให้ crash report ในโปรดักชันได้ stack เต็ม — ช่วย decode ผ่าน hidden sourcemap
+Error.stackTraceLimit = Infinity;
+
 // สร้าง QueryClient สำหรับจัดการ Cache ข้อมูล
 const queryClient = new QueryClient({
   defaultOptions: {

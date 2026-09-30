@@ -1553,7 +1553,6 @@ export function useExamAttempt(roomId: string) {
           round: currentRound,
           status: 'in_progress' as const,
           answers: {},
-          suspiciousActivities: 0,
           score: null,
           startedAt: Timestamp.now(),
           submittedAt: null,
@@ -1643,19 +1642,6 @@ export function useExamAttempt(roomId: string) {
     }, 600);
   }, [attempt, roomId, flushAnswerSave]);
 
-  const recordSuspicious = useCallback(async () => {
-    if (!attempt) return;
-    try {
-      const updated = { ...attempt, suspiciousActivities: (attempt.suspiciousActivities || 0) + 1 };
-      await updateDoc(doc(db, 'exam_rooms', roomId, 'attempts', attempt.id), {
-        suspiciousActivities: updated.suspiciousActivities,
-      });
-      setAttempt(updated);
-    } catch (err) {
-      console.error('Error recording suspicious activity:', err);
-    }
-  }, [attempt]);
-
   const submitAttempt = useCallback(async (options?: { force?: boolean }) => {
     if (!attempt || !room) return;
     if (!options?.force && !canSubmitExamManually(attempt.startedAt)) {
@@ -1705,7 +1691,6 @@ export function useExamAttempt(roomId: string) {
     error,
     joinRoom,
     saveAnswer,
-    recordSuspicious,
     submitAttempt,
     isSubmitted,
   };

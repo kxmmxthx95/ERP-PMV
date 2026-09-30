@@ -106,7 +106,6 @@ export interface ExamAttempt {
   round: number; // รอบที่ 1, 2, 3, ...
   status: AttemptStatus;
   answers: Record<string, string>; // questionId → selectedOptionId
-  suspiciousActivities: number; // tab switch count
   score: number | null; // null until graded
   /** คะแนนเต็มเฉพาะข้อที่ตรวจอัตโนมัติได้ (ปรนัย + อัตนัยที่มีเฉลย) */
   objectiveMaxPoints?: number | null;

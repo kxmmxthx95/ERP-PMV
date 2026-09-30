@@ -7,7 +7,7 @@ import { collection, doc, getDocs, query, where, writeBatch } from 'firebase/fir
 import {
   ClipboardList, Plus, Play, Square, Trash2, Eye,
   X, Pencil,
-  ShieldAlert, Users, CheckCircle2,
+  Users, CheckCircle2,
   BookOpen, Check,
   Trophy, TrendingUp, RotateCcw
 } from 'lucide-react';
@@ -801,7 +801,6 @@ function AttemptCard({
   att: ExamAttempt;
   displayName?: string;
 }) {
-  const isSuspicious = att.suspiciousActivities >= 1;
   const statusColor = att.status === 'submitted' ? '#059669' : att.status === 'graded' ? '#6366f1' : '#f59e0b';
   const statusLabel = att.status === 'submitted' ? 'ส่งแล้ว' : att.status === 'graded' ? 'ตรวจแล้ว' : 'กำลังทำ';
   const name = displayName?.trim() || att.studentName || 'ไม่ทราบชื่อ';
@@ -827,11 +826,6 @@ function AttemptCard({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        {isSuspicious && (
-          <span className="flex items-center gap-1 px-2 py-0.5 rounded-xl bg-rose-50 text-rose-500 text-[9px] font-black">
-            <ShieldAlert size={9} /> {att.suspiciousActivities}ครั้ง
-          </span>
-        )}
         <span className="text-[10px] font-black px-2.5 py-1 rounded-xl font-sukhumvit"
           style={{ color: statusColor, background: statusColor + '18' }}>
           {statusLabel}
@@ -909,7 +903,6 @@ function ProctoringModal({
 
   const inProgress = roundAttempts.filter(a => a.status === 'in_progress').length;
   const submitted = roundAttempts.filter(a => a.status === 'submitted' || a.status === 'graded').length;
-  const suspicious = roundAttempts.filter(a => a.suspiciousActivities >= 1).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -956,11 +949,10 @@ function ProctoringModal({
         </div>
 
         {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           {[
             { label: 'กำลังทำ', value: inProgress, color: '#f59e0b', bg: '#fef3c7' },
             { label: 'ส่งแล้ว', value: submitted, color: '#059669', bg: '#d1fae5' },
-            { label: 'น่าสงสัย', value: suspicious, color: '#e11d48', bg: '#ffe4e6' },
           ].map(stat => (
             <div key={stat.label} className="rounded-[1.5rem] p-4 flex flex-col items-center gap-1"
               style={{ background: stat.bg }}>
@@ -5352,7 +5344,7 @@ function RoomIconDetailDrawer({
 function RoomCard({
   room, onProctor, onChangeStatus, onFinish, onDelete, onEdit, onOpenSettings, isStudent, onTakeExam,
   onOpenStudentScores,
-  canEdit, canDelete, alert, alertQueueCount, onUpdateRoom,
+  canEdit, canDelete, onUpdateRoom,
   attempts, loadRoomAttempts, onRecalculateScores,
 }: {
   room: ExamRoom;
@@ -5368,10 +5360,6 @@ function RoomCard({
   onOpenStudentScores?: () => void;
   canEdit?: boolean;
   canDelete?: boolean;
-  /** ตรวจพบนักเรียนสลับหน้าจอ — การ์ดจะเปลี่ยนหน้าแสดงชื่อชั่วคราว (ไม่ใช้กับมุมมองนักเรียน) */
-  alert?: { studentName: string; key: number } | null;
-  /** จำนวนคนที่ยังรอคิวแสดง (รวมคนที่กำลังแสดงอยู่) — โชว์ "+N คนอื่น" ถ้ามากกว่า 1 */
-  alertQueueCount?: number;
   onUpdateRoom?: (roomId: string, data: Partial<ExamRoom>) => Promise<void>;
   attempts?: ExamAttempt[];
   loadRoomAttempts?: (roomId: string) => Promise<void>;
@@ -5400,29 +5388,6 @@ function RoomCard({
       style={{ perspective: 800 }}
     >
       <AnimatePresence mode="wait" initial={false}>
-        {alert ? (
-          <motion.div
-            key={`suspicious-alert-${alert.key}`}
-            initial={{ opacity: 0, rotateX: -90 }}
-            animate={{ opacity: 1, rotateX: 0 }}
-            exit={{ opacity: 0, rotateX: 90 }}
-            transition={{ duration: 0.35 }}
-            className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 py-4 text-center"
-          >
-            <ShieldAlert className="w-7 h-7 text-rose-500" />
-            <p className="text-[10px] font-black uppercase tracking-wider text-rose-500 font-sukhumvit">
-              ตรวจพบสลับหน้าจอ
-            </p>
-            <p className="px-3 text-[15px] font-black text-slate-800 font-sukhumvit leading-snug line-clamp-2">
-              {alert.studentName}
-            </p>
-            {Boolean(alertQueueCount && alertQueueCount > 1) && (
-              <p className="text-[10px] font-bold text-rose-400 font-sukhumvit">
-                +{(alertQueueCount ?? 1) - 1} คนอื่นรอคิว
-              </p>
-            )}
-          </motion.div>
-        ) : (
           <motion.div
             key="card-face"
             initial={{ opacity: 0, rotateX: 90 }}
@@ -5609,7 +5574,6 @@ function RoomCard({
         )}
       </div>
           </motion.div>
-        )}
       </AnimatePresence>
       {showDetail && !isStudent && (
         <RoomIconDetailDrawer
@@ -7410,14 +7374,12 @@ export default function ExamManager() {
     [detailRoom?.id, proctoringRoom?.id],
   );
 
-  const { rooms, attempts, isLoading, createRoom, updateRoom, updateRoomStatus, finishRoom, deleteRoom, getAttemptsForRoom, loadRoomAttempts, resetStudentAttempt, resetAllAttempts, calculateRoomScores } = useExamRoom({
+  const { rooms, isLoading, createRoom, updateRoom, updateRoomStatus, finishRoom, deleteRoom, getAttemptsForRoom, loadRoomAttempts, resetStudentAttempt, resetAllAttempts, calculateRoomScores } = useExamRoom({
     // Students only need own attempts; staff keep smart `all` (live for active rooms,
     // on-demand fetch for closed rooms via loadRoomAttempts — see below)
     loadAttempts: isStudent ? 'mine' : 'all',
     focusRoomIds,
   });
-  // Roster lookup for resolving a student's real name (not their login email) on the
-  // suspicious-activity card alert below — same resolver ProctoringModal/RoomDetailView use.
   const canViewAllSubjects = role === 'admin' || role === 'sysadmin';
   const teachingMgr = useTeachingManager(user?.uid ?? '', canViewAllSubjects);
 
@@ -7425,72 +7387,6 @@ export default function ExamManager() {
     await calculateRoomScores(roomId, round, { includeGraded: true });
   }, [calculateRoomScores]);
 
-  // Suspicious-activity alert on the room card: flips the card to show the
-  // student's name + reads it aloud every time any attempt's suspiciousActivities
-  // counter goes up (tab-switch detected in StudentExamPage). Keyed per attempt so
-  // the first snapshot (existing counts) never fires — only later increments do.
-  // Each room holds a FIFO queue (not a single slot) so a busy room with several
-  // students switching close together shows them one at a time instead of either
-  // dropping later ones or getting stuck re-showing the same slot forever.
-  const [cardAlerts, setCardAlerts] = useState<Record<string, Array<{ studentName: string; key: number }>>>({});
-  const alertTimerActiveRef = useRef<Record<string, boolean>>({});
-  const prevSuspiciousRef = useRef<Map<string, number>>(new Map());
-
-  const scheduleAlertShift = useCallback((roomId: string) => {
-    window.setTimeout(() => {
-      setCardAlerts((prev) => {
-        const queue = prev[roomId];
-        if (!queue || queue.length === 0) {
-          alertTimerActiveRef.current[roomId] = false;
-          return prev;
-        }
-        const rest = queue.slice(1);
-        if (rest.length === 0) {
-          alertTimerActiveRef.current[roomId] = false;
-          const next = { ...prev };
-          delete next[roomId];
-          return next;
-        }
-        scheduleAlertShift(roomId);
-        return { ...prev, [roomId]: rest };
-      });
-    }, 6000);
-  }, []);
-
-  useEffect(() => {
-    // Proctoring-only alert — a student's own device must never speak their own
-    // suspicious-activity count back at them.
-    if (isStudent) return;
-    attempts.forEach((att) => {
-      const prevCount = prevSuspiciousRef.current.get(att.id);
-      const currentCount = att.suspiciousActivities ?? 0;
-      if (prevCount !== undefined && currentCount > prevCount) {
-        const room = rooms.find((r) => r.id === att.roomId);
-        const classStudents = room?.classId ? teachingMgr.getStudentsForClass(room.classId) : [];
-        const roomAttempts = attempts.filter((a) => a.roomId === att.roomId);
-        const displayNameByKey = buildStudentDisplayNameByIdentityKey(classStudents, roomAttempts);
-        const studentName = resolveAttemptDisplayName(att, displayNameByKey);
-        const alertKey = Date.now();
-        setCardAlerts((prev) => ({
-          ...prev,
-          [att.roomId]: [...(prev[att.roomId] ?? []), { studentName, key: alertKey }],
-        }));
-        if (!alertTimerActiveRef.current[att.roomId]) {
-          alertTimerActiveRef.current[att.roomId] = true;
-          scheduleAlertShift(att.roomId);
-        }
-
-        try {
-          const utterance = new SpeechSynthesisUtterance(`นักเรียน ${studentName} สลับหน้าจอ`);
-          utterance.lang = 'th-TH';
-          window.speechSynthesis?.speak(utterance);
-        } catch (err) {
-          console.warn('[ExamManager] speech synthesis failed:', err);
-        }
-      }
-      prevSuspiciousRef.current.set(att.id, currentCount);
-    });
-  }, [attempts, rooms, teachingMgr, isStudent, scheduleAlertShift]);
   const [showStudentIntroPopup, setShowStudentIntroPopup] = useState(false);
   useEffect(() => {
     if (!isStudent) return;
@@ -8793,8 +8689,6 @@ export default function ExamManager() {
                           onOpenSettings={(tab) => { setDetailRoom(room); setDetailRoomTab(tab); }}
                           canEdit={canEdit}
                           canDelete={canDelete}
-                          alert={cardAlerts[room.id]?.[0] ?? null}
-                          alertQueueCount={cardAlerts[room.id]?.length}
                           onUpdateRoom={updateRoom}
                           attempts={getAttemptsForRoom(room.id)}
                           loadRoomAttempts={loadRoomAttempts}
@@ -8862,8 +8756,6 @@ export default function ExamManager() {
                             }}
                             canEdit={canEdit}
                             canDelete={canDelete}
-                            alert={!isStudent ? cardAlerts[room.id]?.[0] ?? null : null}
-                            alertQueueCount={!isStudent ? cardAlerts[room.id]?.length : undefined}
                             onUpdateRoom={updateRoom}
                             attempts={getAttemptsForRoom(room.id)}
                             loadRoomAttempts={loadRoomAttempts}

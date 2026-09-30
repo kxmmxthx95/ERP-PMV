@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -399,30 +399,26 @@ function ResultScreen({
 
 // ── Exam Interface ────────────────────────────────────────────────────────────
 function ExamInterface({
-  room, roomId, attemptId, questions, answers, suspiciousActivities, endTime, startedAt, examPdfParts, answerSheetGroups,
-  onAnswer, onSubmit, onRecordSuspicious, isLoadingQuestions, readOnly = false, onExitReview,
+  room, roomId, attemptId, questions, answers, endTime, startedAt, examPdfParts, answerSheetGroups,
+  onAnswer, onSubmit, isLoadingQuestions, readOnly = false, onExitReview,
 }: {
   room: any;
   roomId: string;
   attemptId: string;
   questions: any[];
   answers: Record<string, string>;
-  suspiciousActivities: number;
   endTime: number;
   startedAt: number;
   examPdfParts: ExamPdfPart[];
   answerSheetGroups: ExamAnswerSheetGroup[];
   onAnswer: (qId: string, value: string) => void;
   onSubmit: (options?: { force?: boolean }) => void;
-  onRecordSuspicious: () => void;
   isLoadingQuestions?: boolean;
   readOnly?: boolean;
   onExitReview?: () => void;
 }) {
 
   const [currentIdx, setCurrentIdx] = useState(0);
-  const [showWarning, setShowWarning] = useState(false);
-  const [warningMsg, setWarningMsg] = useState('');
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [pdfPanelMode, setPdfPanelMode] = useState<'pdf' | 'answers'>('pdf');
@@ -432,8 +428,6 @@ function ExamInterface({
   const [pdfLoading, setPdfLoading] = useState(true);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
-  const suppressSuspiciousRef = useRef(false);
-  const suppressSuspiciousUntilRef = useRef(0);
   const answerSheetPartGroups = useMemo(
     () => answerSheetGroups.map((group) => ({
       partLabel: group.partLabel,
@@ -460,7 +454,6 @@ function ExamInterface({
     setPdfError(null);
   }, []);
 
-  const hasAutoSubmittedRef = useRef(false);
   const { mm, ss, isUrgent, isExpired } = useCountdown(endTime);
   const [submitWaitSeconds, setSubmitWaitSeconds] = useState(() => getExamSubmitWaitSeconds(startedAt));
   const canSubmitManually = canSubmitExamManually(startedAt);
@@ -479,50 +472,6 @@ function ExamInterface({
     }
     setShowSubmitConfirm(true);
   }, [startedAt, submitWaitSeconds]);
-
-  const handleCameraSessionChange = useCallback((active: boolean) => {
-    if (active) {
-      suppressSuspiciousRef.current = true;
-      suppressSuspiciousUntilRef.current = Date.now() + 6000;
-      return;
-    }
-    suppressSuspiciousUntilRef.current = Date.now() + 2000;
-    window.setTimeout(() => {
-      if (Date.now() >= suppressSuspiciousUntilRef.current) {
-        suppressSuspiciousRef.current = false;
-      }
-    }, 2100);
-  }, []);
-
-  // Anti-cheat
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden) {
-        if (readOnly || suppressSuspiciousRef.current || Date.now() < suppressSuspiciousUntilRef.current) {
-          return;
-        }
-        const nextSuspiciousCount = suspiciousActivities + 1;
-        onRecordSuspicious();
-
-        if (nextSuspiciousCount > 2 && !hasAutoSubmittedRef.current) {
-          hasAutoSubmittedRef.current = true;
-          setWarningMsg('ตรวจพบการสลับหน้าจอเกิน 2 ครั้ง ระบบจะส่งข้อสอบอัตโนมัติ');
-          setShowWarning(true);
-          setTimeout(() => {
-            setShowWarning(false);
-            onSubmit({ force: true });
-          }, 1500);
-          return;
-        }
-
-        setWarningMsg(`ตรวจพบการสลับหน้าจอ (ครั้งที่ ${nextSuspiciousCount})`);
-        setShowWarning(true);
-        setTimeout(() => setShowWarning(false), 4000);
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [onRecordSuspicious, onSubmit, readOnly, suspiciousActivities]);
 
   useEffect(() => {
     const blockCtx = (e: MouseEvent) => e.preventDefault();
@@ -609,20 +558,6 @@ function ExamInterface({
       )}
     >
       <ExamBackground />
-
-      {/* ── Warning toast ── */}
-      <AnimatePresence>
-        {showWarning && (
-          <motion.div
-            initial={{ opacity: 0, y: -40, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -40 }}
-            className="fixed top-8 left-1/2 -translate-x-1/2 z-[100] px-6 py-3.5 rounded-[2rem] flex items-center gap-3 border border-red-200 bg-red-600/95 backdrop-blur-xl"
-            style={{ background: '#be123c', border: '1px solid #fb7185' }}
-          >
-            <ShieldAlert size={18} className="text-white animate-pulse" />
-            <p className="text-[14px] font-black font-sukhumvit text-white">{warningMsg}</p>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* ── Top Header ── */}
       <div className={cn('z-50 shrink-0', hasPdfExam ? 'relative' : 'sticky top-0')}>
@@ -770,7 +705,6 @@ function ExamInterface({
               onAnswer={onAnswer}
               roomId={roomId}
               attemptId={attemptId}
-              onCameraSessionChange={handleCameraSessionChange}
               className="min-h-0 flex-1"
             />
           </div>
@@ -813,7 +747,6 @@ function ExamInterface({
                     roomId={roomId}
                     attemptId={attemptId}
                     onSave={onAnswer}
-                    onCameraSessionChange={handleCameraSessionChange}
                   />
                 ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1119,7 +1052,7 @@ export default function StudentExamPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
   const { user, isLoading: authLoading } = useAuth();
-  const { attempt, room, roomPreview, questions, examPdfParts, answerSheetGroups, isJoining, isLoadingQuestions, error, joinRoom, saveAnswer, recordSuspicious, submitAttempt, isSubmitted } = useExamAttempt(roomId || '');
+  const { attempt, room, roomPreview, questions, examPdfParts, answerSheetGroups, isJoining, isLoadingQuestions, error, joinRoom, saveAnswer, submitAttempt, isSubmitted } = useExamAttempt(roomId || '');
 
   // If no roomId in URL, redirect to portal
   useEffect(() => {
@@ -1180,14 +1113,12 @@ export default function StudentExamPage() {
       attemptId={attempt.id}
       questions={questions}
       answers={attempt.answers}
-      suspiciousActivities={attempt.suspiciousActivities}
       endTime={room.endTime}
       startedAt={attempt.startedAt}
       examPdfParts={examPdfParts}
       answerSheetGroups={answerSheetGroups}
       onAnswer={saveAnswer}
       onSubmit={handleSubmit}
-      onRecordSuspicious={recordSuspicious}
       isLoadingQuestions={isLoadingQuestions}
     />
   );

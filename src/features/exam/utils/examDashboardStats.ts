@@ -13,7 +13,6 @@ export interface ExamDashboardStats {
     graded: number;
     pendingGrading: number;
     pendingManual: number;
-    suspicious: number;
   };
   gradeBookLinked: number;
   scoredPercents: number[];
@@ -24,7 +23,6 @@ export interface ExamDashboardStats {
     room: ExamRoom;
     inProgress: number;
     submitted: number;
-    suspicious: number;
   }>;
   recentRooms: ExamRoom[];
   subjectBreakdown: Array<{ subjectName: string; count: number }>;
@@ -139,7 +137,6 @@ export function buildExamDashboardStats(
       (att) => att.status === 'submitted' && resolveAttemptTotalScore(att) === null,
     ).length,
     pendingManual: attempts.filter((att) => att.pendingManualGrading === true).length,
-    suspicious: attempts.filter((att) => (att.suspiciousActivities ?? 0) >= 1).length,
   };
 
   const gradeBookLinked = rooms.filter(
@@ -178,10 +175,9 @@ export function buildExamDashboardStats(
         submitted: roomAttempts.filter(
           (att) => att.status === 'submitted' || att.status === 'graded',
         ).length,
-        suspicious: roomAttempts.filter((att) => (att.suspiciousActivities ?? 0) >= 1).length,
       };
     })
-    .sort((a, b) => b.inProgress - a.inProgress || b.suspicious - a.suspicious);
+    .sort((a, b) => b.inProgress - a.inProgress);
 
   const recentRooms = [...rooms]
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))

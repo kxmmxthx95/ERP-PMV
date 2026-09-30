@@ -5,13 +5,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 import {
   HiOutlineDocumentText,
+  HiOutlinePrinter,
   HiPencilSquare,
   HiXMark,
   HiHomeModern,
   HiAcademicCap,
   HiChevronLeft,
 } from 'react-icons/hi2';
-import { HEADER_ICON_BTN } from '@/lib/headerIconBtn';
+import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
 import { ROLL_CALL_OPTIONS } from '@/features/attendance/rollCallUi';
 import {
   ExamMobileFilterDrawer,
@@ -898,18 +899,40 @@ export default function MorningRollCallPage() {
         <>
           {headerRightPortalEl &&
             createPortal(
-              <ExamMobileFilterTriggerButton
-                onClick={() => setReportFilterOpen(true)}
-                hasActiveFilters={hasActiveReportFilter}
-              />,
+              <div className={cn('flex', HEADER_ICON_BTN_GROUP)}>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className={HEADER_ICON_BTN}
+                  title="พิมพ์สรุปการเข้าแถว"
+                  aria-label="พิมพ์สรุปการเข้าแถว"
+                >
+                  <HiOutlinePrinter size={16} />
+                </button>
+                <ExamMobileFilterTriggerButton
+                  onClick={() => setReportFilterOpen(true)}
+                  hasActiveFilters={hasActiveReportFilter}
+                />
+              </div>,
               headerRightPortalEl,
             )}
           {headerMobileActionsEl &&
             createPortal(
-              <ExamMobileFilterTriggerButton
-                onClick={() => setReportFilterOpen(true)}
-                hasActiveFilters={hasActiveReportFilter}
-              />,
+              <div className={cn('flex', HEADER_ICON_BTN_GROUP)}>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className={HEADER_ICON_BTN}
+                  title="พิมพ์สรุปการเข้าแถว"
+                  aria-label="พิมพ์สรุปการเข้าแถว"
+                >
+                  <HiOutlinePrinter size={16} />
+                </button>
+                <ExamMobileFilterTriggerButton
+                  onClick={() => setReportFilterOpen(true)}
+                  hasActiveFilters={hasActiveReportFilter}
+                />
+              </div>,
               headerMobileActionsEl,
             )}
         </>
@@ -1053,6 +1076,44 @@ export default function MorningRollCallPage() {
                     )}
                   </div>
                   )}
+                </div>
+              )}
+
+              {activeTab === 'report' && !isLoadingReport && (
+                <div id="printable-area" className="hidden print:block">
+                  <h2 className="mb-1 text-base font-black text-slate-800">
+                    สรุปการเข้าแถว {selectedClass?.className}
+                  </h2>
+                  <p className="mb-4 text-xs text-slate-500">
+                    {reportFrom || '—'} ถึง {reportTo || '—'}
+                  </p>
+                  <table className="w-full border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-300 text-left">
+                        <th className="py-1.5 pr-2">รหัส</th>
+                        <th className="py-1.5 pr-2">ชื่อ-สกุล</th>
+                        <th className="py-1.5 pr-2 text-center">มา</th>
+                        <th className="py-1.5 pr-2 text-center">ขาด</th>
+                        <th className="py-1.5 pr-2 text-center">สาย</th>
+                        <th className="py-1.5 pr-2 text-center">ลา</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportStudentSummaries.map((student) => (
+                        <tr
+                          key={student.studentId || `${student.studentName}-${student.studentCode}`}
+                          className="border-b border-slate-100"
+                        >
+                          <td className="py-1 pr-2">{student.studentCode}</td>
+                          <td className="py-1 pr-2">{student.studentName}</td>
+                          <td className="py-1 pr-2 text-center">{student.present}</td>
+                          <td className="py-1 pr-2 text-center">{student.absent}</td>
+                          <td className="py-1 pr-2 text-center">{student.late}</td>
+                          <td className="py-1 pr-2 text-center">{student.leave}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

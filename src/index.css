@@ -238,3 +238,21 @@
   }
 }
 
+/* ── Print-only area: ซ่อนทั้งแอป เหลือแค่ #printable-area ตอนสั่งพิมพ์
+   ใช้ร่วมกับ window.print() — ดู MorningRollCallPage summary tab ── */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #printable-area,
+  #printable-area * {
+    visibility: visible;
+  }
+  #printable-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+}
+

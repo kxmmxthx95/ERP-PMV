@@ -37,14 +37,15 @@ function sortTemplates(rows: BehaviorTemplate[]): BehaviorTemplate[] {
   });
 }
 
-function buildCatalogWriteData(input: Partial<NewBehaviorTemplate>): Record<string, unknown> {
+function buildCatalogWriteData(input: Partial<NewBehaviorTemplate>, isCreate = false): Record<string, unknown> {
   const { severity, type, ...rest } = input;
   const data: Record<string, unknown> = { ...rest };
 
   if (type !== undefined) data.type = type;
 
   if (type === 'positive') {
-    data.severity = deleteField();
+    // deleteField() is invalid in tx.set() (create) — just omit the field there
+    if (!isCreate) data.severity = deleteField();
   } else if (type === 'negative' || severity !== undefined) {
     data.severity = severity ?? 'medium';
   }
@@ -88,7 +89,7 @@ export function useBehaviorCatalogActions() {
     const ref = doc(collection(db, CATALOG_COL));
     await runTransaction(db, async (tx) => {
       tx.set(ref, {
-        ...buildCatalogWriteData(input),
+        ...buildCatalogWriteData(input, true),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });

@@ -20,7 +20,7 @@ import {
   HiChevronLeft,
   HiPlus,
   HiAcademicCap,
-  HiArrowDownTray,
+  HiOutlineDocumentArrowDown,
 } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -38,7 +38,7 @@ import { StudentDetailFormTab } from './components/StudentDetailFormTab';
 import { compressImage } from './components/studentDetailFormShared';
 import StudentAvatar from './components/StudentAvatar';
 import StudentImportChooser from './components/StudentImportChooser';
-import { exportStudentsToExcel } from './utils/studentExport';
+import StudentExportDialog from './components/StudentExportDialog';
 import GradeBookClassSidebar from '@/features/grades/components/GradeBookClassSidebar';
 import StudentMobileListBrowse from './components/StudentMobileListBrowse';
 import SidebarCollapseButton from '@/features/grades/components/SidebarCollapseButton';
@@ -107,7 +107,7 @@ export default function StudentManager() {
   const { homeDepartment, browseVisibleDepartments, isDeptScoped } = useBrowseVisibleDepartments();
 
   const {
-    filteredStudentCards, stats, filter, setFilter,
+    filteredStudentCards, getYearStudentCards, stats, filter, setFilter,
     classrooms,
     addStudent, updateStudent, deleteStudent, toggleStudentStatus,
     getStudentById,
@@ -115,16 +115,12 @@ export default function StudentManager() {
 
   const [headerCenterMobileEl, setHeaderCenterMobileEl] = useState<HTMLElement | null>(null);
   const [headerMobileBackEl, setHeaderMobileBackEl] = useState<HTMLElement | null>(null);
-  const [headerRightActionsEl, setHeaderRightActionsEl] = useState<HTMLElement | null>(null);
-  const [headerMobileActionsEl, setHeaderMobileActionsEl] = useState<HTMLElement | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMdOrBelow, setIsMdOrBelow] = useState(() => window.innerWidth < 1024);
 
   useEffect(() => {
     setHeaderCenterMobileEl(document.getElementById('header-portal-center-mobile'));
     setHeaderMobileBackEl(document.getElementById('header-portal-mobile-back'));
-    setHeaderRightActionsEl(document.getElementById('header-portal-right-actions'));
-    setHeaderMobileActionsEl(document.getElementById('header-portal-mobile-actions'));
   }, []);
 
   useEffect(() => {
@@ -145,6 +141,16 @@ export default function StudentManager() {
   const [editingStudent] = useState<Student | null>(null);
   const [csvModalOpen, setCsvModalOpen] = useState(false);
   const [importChooserOpen, setImportChooserOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportCards = useMemo(
+    () => (exportOpen
+      ? getYearStudentCards().filter((c) => {
+          const dept = inferDepartmentFromGrade(c.currentGrade);
+          return dept ? shouldCountDepartment(dept, homeDepartment, isDeptScoped) : !isDeptScoped;
+        })
+      : []),
+    [exportOpen, getYearStudentCards, homeDepartment, isDeptScoped],
+  );
   const [activeTab, setActiveTab] = useState<StudentTab>('list');
   const [mobileTabMenuOpen, setMobileTabMenuOpen] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>('personal');
@@ -690,36 +696,6 @@ export default function StudentManager() {
         headerMobileBackEl,
       )}
 
-      {activeTab === 'list' && !selectedStudent && headerMobileActionsEl && createPortal(
-        <div className={cn('pointer-events-auto relative flex lg:hidden', HEADER_ICON_BTN_GROUP)}>
-          <button
-            type="button"
-            onClick={() => exportStudentsToExcel(filteredStudentCards)}
-            className={HEADER_ICON_BTN}
-            title="ออกข้อมูลนักเรียนเป็น Excel"
-            aria-label="ออกข้อมูลนักเรียนเป็น Excel"
-          >
-            <HiArrowDownTray size={16} />
-          </button>
-        </div>,
-        headerMobileActionsEl,
-      )}
-
-      {activeTab === 'list' && !selectedStudent && headerRightActionsEl && createPortal(
-        <div className={cn('pointer-events-auto hidden lg:flex', HEADER_ICON_BTN_GROUP)}>
-          <button
-            type="button"
-            onClick={() => exportStudentsToExcel(filteredStudentCards)}
-            className={HEADER_ICON_BTN}
-            title="ออกข้อมูลนักเรียนเป็น Excel"
-            aria-label="ออกข้อมูลนักเรียนเป็น Excel"
-          >
-            <HiArrowDownTray size={16} />
-          </button>
-        </div>,
-        headerRightActionsEl,
-      )}
-
     <div
       className={cn(
         'relative flex min-h-0 flex-col font-sukhumvit',
@@ -823,6 +799,17 @@ export default function StudentManager() {
                           aria-label="นำเข้านักเรียน"
                         >
                           <HiPlus size={16} />
+                        </button>
+                      )}
+                      {!sidebarCollapsed && (
+                        <button
+                          type="button"
+                          onClick={() => setExportOpen(true)}
+                          className={HEADER_ICON_BTN}
+                          title="นำออกไฟล์รายชื่อ"
+                          aria-label="นำออกไฟล์รายชื่อ"
+                        >
+                          <HiOutlineDocumentArrowDown size={16} />
                         </button>
                       )}
                       <SidebarCollapseButton
@@ -1374,6 +1361,13 @@ export default function StudentManager() {
           </div>
         </div>
       )}
+
+      <StudentExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        cards={exportCards}
+        year={filter.academicYearId}
+      />
 
       <StudentImportChooser
         open={importChooserOpen}

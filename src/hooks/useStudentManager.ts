@@ -279,15 +279,15 @@ export function useStudentManager(defaultYear?: string) {
       (e) => e.studentId === studentId && enrollmentMatchesYear(e, filter.academicYearId),
     ) ?? null;
 
-  const filteredStudentCards = useMemo((): StudentCard[] => {
+  const buildStudentCards = useCallback((f: StudentFilter): StudentCard[] => {
     // 1. กรอง Enrollments ตามปี, แผนก, ชั้น, ห้อง
     const matchingEnrollments = enrollments.filter((e) => {
-      if (!enrollmentMatchesYear(e, filter.academicYearId)) return false;
-      if (filter.gradeLevel && e.gradeLevel !== filter.gradeLevel) return false;
-      if (filter.classId && e.classId !== filter.classId) return false;
+      if (!enrollmentMatchesYear(e, f.academicYearId)) return false;
+      if (f.gradeLevel && e.gradeLevel !== f.gradeLevel) return false;
+      if (f.classId && e.classId !== f.classId) return false;
       
-      if (filter.department) {
-        const gradesInDept = GRADE_ORDER[filter.department] || [];
+      if (f.department) {
+        const gradesInDept = GRADE_ORDER[f.department] || [];
         if (!gradesInDept.includes(e.gradeLevel)) return false;
       }
       return true;
@@ -308,24 +308,24 @@ export function useStudentManager(defaultYear?: string) {
       let isYearMatch = false;
       if (sData.classroomId) {
         const cls = classrooms.find(c => c.id === sData.classroomId);
-        if (cls && (String(cls.academicYearId) === filter.academicYearId || String(cls.academicYear) === filter.academicYearId)) {
+        if (cls && (String(cls.academicYearId) === f.academicYearId || String(cls.academicYear) === f.academicYearId)) {
           isYearMatch = true;
         }
-      } else if (filter.academicYearId && String(currentYear) === filter.academicYearId) {
+      } else if (f.academicYearId && String(currentYear) === f.academicYearId) {
         isYearMatch = true;
       }
 
       if (isYearMatch) {
         // MUST still validate other filters
         // เช็คแผนก
-        if (filter.department) {
-          const gradesInDept = GRADE_ORDER[filter.department] || [];
+        if (f.department) {
+          const gradesInDept = GRADE_ORDER[f.department] || [];
           if (!gradesInDept.includes(sData.gradeLevel)) return false;
         }
         // เช็คชั้น
-        if (filter.gradeLevel && sData.gradeLevel !== filter.gradeLevel) return false;
+        if (f.gradeLevel && sData.gradeLevel !== f.gradeLevel) return false;
         // เช็คห้อง
-        if (filter.classId && (sData.classroomId !== filter.classId && sData.classId !== filter.classId)) return false;
+        if (f.classId && (sData.classroomId !== f.classId && sData.classId !== f.classId)) return false;
         
         return true;
       }
@@ -337,9 +337,9 @@ export function useStudentManager(defaultYear?: string) {
       .filter(s => {
         // นักเรียนที่จบการศึกษาหรือย้ายออกแล้ว ไม่แสดงในรายชื่อ
         if (!isStudyingStudent(s)) return false;
-        if (filter.status && s.status !== filter.status) return false;
-        if (filter.searchText) {
-          const q = filter.searchText.toLowerCase();
+        if (f.status && s.status !== f.status) return false;
+        if (f.searchText) {
+          const q = f.searchText.toLowerCase();
           const fullName = `${s.prefix}${s.firstName} ${s.lastName}`.toLowerCase();
           const studentCode = s.studentCode ? String(s.studentCode).toLowerCase() : '';
           if (!fullName.includes(q) && !studentCode.includes(q)) return false;
@@ -347,7 +347,9 @@ export function useStudentManager(defaultYear?: string) {
         return true;
       })
       .map(s => {
-        const enrollment = getEnrollment(s.id);
+        const enrollment = enrollments.find(
+          (e) => e.studentId === s.id && enrollmentMatchesYear(e, f.academicYearId),
+        ) ?? null;
         const sData = s as Student & {
           className?: string;
           classroomId?: string;
@@ -362,7 +364,7 @@ export function useStudentManager(defaultYear?: string) {
             sData,
             enrollment,
             classrooms,
-            filter.academicYearId,
+            f.academicYearId,
           ),
           currentGrade: enrollment?.gradeLevel || sData.gradeLevel || null,
         };
@@ -372,8 +374,15 @@ export function useStudentManager(defaultYear?: string) {
         const codeB = b.student.studentCode || '';
         return codeA.localeCompare(codeB, undefined, { numeric: true });
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [students, enrollments, classrooms, filter]);
+  }, [students, enrollments, classrooms]);
+
+  const filteredStudentCards = useMemo(() => buildStudentCards(filter), [buildStudentCards, filter]);
+
+  // ทุกคนในปีที่เลือก ไม่สนตัวกรองในหน้า — ใช้กับ export
+  const getYearStudentCards = useCallback(
+    () => buildStudentCards({ ...filter, department: '', gradeLevel: '', classId: '', searchText: '', status: '' }),
+    [buildStudentCards, filter],
+  );
 
   const visibleStudentCards = useMemo((): StudentCard[] => {
     const hasExtraFilters = !!(filter.searchText || filter.status || filter.department || filter.gradeLevel || filter.classId);
@@ -391,7 +400,9 @@ export function useStudentManager(defaultYear?: string) {
           gradeLevel?: string;
           roomNumber?: string;
         };
-        const enrollment = getEnrollment(s.id);
+        const enrollment = enrollments.find(
+          (e) => e.studentId === s.id && enrollmentMatchesYear(e, filter.academicYearId),
+        ) ?? null;
         return {
           student: s,
           enrollment,
@@ -451,6 +462,7 @@ export function useStudentManager(defaultYear?: string) {
     enrollments,
     classrooms,
     filteredStudentCards: visibleStudentCards,
+    getYearStudentCards,
     stats,
     isDataLoaded,
 

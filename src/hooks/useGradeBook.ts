@@ -169,15 +169,31 @@ export function useGradeBook() {
 
     try {
       // ── 1. อ่าน GradeWeightConfig (1 doc read) ────────────────────────────────
+      // doc id ต้องไม่ผูกกับรายชื่อนักเรียน ไม่งั้นฝั่งนักเรียนอ่าน config คนละ doc กับครู
+      const configId = makeConfigKey(params.subjectId, params.classId, params.academicYearId, params.semester);
       let cfg: GradeWeightConfig;
-      const cfgRef = doc(db, 'grade_configs', key);
+      const cfgRef = doc(db, 'grade_configs', configId);
       const cfgSnap = await getDoc(cfgRef).catch(() => null);
 
+      // legacy: doc เก่า id = configId::studentSig → ใช้ตัวล่าสุดแล้ว migrate ไป configId
+      const legacySnap = cfgSnap?.exists() ? null : await getDocs(query(
+        collection(db, 'grade_configs'),
+        where('classId', '==', params.classId),
+        where('academicYearId', '==', params.academicYearId),
+        where('semester', '==', params.semester),
+      )).catch(() => null);
+      const legacyCfg = (legacySnap?.docs ?? [])
+        .map(d => d.data() as GradeWeightConfig)
+        .filter(c => c.subjectId === params.subjectId)
+        .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0];
+
       if (cfgSnap?.exists()) {
-        cfg = { id: cfgSnap.id, ...cfgSnap.data() } as GradeWeightConfig;
+        cfg = { ...cfgSnap.data(), id: cfgSnap.id } as GradeWeightConfig;
+      } else if (legacyCfg) {
+        cfg = { ...legacyCfg, id: configId };
       } else {
         cfg = {
-          id: key,
+          id: configId,
           subjectId: params.subjectId,
           classId: params.classId,
           academicYearId: params.academicYearId,

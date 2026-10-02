@@ -69,6 +69,17 @@ export function resolveAttemptObjectiveScoreDisplay(
   };
 }
 
+/** Whether online exam room scores should flow into the grade table (teacher + student views share this). */
+export function shouldSyncExamRoomScores(room: ExamRoom): boolean {
+  if (room.settings?.scoreCollectionLinked === false) return false;
+  if (room.settings?.scoreCollectionEnabled === true) return true;
+  if (room.settings?.scoreCollectionEnabled === false) return false;
+  return (
+    (room.settings?.gradeBookSubjects?.length ?? 0) > 0
+    || !!room.settings?.gradeBookSubjectId
+  );
+}
+
 export function attemptScorePercent(room: ExamRoom, attempt: ExamAttempt): number | null {
   const display = resolveAttemptScoreDisplay(room, attempt);
   return display.percent;

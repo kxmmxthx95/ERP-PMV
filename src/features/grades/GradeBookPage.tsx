@@ -80,7 +80,7 @@ import {
   resolveCanonicalStudentId,
   scoreCollectionTypeToGradeField,
 } from '@/lib/students/studentIdentity';
-import { attemptScorePercent, getBestPercentByStudent } from '@/lib/exam/examRoomScoring';
+import { attemptScorePercent, getBestPercentByStudent, shouldSyncExamRoomScores } from '@/lib/exam/examRoomScoring';
 import { resolveAttemptTotalScore } from '@/lib/exam/manualEssayGrading';
 import { PORTAL_MENU_TITLES } from '@/lib/portalMenu';
 import type { Exam, ExamScore, ExamType } from '@/types/teaching';
@@ -217,17 +217,6 @@ function ExamCardsSkeleton({ count = 4 }: { count?: number }) {
         <Skeleton key={i} className="h-28 rounded-2xl bg-slate-100" />
       ))}
     </div>
-  );
-}
-
-/** Whether online exam room scores should flow into the grade table. */
-function shouldSyncExamRoomScores(room: ExamRoom): boolean {
-  if (room.settings?.scoreCollectionLinked === false) return false;
-  if (room.settings?.scoreCollectionEnabled === true) return true;
-  if (room.settings?.scoreCollectionEnabled === false) return false;
-  return (
-    (room.settings?.gradeBookSubjects?.length ?? 0) > 0
-    || !!room.settings?.gradeBookSubjectId
   );
 }
 

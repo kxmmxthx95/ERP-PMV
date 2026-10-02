@@ -10,7 +10,6 @@ import { useAuth } from '@/hooks/useAuth';
 import { normalizeExamScore } from '@/lib/students/studentIdentity';
 import { useStudentGradeBook, type StudentSubjectGradeCard } from '@/hooks/useStudentGradeBook';
 import { StudentExamScoreDetailDrawer } from '@/features/exam/components/StudentExamScoreDetailDrawer';
-import StudentSubjectAttendanceDrawer from '@/features/grades/components/StudentSubjectAttendanceDrawer';
 import { attemptScorePercent } from '@/lib/exam/examRoomScoring';
 import { rawPointsToPercent, isPassFailSubjectCategory } from '@/types/grades';
 import type { PassFailResult } from '@/types/grades';
@@ -52,13 +51,6 @@ type StudentExamCard = {
   attemptsByRound?: Map<number, ExamAttempt>;
   roundNumbers?: number[];
 };
-
-function attendanceTone(pct: number | null): { text: string; bg: string } {
-  if (pct === null) return { text: '#94a3b8', bg: '#f1f5f9' };
-  if (pct >= 80) return { text: '#059669', bg: '#d1fae5' };
-  if (pct >= 60) return { text: '#d97706', bg: '#fef3c7' };
-  return { text: '#e11d48', bg: '#ffe4e6' };
-}
 
 const GRADE_POINTS: Record<string, number> = {
   A: 4, 'B+': 3.5, B: 3, 'C+': 2.5, C: 2, 'D+': 1.5, D: 1, F: 0,
@@ -216,7 +208,7 @@ function SubjectStat({
 
 export default function StudentGradeBookPanel() {
   const { user } = useAuth();
-  const { loading, error, student, classRoom, subjectCards, academicYear, yearStartDate, yearEndDate, reload } = useStudentGradeBook();
+  const { loading, error, student, classRoom, subjectCards, academicYear, reload } = useStudentGradeBook();
 
   const gpaSem1 = useMemo(() => calcGpaForSemester(subjectCards, 1), [subjectCards]);
   const gpaSem2 = useMemo(() => calcGpaForSemester(subjectCards, 2), [subjectCards]);
@@ -231,7 +223,6 @@ export default function StudentGradeBookPanel() {
   const [drawerRoom, setDrawerRoom] = useState<ExamRoom | null>(null);
   const drawerAttemptsByRound = useMemo(() => new Map<number, ExamAttempt>(), []);
   const drawerRoundNumbers = useMemo(() => [] as number[], []);
-  const [attendanceDrawerSubject, setAttendanceDrawerSubject] = useState<StudentSubjectGradeCard | null>(null);
 
   const [isMdOrBelow, setIsMdOrBelow] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false,
@@ -603,7 +594,6 @@ export default function StudentGradeBookPanel() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {subjectCards.map((card) => {
                 const isPassFail = isPassFailSubjectCategory(card.category);
-                const attTone = attendanceTone(card.attendancePct);
                 const formattedGrade = formatGradeDisplay(card.grade);
                 const grTone = isPassFail
                   ? passFailTone(card.result)
@@ -662,13 +652,7 @@ export default function StudentGradeBookPanel() {
                       {card.subjectName}
                     </p>
 
-                    <div className="relative grid grid-cols-2 gap-2 pt-1">
-                      <SubjectStat
-                        label="เข้าเรียน"
-                        value={card.attendancePct !== null ? `${card.attendancePct}%` : '—'}
-                        tone={attTone}
-                        onClick={() => setAttendanceDrawerSubject(card)}
-                      />
+                    <div className="relative grid grid-cols-1 gap-2 pt-1">
                       <SubjectStat
                         label={isPassFail ? 'ผลการเรียน' : 'เกรด'}
                         value={
@@ -797,15 +781,6 @@ export default function StudentGradeBookPanel() {
         />
       )}
 
-      <StudentSubjectAttendanceDrawer
-        open={!!attendanceDrawerSubject}
-        onClose={() => setAttendanceDrawerSubject(null)}
-        subject={attendanceDrawerSubject}
-        studentId={student?.id ?? null}
-        academicYearId={academicYear ? String(academicYear) : null}
-        yearStartDate={yearStartDate}
-        yearEndDate={yearEndDate}
-      />
     </div>
   );
 }

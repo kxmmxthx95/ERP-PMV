@@ -38,7 +38,7 @@ import {
   buildStudentLookup,
   resolveStudentsByFeeIds,
 } from '@/features/tuition/utils/studentFeeDisplay';
-import { getBestPercentByStudent } from '@/lib/exam/examRoomScoring';
+import { getBestPercentByStudent, shouldSyncExamRoomScores } from '@/lib/exam/examRoomScoring';
 import {
   buildStudentIdentityLookup,
   findScoreRecordForStudent,
@@ -167,16 +167,6 @@ function mergeOnlineIntoScores(
 
 function courseMatchesSemester(ec: EnrolledCourse, semester: 1 | 2): boolean {
   return ec.semester == null || Number(ec.semester) === Number(semester);
-}
-
-function shouldSyncExamRoomScores(room: ExamRoom): boolean {
-  if (room.settings?.scoreCollectionLinked === false) return false;
-  if (room.settings?.scoreCollectionEnabled === true) return true;
-  if (room.settings?.scoreCollectionEnabled === false) return false;
-  return (
-    (room.settings?.gradeBookSubjects?.length ?? 0) > 0
-    || !!room.settings?.gradeBookSubjectId
-  );
 }
 
 function roomLinkedSubjectIds(room: ExamRoom): string[] {

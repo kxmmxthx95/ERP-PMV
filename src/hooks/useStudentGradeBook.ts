@@ -9,22 +9,28 @@ import { resolveStudentByAuthUser } from '@/lib/resolveStudentProfile';
 import { whenFirestoreGatewayOpen } from '@/lib/firestoreShared/bootstrap';
 import type { ClassRoom } from '@/types/class';
 import type { GradeLetter, GradeRecord, GradeWeightConfig, PassFailResult } from '@/types/grades';
-import type { AttendanceStatus, Exam, ExamScore } from '@/types/teaching';
+import type { Exam, ExamScore } from '@/types/teaching';
 import type { Student } from '@/types/student';
 import type { Subject } from '@/types/curriculum';
 import type { CurriculumCourse } from '@/types/curriculum';
 import type { ExamAttempt, ExamRoom } from '@/types/exam';
 import { CATEGORY_CONFIG } from '@/types/curriculum';
-import { calcStudentSubjectAttendancePct } from '@/features/grades/utils/studentSubjectAttendanceHistory';
 import {
   DEFAULT_THRESHOLDS,
   DEFAULT_WEIGHTS,
   rawPointsToPercent,
   averagePercentScores,
+  applyBonusToTotal,
 } from '@/types/grades';
-import { attemptScorePercent } from '@/lib/exam/examRoomScoring';
-import { scoreCollectionTypeToGradeField, normalizeExamScore } from '@/lib/students/studentIdentity';
-import { mergeOnlineExamScores } from '@/hooks/useGradeBook';
+import { attemptScorePercent, shouldSyncExamRoomScores } from '@/lib/exam/examRoomScoring';
+import {
+  buildStudentIdentityLookup,
+  findScoreRecordForStudent,
+  scoreCollectionTypeToGradeField,
+  normalizeExamScore,
+} from '@/lib/students/studentIdentity';
+import { mergeOnlineExamScores, calcGrade } from '@/hooks/useGradeBook';
+import { useGradingConfig } from '@/hooks/useGradingConfig';
 
 function looksLikeUnresolvedSubjectId(value: string): boolean {
   const trimmed = value.trim();
@@ -68,7 +74,6 @@ export interface StudentSubjectGradeCard {
   semester: 1 | 2;
   category: string;
   categoryLabel: string;
-  attendancePct: number | null;
   totalScore: number | null;
   grade: GradeLetter | null;
   credits: number;
@@ -78,48 +83,11 @@ export interface StudentSubjectGradeCard {
   className: string;
 }
 
-function calcAttendancePct(
-  studentId: string,
-  subjectId: string,
-  semester: 1 | 2,
-  sessions: Array<{
-    id?: string;
-    subjectId?: string;
-    semester?: 1 | 2;
-    date?: string;
-    period?: number;
-    attendance?: Array<{ studentId: string; status: AttendanceStatus; note?: string }>;
-  }>,
-  scheduleSlots: Array<{ day: number; period: number; subjectId?: string; semester?: 1 | 2 }>,
-  rangeStart: string,
-  rangeEnd: string,
-  academicYearId: string,
-): number | null {
-  const scopedSessions = sessions.map((session) => ({
-    id: session.id ?? `${session.date ?? ''}_${session.period ?? 0}`,
-    ...session,
-  }));
-  const scopedSlots = scheduleSlots
-    .filter((slot) => slot.subjectId === subjectId && (slot.semester ?? semester) === semester)
-    .map((slot) => ({ day: slot.day, period: slot.period }));
-
-  return calcStudentSubjectAttendancePct(
-    studentId,
-    subjectId,
-    semester,
-    scopedSessions,
-    scopedSlots,
-    rangeStart,
-    rangeEnd,
-    academicYearId,
-  );
-}
-
 export function useStudentGradeBook() {
   const { user, userData } = useAuth();
-  const { year: academicYear, activeYear } = useActiveAcademicYear();
-  const yearStartDate = activeYear?.startDate ?? '';
-  const yearEndDate = activeYear?.endDate ?? '';
+  const { year: academicYear } = useActiveAcademicYear();
+  const { config: gradingConfig } = useGradingConfig();
+  const bonusEnabled = gradingConfig.bonusScoreEnabled;
   const { subjects, isLoading: subjectsLoading } = useCurriculum();
   const { coursesByVersion, loadCoursesForVersion } = useCurriculumVersioned();
 
@@ -224,13 +192,13 @@ export function useStudentGradeBook() {
       const [
         sessionsSnap,
         gradeSnap,
-        schedulesSnap,
         configsSnap,
         examsSnap,
         examScoresSnap,
         roomsByClassSnap,
         roomsByGradeSnap,
         attemptsSnap,
+        bonusSnap,
       ] = await Promise.all([
         getDocs(query(
           collection(db, 'class_sessions'),
@@ -241,11 +209,6 @@ export function useStudentGradeBook() {
           collection(db, 'grade_records'),
           where('classId', '==', classId),
           where('academicYearId', '==', String(academicYear)),
-        )).catch(() => null),
-        getDocs(query(
-          collection(db, 'schedules'),
-          where('year', '==', String(academicYear)),
-          where('classId', '==', classId),
         )).catch(() => null),
         getDocs(query(
           collection(db, 'grade_configs'),
@@ -277,32 +240,39 @@ export function useStudentGradeBook() {
           collectionGroup(db, 'attempts'),
           where('studentId', 'in', Array.from(new Set([resolvedStudent.id, user.uid].filter(Boolean)))),
         )).catch(() => null),
+        bonusEnabled
+          ? getDocs(query(
+              collection(db, 'grade_bonuses'),
+              where('classId', '==', classId),
+              where('academicYearId', '==', String(academicYear)),
+            )).catch(() => null)
+          : Promise.resolve(null),
       ]);
 
-      const sessionDocs = sessionsSnap?.docs.map((d) => ({ id: d.id, ...d.data() })) ?? [];
-      const scheduleSlots = (schedulesSnap?.docs ?? []).map((d) => {
-        const data = d.data() as {
-          day?: number;
-          dayOfWeek?: number;
-          period?: number;
-          subjectId?: string;
-          semester?: 1 | 2;
-        };
-        return {
-          day: data.day ?? data.dayOfWeek ?? 0,
-          period: data.period ?? 0,
-          subjectId: data.subjectId,
-          semester: data.semester,
-        };
+            const gradeRecords: GradeRecord[] = (gradeSnap?.docs ?? [])
+        .map((d) => ({ id: d.id, ...d.data() } as GradeRecord));
+
+      // จับคู่ตัวตนแบบเดียวกับฝั่งครู (record อาจเก็บด้วย authUid/studentCode)
+      const identityLookup = buildStudentIdentityLookup([{ student: resolvedStudent }]);
+      const gradeByKey = new Map<string, GradeRecord>();
+      const recordsBySubjectSem = new Map<string, Map<string, GradeRecord>>();
+      gradeRecords.forEach((record) => {
+        const k = `${record.subjectId}_${record.semester}`;
+        const m = recordsBySubjectSem.get(k) ?? new Map<string, GradeRecord>();
+        m.set(record.studentId, record);
+        recordsBySubjectSem.set(k, m);
+      });
+      recordsBySubjectSem.forEach((m, k) => {
+        const hit = findScoreRecordForStudent(m, resolvedStudent, identityLookup);
+        if (hit) gradeByKey.set(k, hit);
       });
 
-      const gradeRecords: GradeRecord[] = (gradeSnap?.docs ?? [])
-        .map((d) => ({ id: d.id, ...d.data() } as GradeRecord))
-        .filter((record) => record.studentId === resolvedStudent.id);
-
-      const gradeByKey = new Map<string, GradeRecord>();
-      gradeRecords.forEach((record) => {
-        gradeByKey.set(`${record.subjectId}_${record.semester}`, record);
+      const bonusBySubjectSem = new Map<string, number>();
+      (bonusSnap?.docs ?? []).forEach((d) => {
+        const b = d.data() as { studentId?: string; subjectId?: string; semester?: number; bonusPercent?: number };
+        if (b.studentId === resolvedStudent.id && b.bonusPercent) {
+          bonusBySubjectSem.set(`${b.subjectId}_${b.semester}`, b.bonusPercent);
+        }
       });
 
       const sessionSubjectNames = new Map<string, string>();
@@ -315,8 +285,11 @@ export function useStudentGradeBook() {
 
       const configs = configsSnap?.docs.map((d) => ({ id: d.id, ...d.data() } as GradeWeightConfig)) ?? [];
       const configBySubjectSem = new Map<string, GradeWeightConfig>();
+      // กัน doc เก่า (id มี ::studentSig) — เลือกตัวที่ updatedAt ล่าสุด
       configs.forEach((c) => {
-        configBySubjectSem.set(`${c.subjectId}_${c.semester}`, c);
+        const k = `${c.subjectId}_${c.semester}`;
+        const prev = configBySubjectSem.get(k);
+        if (!prev || (c.updatedAt ?? '') > (prev.updatedAt ?? '')) configBySubjectSem.set(k, c);
       });
 
       const exams: Exam[] = examsSnap?.docs.map((d) => ({ id: d.id, ...d.data() } as Exam)) ?? [];
@@ -343,7 +316,11 @@ export function useStudentGradeBook() {
         } as ExamRoom;
       });
 
-      const studentAttempts = attemptsSnap?.docs.map((d) => {
+      // ครูนับเฉพาะ attempt ที่ส่งแล้ว/ตรวจแล้ว
+      const studentAttempts = (attemptsSnap?.docs ?? []).filter((d) => {
+        const status = d.data().status;
+        return status === 'submitted' || status === 'graded';
+      }).map((d) => {
         const raw = d.data();
         return {
           ...raw,
@@ -351,7 +328,7 @@ export function useStudentGradeBook() {
           roomId: d.ref.parent.parent?.id ?? '',
           score: normalizeExamScore(raw.score),
         } as ExamAttempt;
-      }) ?? [];
+      });
 
       const cards: StudentSubjectGradeCard[] = [];
       const seen = new Set<string>();
@@ -389,16 +366,6 @@ export function useStudentGradeBook() {
               semester,
               category,
               categoryLabel: catCfg.label,
-              attendancePct: calcAttendancePct(
-                resolvedStudent.id,
-                ec.subjectId,
-                semester,
-                sessionDocs,
-                scheduleSlots,
-                yearStartDate,
-                yearEndDate,
-                String(academicYear),
-              ),
               totalScore: null,
               grade: null,
               result: passFailResult,
@@ -469,6 +436,7 @@ export function useStudentGradeBook() {
 
           // Get online exam rooms for this subject & semester
           const subjectOnlineRooms = rooms.filter((room) => {
+            if (Number(room.semester) !== semester) return false;
             const linked = room.settings?.gradeBookSubjects ?? [];
             if (linked.length > 0) {
               return linked.some((item) => item.subjectId === ec.subjectId);
@@ -497,8 +465,7 @@ export function useStudentGradeBook() {
 
           subjectOnlineRooms.forEach((room) => {
             // Check if room score linking is enabled
-            if (room.settings?.scoreCollectionLinked === false) return;
-            if (room.settings?.scoreCollectionEnabled === false) return;
+            if (!shouldSyncExamRoomScores(room)) return;
 
             const collectionType = room.settings?.scoreCollectionType
               ?? room.settings?.gradeBookScoreType
@@ -551,8 +518,10 @@ export function useStudentGradeBook() {
             linkedFields,
           );
 
-          totalScore = merged.totalScore;
-          calculatedGrade = merged.grade;
+          // เหมือนฝั่งครู (GradeTable): บวก % พิเศษตอนแสดงผลเมื่อ sysadmin เปิดโหมด
+          const bonus = bonusEnabled ? bonusBySubjectSem.get(key) : undefined;
+          totalScore = applyBonusToTotal(merged.totalScore, bonus);
+          calculatedGrade = bonus && totalScore !== null ? calcGrade(totalScore, cfg.thresholds) : merged.grade;
 
           cards.push({
             key,
@@ -563,16 +532,6 @@ export function useStudentGradeBook() {
             semester,
             category,
             categoryLabel: catCfg.label,
-            attendancePct: calcAttendancePct(
-              resolvedStudent.id,
-              ec.subjectId,
-              semester,
-              sessionDocs,
-              scheduleSlots,
-              yearStartDate,
-              yearEndDate,
-              String(academicYear),
-            ),
             totalScore,
             grade: calculatedGrade,
             result: null,
@@ -606,7 +565,7 @@ export function useStudentGradeBook() {
     } finally {
       setLoading(keepLoading);
     }
-  }, [user?.uid, user?.email, userData?.studentCode, academicYear, yearStartDate, yearEndDate, subjectById, loadCoursesForVersion, subjectsLoading]);
+  }, [user?.uid, user?.email, userData?.studentCode, bonusEnabled, academicYear, subjectById, loadCoursesForVersion, subjectsLoading]);
 
   useEffect(() => {
     void reload();
@@ -619,8 +578,6 @@ export function useStudentGradeBook() {
     classRoom,
     subjectCards,
     academicYear,
-    yearStartDate,
-    yearEndDate,
     reload,
   };
 }

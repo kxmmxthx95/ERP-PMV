@@ -20,6 +20,8 @@ export interface StudentSummary {
   early: number;
   primary: number;
   secondary: number;
+  /** นักเรียนที่หาแผนก/ชั้นไม่ได้ — นับรวมใน total แต่ไม่อยู่ใน early/primary/secondary */
+  unknown: number;
   byGrade: Record<string, number>;
   loading: boolean;
 }
@@ -75,27 +77,47 @@ function pickLatestEnrollment(
 function buildSummaryFromMaps(
   enrollmentByStudent: Map<string, EnrollmentLike>,
   fallbackStudents: StudentLike[],
+  classById: Map<string, ClassLike>,
+  studentById: Map<string, StudentLike>,
 ): Omit<StudentSummary, 'loading'> {
   const counts = { early: 0, primary: 0, secondary: 0 };
+  let unknown = 0;
   const byGrade: Record<string, number> = {};
 
-  const addStudent = (departmentId: string | undefined, gradeLevel: string | undefined) => {
-    const dept = inferDepartment(departmentId, gradeLevel);
+  // หาแผนก/ชั้นจากหลายแหล่ง: ตัว enrollment → ห้องเรียน → ตัวนักเรียน
+  const addStudent = (
+    departmentId: string | undefined,
+    gradeLevel: string | undefined,
+    classId: string | undefined,
+    student: StudentLike | undefined,
+  ) => {
+    const cls = classId ? classById.get(String(classId)) : undefined;
+    const grade = String(
+      gradeLevel || cls?.gradeLevel || cls?.grade || student?.gradeLevel || '',
+    ).trim();
+    const dept = inferDepartment(departmentId || cls?.departmentId || cls?.department, grade);
     if (dept) counts[dept]++;
-    const grade = String(gradeLevel ?? '').trim();
+    else unknown++;
     if (grade) byGrade[grade] = (byGrade[grade] ?? 0) + 1;
   };
 
-  enrollmentByStudent.forEach((data) => {
-    addStudent(data.departmentId, data.gradeLevel);
+  enrollmentByStudent.forEach((data, studentId) => {
+    const student = studentById.get(studentId);
+    addStudent(
+      data.departmentId,
+      data.gradeLevel,
+      data.classId || data.classroomId || data.roomId || student?.classroomId || student?.classId,
+      student,
+    );
   });
 
   fallbackStudents.forEach((student) => {
-    addStudent(undefined, student.gradeLevel);
+    addStudent(undefined, student.gradeLevel, student.classroomId || student.classId, student);
   });
 
   return {
     ...counts,
+    unknown,
     total: enrollmentByStudent.size + fallbackStudents.length,
     byGrade,
   };
@@ -135,7 +157,7 @@ function computeStudentSummary(
 
   const fallbackStudents = [...uniqueById.values()].filter((s) => !enrollmentByStudent.has(s.id));
 
-  return buildSummaryFromMaps(enrollmentByStudent, fallbackStudents);
+  return buildSummaryFromMaps(enrollmentByStudent, fallbackStudents, classById, uniqueById);
 }
 
 function useSharedStoreRows<T>(
@@ -229,6 +251,7 @@ export function useStudentSummary(
         early: 0,
         primary: 0,
         secondary: 0,
+        unknown: 0,
         byGrade: {},
         loading: false,
       } satisfies StudentSummary;
@@ -243,6 +266,7 @@ export function useStudentSummary(
         early: 0,
         primary: 0,
         secondary: 0,
+        unknown: 0,
         byGrade: {},
         loading: true,
       } satisfies StudentSummary;

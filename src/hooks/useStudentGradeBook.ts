@@ -26,6 +26,7 @@ import { attemptScorePercent, shouldSyncExamRoomScores } from '@/lib/exam/examRo
 import {
   buildStudentIdentityLookup,
   findScoreRecordForStudent,
+  studentIdentityKeys,
   scoreCollectionTypeToGradeField,
   normalizeExamScore,
 } from '@/lib/students/studentIdentity';
@@ -189,6 +190,9 @@ export function useStudentGradeBook() {
         mergeCoursesIntoSubjectMap(localSubjectMap, courses);
       }
 
+      // ฝั่งครูจับ attempt/คะแนนด้วย identity หลายแบบ (authUid, รหัสนักเรียน, อีเมล) — ฝั่งนี้ต้องดึงด้วยชุดเดียวกัน
+      const studentKeys = [...new Set([...studentIdentityKeys(resolvedStudent), user.uid])].slice(0, 30);
+
       const [
         sessionsSnap,
         gradeSnap,
@@ -222,7 +226,7 @@ export function useStudentGradeBook() {
         )).catch(() => null),
         getDocs(query(
           collection(db, 'exam_scores'),
-          where('studentId', 'in', Array.from(new Set([resolvedStudent.id, user.uid].filter(Boolean)))),
+          where('studentId', 'in', studentKeys),
         )).catch(() => null),
         getDocs(query(
           collection(db, 'exam_rooms'),
@@ -238,7 +242,7 @@ export function useStudentGradeBook() {
           : Promise.resolve(null),
         getDocs(query(
           collectionGroup(db, 'attempts'),
-          where('studentId', 'in', Array.from(new Set([resolvedStudent.id, user.uid].filter(Boolean)))),
+          where('studentId', 'in', studentKeys),
         )).catch(() => null),
         bonusEnabled
           ? getDocs(query(

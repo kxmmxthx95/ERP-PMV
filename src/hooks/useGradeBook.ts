@@ -9,7 +9,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import {
-  collection, getDoc, getDocs, setDoc, deleteDoc, doc, query, where,
+  collection, getDocs, setDoc, deleteDoc, doc, query, where,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type {
@@ -168,29 +168,27 @@ export function useGradeBook() {
     setError(null);
 
     try {
-      // ── 1. อ่าน GradeWeightConfig (1 doc read) ────────────────────────────────
+      // ── 1. อ่าน GradeWeightConfig (1 query) ────────────────────────────────
       // doc id ต้องไม่ผูกกับรายชื่อนักเรียน ไม่งั้นฝั่งนักเรียนอ่าน config คนละ doc กับครู
       const configId = makeConfigKey(params.subjectId, params.classId, params.academicYearId, params.semester);
-      let cfg: GradeWeightConfig;
       const cfgRef = doc(db, 'grade_configs', configId);
-      const cfgSnap = await getDoc(cfgRef).catch(() => null);
 
-      // legacy: doc เก่า id = configId::studentSig → ใช้ตัวล่าสุดแล้ว migrate ไป configId
-      const legacySnap = cfgSnap?.exists() ? null : await getDocs(query(
+      // เลือก config ที่ updatedAt ล่าสุดจากทุก doc ของวิชานี้ (รวม doc เก่าที่ id ต่อ ::studentSig)
+      // ให้ตรงกับที่ฝั่งนักเรียนเลือก — ไม่งั้นสองฝั่งใช้น้ำหนัก/เกณฑ์เกรดคนละชุด
+      const cfgSnap = await getDocs(query(
         collection(db, 'grade_configs'),
         where('classId', '==', params.classId),
         where('academicYearId', '==', params.academicYearId),
         where('semester', '==', params.semester),
       )).catch(() => null);
-      const legacyCfg = (legacySnap?.docs ?? [])
-        .map(d => d.data() as GradeWeightConfig)
-        .filter(c => c.subjectId === params.subjectId)
-        .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0];
+      const latest = (cfgSnap?.docs ?? [])
+        .map(d => ({ id: d.id, data: d.data() as GradeWeightConfig }))
+        .filter(c => c.data.subjectId === params.subjectId)
+        .sort((x, y) => (y.data.updatedAt ?? '').localeCompare(x.data.updatedAt ?? ''))[0];
 
-      if (cfgSnap?.exists()) {
-        cfg = { ...cfgSnap.data(), id: cfgSnap.id } as GradeWeightConfig;
-      } else if (legacyCfg) {
-        cfg = { ...legacyCfg, id: configId };
+      let cfg: GradeWeightConfig;
+      if (latest) {
+        cfg = { ...latest.data, id: configId };
       } else {
         cfg = {
           id: configId,
@@ -389,7 +387,8 @@ export function useGradeBook() {
       cacheKey.current = key;
 
       // ── Eagerly create cfgRef ถ้ายังไม่มี (ไม่รอ) ───────────────────────────
-      if (!cfgSnap?.exists()) {
+      // ไม่มี doc ที่ id ใหม่ หรือ doc ใหม่ไม่ใช่ตัวล่าสุด → เขียน config ที่เลือกไว้ลง id ใหม่ (migrate)
+      if (latest?.id !== configId) {
         setDoc(cfgRef, { ...cfg }).catch(() => {});
       }
     } catch (err) {

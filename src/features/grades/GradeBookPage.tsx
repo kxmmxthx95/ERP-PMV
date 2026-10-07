@@ -21,8 +21,8 @@ import { useGradingConfig } from '@/hooks/useGradingConfig';
 import { logActivity } from '@/lib/activityLogger';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeachingManager } from '@/hooks/useTeachingManager';
-import { useGradeBook, mergeOnlineExamScores } from '@/hooks/useGradeBook';
-import { rawPointsToPercent, averagePercentScores, isPassFailSubjectCategory } from '@/types/grades';
+import { useGradeBook, mergeOnlineExamScores, calcGrade } from '@/hooks/useGradeBook';
+import { rawPointsToPercent, averagePercentScores, isPassFailSubjectCategory, applyBonusToTotal } from '@/types/grades';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import GradeTable from './components/GradeTable';
@@ -1649,7 +1649,17 @@ export default function GradeBookPage() {
                         subjectCode: selectedSubject.code ?? '',
                         subjectName: selectedSubject.name,
                         credits: selectedSubject.credits ?? 0,
-                        summaries: displaySummaries,
+                        summaries: gradingConfig.bonusScoreEnabled && gradeBook.config
+                          ? displaySummaries.map((s) => {
+                              const total = applyBonusToTotal(s.totalScore, s.bonusPercent);
+                              if (total === s.totalScore) return s;
+                              return {
+                                ...s,
+                                totalScore: total,
+                                grade: total !== null ? calcGrade(total, gradeBook.config!.thresholds) : s.grade,
+                              };
+                            })
+                          : displaySummaries,
                       });
                     }}
                   >

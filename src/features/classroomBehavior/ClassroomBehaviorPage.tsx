@@ -4,6 +4,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeachingManager } from '@/hooks/useTeachingManager';
+import { useCurriculum } from '@/hooks/useCurriculum';
+import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
 import { useClassroomBehaviorRecords, saveClassroomBehaviorBatch } from '@/hooks/useClassroomBehavior';
 import { resolveStudentByAuthUser } from '@/lib/resolveStudentProfile';
 import { studentIdentityKeys } from '@/lib/students/studentIdentity';
@@ -35,6 +37,19 @@ function LevelBadge({ score }: { score?: ClassroomBehaviorScore }) {
     <Button size="xs" variant={SCORE_VARIANT[score]} className="pointer-events-none">
       {CLASSROOM_BEHAVIOR_LEVEL[score]}
     </Button>
+  );
+}
+
+const DOT_COLOR = { 3: 'bg-success', 2: 'bg-warning', 1: 'bg-destructive' } as const;
+
+/** Traffic-light status dot; grey = not rated yet. */
+function StatusDot({ score }: { score?: ClassroomBehaviorScore }) {
+  const label = score ? CLASSROOM_BEHAVIOR_LEVEL[score] : 'ยังไม่ประเมิน';
+  return (
+    <span title={label} className="inline-flex">
+      <span className={`size-4 rounded-full ${score ? DOT_COLOR[score] : 'bg-muted-foreground/30'}`} />
+      <span className="sr-only">{label}</span>
+    </span>
   );
 }
 
@@ -110,6 +125,8 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
   const { canEdit } = useMyPermissions();
   const canViewAll = role === 'admin' || role === 'sysadmin';
   const mgr = useTeachingManager(user?.uid ?? '', canViewAll);
+  const curriculum = useCurriculum();
+  const { coursesByVersion, loadCoursesForVersion } = useCurriculumVersioned();
 
   const [classId, setClassId] = useState('');
   const [subjectId, setSubjectId] = useState('');
@@ -143,6 +160,10 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
       .filter((s): s is NonNullable<typeof s> => !!s && s.category !== 'activity')
       .map((s) => ({ id: s.id, name: s.name }));
   }, [cls, semester, canViewAll, mgr.teacherIdentityKeys, mgr.mySubjects]);
+
+  useEffect(() => {
+    if (cls?.curriculumPackageId) loadCoursesForVersion(cls.curriculumPackageId);
+  }, [cls?.curriculumPackageId, loadCoursesForVersion]);
 
   const subjectName = subjects.find((s) => s.id === subjectId)?.name ?? '';
   const students = useMemo(
@@ -211,11 +232,26 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
     }
   };
 
-  const subjectsInOverview = useMemo(
-    () => [...new Map(records.map((r) => [r.subjectId, r.subjectName])).entries()]
-      .filter(([sid]) => mgr.mySubjects.find((s) => s.id === sid)?.category !== 'activity'),
-    [records, mgr.mySubjects],
-  );
+  // Overview columns = every non-activity subject the class takes this semester (rated or not).
+  const subjectsInOverview = useMemo((): [string, string][] => {
+    if (!cls) return [];
+    const info = new Map<string, { name: string; activity: boolean }>();
+    for (const v of Object.values(coursesByVersion).flat()) {
+      info.set(v.id, { name: v.courseName, activity: v.category !== 'basic' && v.category !== 'additional' });
+    }
+    for (const sub of [...curriculum.subjects, ...mgr.mySubjects]) {
+      info.set(sub.id, { name: sub.name, activity: sub.category === 'activity' });
+    }
+    const out = new Map<string, string>();
+    for (const ec of cls.enrolledCourses ?? []) {
+      if (ec.semester != null && ec.semester !== semester) continue;
+      const i = info.get(ec.subjectId);
+      if (i && !i.activity) out.set(ec.subjectId, i.name);
+    }
+    // legacy records for subjects no longer resolvable
+    for (const r of records) if (!out.has(r.subjectId) && !info.get(r.subjectId)?.activity) out.set(r.subjectId, r.subjectName);
+    return [...out.entries()];
+  }, [cls, semester, coursesByVersion, curriculum.subjects, mgr.mySubjects, records]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -242,23 +278,34 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
 
       {/* Overview: homeroom/admin, read-only, level per subject */}
       {cls && overview && !loading && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          {([3, 2, 1] as const).map((sc) => (
+            <span key={sc} className="inline-flex items-center gap-1.5"><span className={`size-3 rounded-full ${DOT_COLOR[sc]}`} />{CLASSROOM_BEHAVIOR_LEVEL[sc]}</span>
+          ))}
+          <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-full bg-muted-foreground/30" />ยังไม่ประเมิน</span>
+        </div>
+      )}
+      {cls && overview && !loading && (
         <div className="rounded-2xl border border-border bg-card overflow-x-auto">
           <div className="min-w-max">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/30 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+              <span className="w-48">นักเรียน</span>
+              {subjectsInOverview.map(([sid, name]) => <span key={sid} className="w-32 truncate text-center" title={name}>{name}</span>)}
+            </div>
             {students.map((s) => (
-              <div key={s.id} className="flex items-center gap-3 px-4 py-3 border-b border-border last:border-b-0">
+              <div key={s.id} className="flex items-center gap-3 px-4 py-3 border-b border-border last:border-b-0 hover:bg-muted/40">
                 <span className="w-48 text-sm font-bold truncate">{s.firstName} {s.lastName}</span>
-                {subjectsInOverview.map(([sid, name]) => {
+                {subjectsInOverview.map(([sid]) => {
                   const r = records.find((x) => x.studentId === s.id && x.subjectId === sid);
                   return (
-                    <div key={sid} className="flex w-28 flex-col gap-0.5">
-                      <span className="text-[10px] text-muted-foreground truncate">{name}</span>
-                      <LevelBadge score={r ? classroomBehaviorOverall(r) : undefined} />
+                    <div key={sid} className="flex w-32 justify-center">
+                      <StatusDot score={r ? classroomBehaviorOverall(r) : undefined} />
                     </div>
                   );
                 })}
               </div>
             ))}
-            {!subjectsInOverview.length && <p className="py-8 text-center text-sm text-muted-foreground">ยังไม่มีผลการประเมิน</p>}
+            {!subjectsInOverview.length && <p className="py-8 text-center text-sm text-muted-foreground">ห้องนี้ไม่มีรายวิชา</p>}
           </div>
         </div>
       )}

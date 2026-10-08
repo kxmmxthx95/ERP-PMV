@@ -119,7 +119,7 @@ export default function TeacherDashboardPage() {
         <StatCard
           index={1}
           icon={HiOutlineClipboardDocumentCheck}
-          label="การเข้าสอน"
+          label="การเช็คชื่อรายวิชา"
           value={me.rollCallRate === null ? '—' : `${me.rollCallRate}%`}
           sub={`${me.completedSessions}/${me.expectedSessions} คาบ`}
         />
@@ -144,7 +144,7 @@ export default function TeacherDashboardPage() {
         <motion.div custom={4} variants={fadeUp} initial="hidden" animate="show">
           <Card>
             <CardContent>
-              <SectionTitle icon={HiOutlineClipboardDocumentCheck}>การเข้าสอนรายวิชา</SectionTitle>
+              <SectionTitle icon={HiOutlineClipboardDocumentCheck}>การเช็คชื่อรายวิชา</SectionTitle>
               <div className="flex flex-col gap-3">
                 {me.subjectBreakdown.filter((s) => !s.excluded).map((s) => (
                   <div key={s.subjectId}>

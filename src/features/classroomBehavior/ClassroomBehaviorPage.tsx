@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { HiChevronDown, HiChevronUp, HiChevronUpDown } from 'react-icons/hi2';
 import { useAuth } from '@/hooks/useAuth';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
@@ -76,6 +77,31 @@ function AvgCell({ values, total, unit }: { values: number[]; total: number; uni
       </span>
       <span className="text-[10px] text-muted-foreground">{values.length}/{total} {unit}</span>
     </div>
+  );
+}
+
+type SortKey = 'name' | 'avg' | `s:${string}`;
+type SortState = { key: SortKey; dir: 'asc' | 'desc' } | null;
+
+function SortHead({ label, k, sort, onSort, className }: {
+  label: string;
+  k: SortKey;
+  sort: SortState;
+  onSort: (k: SortKey) => void;
+  className?: string;
+}) {
+  const active = sort?.key === k;
+  const Icon = !active ? HiChevronUpDown : sort.dir === 'asc' ? HiChevronUp : HiChevronDown;
+  return (
+    <button
+      type="button"
+      title={label}
+      onClick={() => onSort(k)}
+      className={`inline-flex items-center gap-1 uppercase tracking-wider hover:text-foreground ${active ? 'text-foreground' : ''} ${className ?? ''}`}
+    >
+      <span className="truncate">{label}</span>
+      <Icon className="size-3 shrink-0" />
+    </button>
   );
 }
 
@@ -158,6 +184,7 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
   const [subjectIds, setSubjectIds] = useState<string[]>([]);
   const [pending, setPending] = useState<{ rows: ClassroomBehaviorRecord[]; deleteIds: string[]; incomplete: number; conflicts: number } | null>(null);
   const [mode, setMode] = useState<'rate' | 'overview'>('rate');
+  const [sort, setSort] = useState<SortState>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [saving, setSaving] = useState(false);
 
@@ -325,13 +352,40 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
         all.push(v);
       }
     }
-    return { perStudent, perSubject, all };
+    return { perStudent, perSubject, all, cell };
   }, [records, students, subjectsInOverview]);
+
+  // Header sort: asc → desc → back to roster order. Unrated always last.
+  const onSort = (key: SortKey) =>
+    setSort((cur) => (cur?.key !== key ? { key, dir: 'asc' } : cur.dir === 'asc' ? { key, dir: 'desc' } : null));
+
+  const sortedStudents = useMemo(() => {
+    if (!sort) return students;
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    const valueOf = (id: string): number | null => {
+      if (sort.key === 'avg') {
+        const v = overviewStats.perStudent.get(id);
+        return v?.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+      }
+      return overviewStats.cell.get(`${id}|${sort.key.slice(2)}`) ?? null;
+    };
+    return [...students].sort((a, b) => {
+      if (sort.key === 'name') {
+        return dir * `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`, 'th');
+      }
+      const va = valueOf(a.id);
+      const vb = valueOf(b.id);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return dir * (va - vb);
+    });
+  }, [students, sort, overviewStats]);
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <NativeSelect className="w-44" value={classId} onChange={(e) => { setClassId(e.target.value); setSubjectIds([]); }}>
+        <NativeSelect className="w-44" value={classId} onChange={(e) => { setClassId(e.target.value); setSubjectIds([]); setSort(null); }}>
           <option value="">เลือกห้อง</option>
           {classes.map((c) => <option key={c.id} value={c.id}>{c.className}</option>)}
         </NativeSelect>
@@ -374,11 +428,15 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
         <div className="rounded-2xl border border-border bg-card overflow-x-auto">
           <div className="min-w-max">
             <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/30 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
-              <span className="w-48">นักเรียน</span>
-              {subjectsInOverview.map(([sid, name]) => <span key={sid} className="w-32 truncate text-center" title={name}>{name}</span>)}
-              <span className="w-32 text-center">เฉลี่ย</span>
+              <span className="w-48"><SortHead label="นักเรียน" k="name" sort={sort} onSort={onSort} /></span>
+              {subjectsInOverview.map(([sid, name]) => (
+                <span key={sid} className="flex w-32 justify-center">
+                  <SortHead label={name} k={`s:${sid}`} sort={sort} onSort={onSort} className="max-w-full" />
+                </span>
+              ))}
+              <span className="flex w-32 justify-center"><SortHead label="เฉลี่ย" k="avg" sort={sort} onSort={onSort} /></span>
             </div>
-            {students.map((s) => (
+            {sortedStudents.map((s) => (
               <div key={s.id} className="flex items-center gap-3 px-4 py-3 border-b border-border last:border-b-0 hover:bg-muted/40">
                 <span className="w-48 text-sm font-bold truncate">{s.firstName} {s.lastName}</span>
                 {subjectsInOverview.map(([sid]) => {

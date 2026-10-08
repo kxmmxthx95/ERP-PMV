@@ -78,7 +78,22 @@ export function useTeacherGradeSummary(
           });
         }
       }
-      if (import.meta.env.DEV) console.debug('[teacherSubjectGpa]', { mineClasses: mine.size, resultSubjects: Object.keys(result) });
+      if (import.meta.env.DEV) {
+        console.debug('[teacherSubjectGpa]', { mineClasses: mine.size, resultSubjects: Object.keys(result) });
+        // วินิจฉัยจำนวนนักเรียน: rosterRows = รายชื่อห้องหลัง dedupe ในเมทริกซ์, n = คนที่คิดเกรดได้ต่อวิชา
+        console.table(
+          Object.entries(result).flatMap(([subjectId, rows]) =>
+            rows.map((c) => ({
+              subjectId,
+              className: c.className,
+              n: c.n,
+              rosterRows: matrix.studentsByClass[c.classId]?.length ?? 0,
+              rosterDistinctIds: new Set((matrix.studentsByClass[c.classId] ?? []).map((r) => r.studentId)).size,
+              rosterDistinctCodes: new Set((matrix.studentsByClass[c.classId] ?? []).map((r) => r.studentCode).filter(Boolean)).size,
+            })),
+          ),
+        );
+      }
       return result;
     },
   });

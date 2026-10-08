@@ -21,9 +21,11 @@ import { buildCheckInHistoryRows, summarizeCheckInHistory } from '@/lib/staffAtt
 import { resolveCanonicalTeacherId } from '@/lib/teachers/teacherIdentity';
 import type { TeacherKpiRow, TeacherSubjectKpi } from '@/types/teacherKpi';
 
-interface SessionLite {
+export interface SessionLite {
   date: string;
   subjectId: string;
+  classId?: string;
+  period?: number;
 }
 
 export function useTeacherDashboardKpi() {
@@ -62,11 +64,8 @@ export function useTeacherDashboardKpi() {
   const windowYear = semesterRange.startDate.slice(0, 4);
   const windowStart = windowYear ? `${windowYear}-07-01` : '';
   const windowEnd = windowYear ? `${windowYear}-10-31` : '';
-  const configuredStart = settings.startDate;
-  const effectiveStart = [
-    windowStart,
-    configuredStart && configuredStart <= semesterRange.endDate ? configuredStart : '',
-  ].reduce((a, b) => (b > a ? b : a), '');
+  // ไม่ใช้ settings.startDate ของหน้า KPI ผู้บริหาร — หน้านี้เริ่ม 1 ก.ค. เสมอ
+  const effectiveStart = windowStart;
   const throughDate = [today, semesterRange.endDate, windowEnd]
     .filter(Boolean)
     .reduce((a, b) => (b < a ? b : a));
@@ -206,6 +205,12 @@ export function useTeacherDashboardKpi() {
     return out;
   }, [teacher, teachers, schedules]);
 
+  // ตารางสอนของครูคนนี้ทั้งหมด — ใช้วาดปฏิทินเช็คชื่อรายคาบ
+  const mySchedule = useMemo(
+    () => (teacher ? schedules.filter((e) => resolveCanonicalTeacherId(e.teacherId, teachers) === teacher.id) : []),
+    [teacher, teachers, schedules],
+  );
+
   const attendanceSummary = useMemo(
     () => summarizeCheckInHistory(buildCheckInHistoryRows(attendanceRecords, effectiveStart, throughDate, new Set())),
     [attendanceRecords, effectiveStart, throughDate],
@@ -216,6 +221,10 @@ export function useTeacherDashboardKpi() {
     teacherId: teacher?.id,
     range: { from: effectiveStart, to: throughDate },
     classSubjectPairs,
+    mySchedule,
+    sessions,
+    workingDays,
+    today,
     attendanceSummary,
     isLoading: !isLoaded || teachersLoading || !sessionsReady,
   };

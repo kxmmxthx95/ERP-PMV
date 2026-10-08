@@ -1,4 +1,5 @@
 // src/features/teacherDashboard/TeacherDashboardPage.tsx
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -8,6 +9,7 @@ import { useTeacherDashboardKpi } from '@/hooks/useTeacherDashboardKpi';
 import { useTeacherGradeSummary } from '@/hooks/useTeacherGradeSummary';
 import { useAuth } from '@/hooks/useAuth';
 import { formatGpa } from '@/types/grades';
+import { SubjectAttendanceCalendarDrawer } from './components/SubjectAttendanceCalendarDrawer';
 import { KpiBulletBar } from '@/features/teacherKpi/components/KpiBulletBar';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 
@@ -23,7 +25,8 @@ const fadeUp = {
 export default function TeacherDashboardPage() {
   const { activeYear, activeSemester } = useActiveAcademicYear();
   const { user } = useAuth();
-  const { row: me, teacherId, range, classSubjectPairs, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const { row: me, teacherId, range, classSubjectPairs, mySchedule, sessions, workingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const [calendarSubjectId, setCalendarSubjectId] = useState<string | null>(null);
   const gpaBySubject = useTeacherGradeSummary([teacherId ?? '', user?.uid ?? ''], classSubjectPairs);
 
   if (!activeYear) {
@@ -95,7 +98,14 @@ export default function TeacherDashboardPage() {
             <p className="mb-3 text-sm font-bold text-muted-foreground">รายวิชาที่ได้รับมอบหมาย</p>
             <div className="grid auto-rows-min grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {me.subjectBreakdown.filter((x) => !x.excluded).map((x) => (
-                <div key={x.subjectId} className="flex flex-col gap-3 rounded-2xl bg-muted/40 p-5">
+                <div
+                  key={x.subjectId}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setCalendarSubjectId(x.subjectId)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setCalendarSubjectId(x.subjectId); }}
+                  className="flex cursor-pointer flex-col gap-3 rounded-2xl bg-muted/40 p-5 transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
                   <div className="min-w-0">
                     <p className="truncate text-base font-black">{x.subjectName}</p>
                     <p className="truncate text-xs text-muted-foreground">{x.subjectCode}</p>
@@ -137,6 +147,16 @@ export default function TeacherDashboardPage() {
           </div>
         </Card>
       </motion.div>
+      <SubjectAttendanceCalendarDrawer
+        open={!!calendarSubjectId}
+        onOpenChange={(o) => { if (!o) setCalendarSubjectId(null); }}
+        subject={me.subjectBreakdown.find((x) => x.subjectId === calendarSubjectId) ?? null}
+        schedule={mySchedule}
+        sessions={sessions}
+        workingDays={workingDays}
+        range={range}
+        today={today}
+      />
     </div>
   );
 }

@@ -192,6 +192,21 @@ export function useTeacherDashboardKpi() {
     };
   }, [teacher, teachers, effectiveStart, throughDate, workingDays, attendanceRecords, schedules, sessions, settings, curriculumSubjects]);
 
+  // คู่ห้อง/วิชาที่ครูมีในตารางสอน — ใช้เป็นแหล่งอ้างอิงสำรองตอนหาห้องที่สอน
+  const classSubjectPairs = useMemo(() => {
+    if (!teacher) return [];
+    const seen = new Set<string>();
+    const out: { classId: string; subjectId: string }[] = [];
+    for (const e of schedules) {
+      if (resolveCanonicalTeacherId(e.teacherId, teachers) !== teacher.id) continue;
+      const k = `${e.classId}__${e.subjectId}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ classId: e.classId, subjectId: e.subjectId });
+    }
+    return out;
+  }, [teacher, teachers, schedules]);
+
   const attendanceSummary = useMemo(
     () => summarizeCheckInHistory(buildCheckInHistoryRows(attendanceRecords, effectiveStart, throughDate, new Set())),
     [attendanceRecords, effectiveStart, throughDate],
@@ -201,6 +216,7 @@ export function useTeacherDashboardKpi() {
     row,
     teacherId: teacher?.id,
     range: { from: effectiveStart, to: throughDate },
+    classSubjectPairs,
     attendanceSummary,
     isLoading: !isLoaded || teachersLoading || !sessionsReady,
   };

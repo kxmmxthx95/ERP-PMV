@@ -1,104 +1,87 @@
 // src/hooks/useTeacherGradeSummary.ts
-import { useEffect, useState } from 'react';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { useQuery } from '@tanstack/react-query';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
-import { gradeLetterToGpa, type GradeLetter, type GradeRecord } from '@/types/grades';
+import { fetchGradeAssessmentMatrix } from '@/lib/academicStats/fetchGradeAssessmentMatrix';
+import type { ClassRoom } from '@/types/class';
 
-/** ตัวอักษรที่นับเข้า GPA — ไม่รวม ร / มส / 0 */
-const GPA_LETTERS: GradeLetter[] = ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D', 'F'];
-
-export interface TeacherClassGrade {
-  key: string; // classId__subjectId
+export interface ClassGpa {
+  classId: string;
   className: string;
-  subjectName: string;
-  subjectCode: string;
-  studentCount: number;
-  gradedCount: number;       // นักเรียนที่มีเกรดแล้ว
-  avgGpa: number | null;
-  distribution: Record<string, number>; // letter -> count (เฉพาะ GPA_LETTERS)
+  avgGpa: number;
+  n: number; // จำนวนนักเรียนในห้องที่มีเกรด
 }
 
-export interface TeacherGradeSummary {
-  classes: TeacherClassGrade[];
-  overallAvgGpa: number | null;
-  studentCount: number;
-  gradedCount: number;
-}
-
-export const GRADE_DISTRIBUTION_LETTERS = GPA_LETTERS;
-
-function summarize(records: GradeRecord[]): TeacherGradeSummary {
-  const groups = new Map<string, GradeRecord[]>();
-  for (const r of records) {
-    const key = `${r.classId}__${r.subjectId}`;
-    const arr = groups.get(key) ?? [];
-    arr.push(r);
-    groups.set(key, arr);
-  }
-
-  let gpaSum = 0;
-  let gpaN = 0;
-  const classes: TeacherClassGrade[] = Array.from(groups.entries()).map(([key, rows]) => {
-    const distribution: Record<string, number> = {};
-    let sum = 0;
-    let n = 0;
-    for (const r of rows) {
-      if (r.grade && GPA_LETTERS.includes(r.grade)) {
-        distribution[r.grade] = (distribution[r.grade] ?? 0) + 1;
-        sum += gradeLetterToGpa(r.grade);
-        n += 1;
-      }
-    }
-    gpaSum += sum;
-    gpaN += n;
-    return {
-      key,
-      className: rows[0].className,
-      subjectName: rows[0].subjectName,
-      subjectCode: rows[0].subjectCode,
-      studentCount: rows.length,
-      gradedCount: rows.filter((r) => r.grade).length,
-      avgGpa: n > 0 ? sum / n : null,
-      distribution,
-    };
-  }).sort((a, b) => a.className.localeCompare(b.className, 'th') || a.subjectName.localeCompare(b.subjectName, 'th'));
-
-  return {
-    classes,
-    overallAvgGpa: gpaN > 0 ? gpaSum / gpaN : null,
-    studentCount: classes.reduce((s, c) => s + c.studentCount, 0),
-    gradedCount: classes.reduce((s, c) => s + c.gradedCount, 0),
-  };
-}
+/** subjectId -> GPA เฉลี่ยของนักเรียนทั้งห้อง แยกรายห้องที่ครูสอนวิชานั้น */
+export type TeacherSubjectGpaMap = Record<string, ClassGpa[]>;
 
 /**
- * สรุปเกรดจาก grade_records ที่ครูบันทึกแล้ว — realtime เฉพาะของครูคนนี้
- * ponytail: นับเฉพาะ record ที่บันทึกในสมุดคะแนน — ห้องที่ยังไม่เคยกดบันทึกจะไม่ปรากฏ
+ * GPA เฉลี่ยรายวิชาของครู — ใช้ matrix เดียวกับ Dashboard ผู้บริหาร (คิดเกรดเหมือนสมุดคะแนน:
+ * grade_records ถ้ามี ไม่งั้นคิดจากคะแนนสอบ) แล้วเลือกเฉพาะห้อง/วิชาที่ครูสอนจาก classes.enrolledCourses
+ * ponytail: one-shot + cache 5 นาที (matrix อ่านทั้งโรงเรียน ไม่ทำ realtime) — ถ้าต้อง realtime
+ * ต้องแตก logic คิดเกรดเป็นราย class/subject
  */
-export function useTeacherGradeSummary(teacherIds: string[]) {
+export function useTeacherGradeSummary(
+  teacherIds: string[],
+  schedulePairs: { classId: string; subjectId: string }[] = [],
+) {
   const { year, activeSemester } = useActiveAcademicYear();
-  const semester = activeSemester === 2 ? 2 : 1;
+  const semester = (activeSemester === 2 ? 2 : 1) as 1 | 2;
   const idsKey = teacherIds.filter(Boolean).join('|');
-  const [data, setData] = useState<TeacherGradeSummary | null>(null);
+  const pairsKey = schedulePairs.map((p) => `${p.classId}__${p.subjectId}`).join('|');
 
-  useEffect(() => {
-    const ids = idsKey ? idsKey.split('|') : [];
-    if (!year || ids.length === 0) return;
-    return onSnapshot(
-      query(
-        collection(db, 'grade_records'),
-        where('academicYearId', '==', year),
-        where('semester', '==', semester),
-        where('teacherId', 'in', ids),
-      ),
-      (snap) => setData(summarize(snap.docs.map((d) => ({ id: d.id, ...d.data() } as GradeRecord)))),
-      (err) => {
-        console.error('[useTeacherGradeSummary]', err);
-        setData(summarize([]));
-      },
-    );
-  }, [year, semester, idsKey]);
+  const { data } = useQuery({
+    queryKey: ['teacherSubjectGpa', idsKey, pairsKey, year, semester],
+    enabled: !!year && !!idsKey,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async (): Promise<TeacherSubjectGpaMap> => {
+      const ids = new Set(idsKey.split('|'));
+      const [matrix, classesSnap] = await Promise.all([
+        fetchGradeAssessmentMatrix({ academicYearId: String(year), semester }),
+        getDocs(query(collection(db, 'classes'), where('academicYearId', '==', String(year)))),
+      ]);
 
-  return { data, isLoading: data === null };
+      // classId -> subjectId[] ที่ครูคนนี้สอน
+      const mine = new Map<string, Set<string>>();
+      classesSnap.docs.forEach((d) => {
+        const cls = { id: d.id, ...d.data() } as ClassRoom;
+        for (const ec of cls.enrolledCourses ?? []) {
+          if (!ids.has(String(ec.teacherId ?? '').trim())) continue;
+          if (ec.semester && ec.semester !== semester) continue;
+          const set = mine.get(cls.id) ?? new Set<string>();
+          set.add(ec.subjectId);
+          mine.set(cls.id, set);
+        }
+      });
+
+      // แหล่งสำรอง: คู่ห้อง/วิชาจากตารางสอน (classId อาจเป็น id เอกสารหรือชื่อห้อง เช่น ม.3/1)
+      const classes = classesSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as ClassRoom);
+      for (const p of schedulePairs) {
+        const cls = classes.find((c) => c.id === p.classId || c.className === p.classId);
+        if (!cls) continue;
+        const set = mine.get(cls.id) ?? new Set<string>();
+        set.add(p.subjectId);
+        mine.set(cls.id, set);
+      }
+
+      const result: TeacherSubjectGpaMap = {};
+      for (const row of matrix.classRows) {
+        for (const subjectId of mine.get(row.classId) ?? []) {
+          const cell = row.bySubject[subjectId];
+          if (!cell || cell.n === 0) continue;
+          (result[subjectId] ??= []).push({
+            classId: row.classId,
+            className: row.className,
+            avgGpa: cell.avgGpa,
+            n: cell.n,
+          });
+        }
+      }
+      if (import.meta.env.DEV) console.debug('[teacherSubjectGpa]', { mineClasses: mine.size, resultSubjects: Object.keys(result) });
+      return result;
+    },
+  });
+
+  return data ?? {};
 }

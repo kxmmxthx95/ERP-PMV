@@ -1,23 +1,15 @@
 // src/features/teacherDashboard/TeacherDashboardPage.tsx
 import { motion } from 'framer-motion';
-import {
-  HiOutlineBriefcase,
-  HiOutlineChartBar,
-  HiOutlineClipboardDocumentCheck,
-} from 'react-icons/hi2';
-import type { IconType } from 'react-icons';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { IndeterminateProgress } from '@/components/ui/progress';
-import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherDashboardKpi } from '@/hooks/useTeacherDashboardKpi';
-import { useTeacherGradeSummary, GRADE_DISTRIBUTION_LETTERS } from '@/hooks/useTeacherGradeSummary';
-import PersonalAttendanceCalendarPanel from '@/features/home/widgets/PersonalAttendanceCalendarPanel';
-import { KpiBulletBar } from '@/features/teacherKpi/components/KpiBulletBar';
+import { useTeacherGradeSummary } from '@/hooks/useTeacherGradeSummary';
+import { useAuth } from '@/hooks/useAuth';
 import { formatGpa } from '@/types/grades';
+import { KpiBulletBar } from '@/features/teacherKpi/components/KpiBulletBar';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
-import { cn } from '@/lib/utils';
 
 function formatThaiDate(ymd: string): string {
   return new Date(`${ymd}T00:00:00`).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
@@ -28,43 +20,11 @@ const fadeUp = {
   show: (i: number) => ({ opacity: 1, y: 0, transition: { delay: i * 0.06, duration: 0.3 } }),
 };
 
-function StatCard({
-  index, icon: Icon, label, value, sub,
-}: { index: number; icon: IconType; label: string; value: string; sub: string }) {
-  return (
-    <motion.div custom={index} variants={fadeUp} initial="hidden" animate="show">
-      <Card size="sm" className="h-full">
-        <CardContent className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-            <Icon className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">{label}</p>
-            <p className="text-2xl font-black tabular-nums leading-tight">{value}</p>
-            <p className="truncate text-xs text-muted-foreground">{sub}</p>
-          </div>
-        </CardContent>
-      </Card>
-    </motion.div>
-  );
-}
-
-function SectionTitle({ icon: Icon, children }: { icon: IconType; children: string }) {
-  return (
-    <div className="mb-3 flex items-center gap-2">
-      <Icon className="h-4 w-4 text-primary" />
-      <h2 className="text-sm font-black">{children}</h2>
-    </div>
-  );
-}
-
 export default function TeacherDashboardPage() {
-  const { user } = useAuth();
   const { activeYear, activeSemester } = useActiveAcademicYear();
-  const { row: me, teacherId, range, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
-  const { data: grades } = useTeacherGradeSummary(
-    [teacherId ?? '', user?.uid ?? ''],
-  );
+  const { user } = useAuth();
+  const { row: me, teacherId, range, classSubjectPairs, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const gpaBySubject = useTeacherGradeSummary([teacherId ?? '', user?.uid ?? ''], classSubjectPairs);
 
   if (!activeYear) {
     return <p className="p-6 text-sm text-muted-foreground">กรุณาตั้งค่าปีการศึกษาก่อน</p>;
@@ -74,139 +34,108 @@ export default function TeacherDashboardPage() {
     return <p className="p-6 text-sm text-muted-foreground">ไม่พบข้อมูลครูที่ผูกกับบัญชีนี้</p>;
   }
 
+  // บรรทัดแรก = คำนำหน้า+ชื่อ · บรรทัดสอง = นามสกุล (แยกที่ช่องว่างแรก)
+  const [firstName, ...rest] = me.name.trim().split(/\s+/);
+  const lastName = rest.join(' ');
+
   return (
     <div className="flex w-full flex-col gap-4 pb-6">
-      {/* โปรไฟล์ */}
+      {/* Hero: ตัวเลขซ้าย · รูปวงกลม+ชื่อขวา */}
       <motion.div custom={0} variants={fadeUp} initial="hidden" animate="show">
-        <Card size="sm">
-          <CardContent className="flex items-center gap-4">
-            <Avatar className="h-14 w-14">
-              <AvatarImage src={me.photoURL} alt={me.name} />
-              <AvatarFallback>{me.name.slice(0, 1)}</AvatarFallback>
-            </Avatar>
-            <div className="min-w-0">
-              <h1 className="truncate text-lg font-black">{me.name}</h1>
-              <p className="truncate text-xs text-muted-foreground">
-                {[me.position, DEPARTMENT_CONFIG[me.department]?.label].filter(Boolean).join(' · ')}
-              </p>
-              <p className="text-xs text-muted-foreground">
+        <Card className="relative gap-0 py-0">
+          <div className="grid shrink-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
+            {/* ขวา (มือถือขึ้นก่อน): รูปวงกลม อยู่หน้าชื่อ + ตำแหน่ง */}
+            <div className="flex items-start justify-end gap-4 px-6 pt-6 md:order-2 md:px-10 md:pt-10">
+              <Avatar className="h-16 w-16 shrink-0 md:h-24 md:w-24">
+                <AvatarImage src={me.photoURL} alt={me.name} className="object-cover" />
+                <AvatarFallback className="text-2xl font-black md:text-4xl">{me.name.slice(0, 1)}</AvatarFallback>
+              </Avatar>
+              <div className="text-right">
+                <h1 className="text-2xl font-black leading-tight md:text-4xl">
+                  {firstName}
+                  {lastName && <><br />{lastName}</>}
+                </h1>
+                <p className="mt-1 text-sm text-muted-foreground md:text-lg">
+                  ตำแหน่ง {me.position || DEPARTMENT_CONFIG[me.department]?.label || 'ครู'}
+                </p>
+              </div>
+            </div>
+
+            {/* ซ้าย: ตัวเลขหลัก */}
+            <div className="flex flex-col gap-6 px-6 pt-6 md:order-1 md:px-10 md:pt-10">
+              <p className="text-xs font-bold text-destructive">
                 ปีการศึกษา {activeYear.year} ภาคเรียนที่ {activeSemester}
                 {' · '}ช่วงเก็บค่า {formatThaiDate(range.from)} – {formatThaiDate(range.to)}
               </p>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
 
-      {/* การ์ดสรุป */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <StatCard
-          index={1}
-          icon={HiOutlineClipboardDocumentCheck}
-          label="การเช็คชื่อรายวิชา"
-          value={me.rollCallRate === null ? '—' : `${me.rollCallRate}%`}
-          sub={`${me.completedSessions}/${me.expectedSessions} คาบ`}
-        />
-        <StatCard
-          index={2}
-          icon={HiOutlineBriefcase}
-          label="เวลาปฏิบัติงาน"
-          value={me.attendanceRate === null ? '—' : `${me.attendanceRate}%`}
-          sub={`มา ${me.attendedDays}/${me.workingDays} วัน · สาย ${attendance?.late ?? 0} · ขาด ${attendance?.absent ?? 0}`}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* การเข้าสอนรายวิชา */}
-        <motion.div custom={4} variants={fadeUp} initial="hidden" animate="show">
-          <Card>
-            <CardContent>
-              <SectionTitle icon={HiOutlineClipboardDocumentCheck}>การเช็คชื่อรายวิชา</SectionTitle>
-              <div className="flex flex-col gap-3">
-                {me.subjectBreakdown.filter((s) => !s.excluded).map((s) => (
-                  <div key={s.subjectId}>
-                    <div className="mb-1 flex justify-between gap-2 text-xs">
-                      <span className="truncate font-bold">{s.subjectName}</span>
-                      <span className="shrink-0 tabular-nums text-muted-foreground">
-                        {s.completedSessions}/{s.expectedSessions} คาบ
-                      </span>
-                    </div>
-                    <KpiBulletBar value={s.rate} />
-                  </div>
-                ))}
-                {me.subjectBreakdown.every((s) => s.excluded) && (
-                  <p className="text-xs text-muted-foreground">ไม่มีรายวิชา</p>
-                )}
+              <div className="grid grid-cols-2 gap-6">
+                <div>
+                  <p className="text-sm font-bold text-muted-foreground">เวลาปฏิบัติงาน</p>
+                  <p className="text-4xl font-black tabular-nums md:text-5xl">
+                    {me.attendanceRate === null ? '—' : `${me.attendanceRate}%`}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    มา {me.attendedDays}/{me.workingDays} วัน · สาย {attendance?.late ?? 0} · ขาด {attendance?.absent ?? 0}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-muted-foreground">การเช็คชื่อรายวิชา</p>
+                  <p className="text-4xl font-black tabular-nums md:text-5xl">
+                    {me.rollCallRate === null ? '—' : `${me.rollCallRate}%`}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {me.completedSessions}/{me.expectedSessions} คาบ
+                  </p>
+                </div>
               </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* ปฏิทินเวลาปฏิบัติงาน */}
-        <motion.div custom={5} variants={fadeUp} initial="hidden" animate="show">
-          <Card>
-            <CardContent>
-              <SectionTitle icon={HiOutlineBriefcase}>ปฏิทินเวลาปฏิบัติงาน</SectionTitle>
-              {/* ponytail: ไม่ส่งข้อมูลการลา (นอกขอบเขต) — วันลาจะแสดงตามบันทึกเวลาจริง */}
-              <PersonalAttendanceCalendarPanel userId={user!.uid} leaveRequests={[]} />
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
-
-      {/* ผลการเรียนรายห้อง/วิชา */}
-      <motion.div custom={6} variants={fadeUp} initial="hidden" animate="show">
-        <SectionTitle icon={HiOutlineChartBar}>ผลการเรียนรายห้อง/วิชา</SectionTitle>
-        {!grades || grades.classes.length === 0 ? (
-          <Card size="sm">
-            <CardContent className="text-xs text-muted-foreground">
-              ยังไม่มีผลการเรียนที่บันทึกในสมุดคะแนนภาคเรียนนี้
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {grades.classes.map((c) => {
-              const max = Math.max(1, ...GRADE_DISTRIBUTION_LETTERS.map((l) => c.distribution[l] ?? 0));
-              return (
-                <Card key={c.key} size="sm">
-                  <CardContent>
-                    <div className="mb-3 flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-black">{c.subjectName}</p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {c.className} · {c.subjectCode}
-                        </p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-xl font-black tabular-nums">
-                          {c.avgGpa === null ? '—' : formatGpa(Number(c.avgGpa.toFixed(2)))}
-                        </p>
-                        <p className="text-[10px] text-muted-foreground">
-                          ตัดเกรด {c.gradedCount}/{c.studentCount}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex h-16 items-end gap-1">
-                      {GRADE_DISTRIBUTION_LETTERS.map((l) => {
-                        const n = c.distribution[l] ?? 0;
-                        return (
-                          <div key={l} className="flex flex-1 flex-col items-center gap-0.5">
-                            <span className="text-[9px] tabular-nums text-muted-foreground">{n || ''}</span>
-                            <div
-                              className={cn('w-full rounded-t-md', n ? 'bg-primary' : 'bg-muted')}
-                              style={{ height: `${n ? Math.max(8, (n / max) * 100) : 4}%` }}
-                            />
-                            <span className="text-[9px] font-bold">{l}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
+            </div>
           </div>
-        )}
+          {/* รายวิชาที่ได้รับมอบหมาย: เต็มความกว้างและพื้นที่ที่เหลือ */}
+          <div className="flex flex-col px-6 pb-6 pt-6 md:px-10 md:pb-10">
+            <p className="mb-3 text-sm font-bold text-muted-foreground">รายวิชาที่ได้รับมอบหมาย</p>
+            <div className="grid auto-rows-min grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {me.subjectBreakdown.filter((x) => !x.excluded).map((x) => (
+                <div key={x.subjectId} className="flex flex-col gap-3 rounded-2xl bg-muted/40 p-5">
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-black">{x.subjectName}</p>
+                    <p className="truncate text-xs text-muted-foreground">{x.subjectCode}</p>
+                  </div>
+                  <div className="flex items-end justify-between gap-2">
+                    <p className="text-4xl font-black tabular-nums leading-none">
+                      {x.rate === null ? '—' : `${x.rate}%`}
+                    </p>
+                    <p className="text-xs tabular-nums text-muted-foreground">
+                      {x.completedSessions}/{x.expectedSessions} คาบ
+                    </p>
+                  </div>
+                  <KpiBulletBar value={x.rate} />
+                  <div className="flex flex-col gap-1.5 border-t border-border pt-3 text-xs">
+                    <span className="font-bold text-muted-foreground">เกรดเฉลี่ยนักเรียนทั้งห้อง</span>
+                    {(gpaBySubject[x.subjectId] ?? []).length === 0 ? (
+                      <span className="text-base font-black">—</span>
+                    ) : (
+                      gpaBySubject[x.subjectId]
+                        .slice()
+                        .sort((p, q) => p.className.localeCompare(q.className, 'th'))
+                        .map((c) => (
+                          <div key={c.classId} className="flex items-baseline justify-between gap-2">
+                            <span className="truncate font-bold">{c.className}</span>
+                            <span className="tabular-nums">
+                              <span className="text-base font-black">{formatGpa(Number(c.avgGpa.toFixed(2)))}</span>
+                              <span className="ml-1 text-muted-foreground">({c.n} คน)</span>
+                            </span>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </div>
+              ))}
+              {me.subjectBreakdown.every((x) => x.excluded) && (
+                <p className="text-xs text-muted-foreground">ไม่มีรายวิชา</p>
+              )}
+            </div>
+          </div>
+        </Card>
       </motion.div>
     </div>
   );

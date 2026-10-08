@@ -1,7 +1,6 @@
 // src/features/teacherDashboard/TeacherDashboardPage.tsx
 import { motion } from 'framer-motion';
 import {
-  HiOutlineAcademicCap,
   HiOutlineBriefcase,
   HiOutlineChartBar,
   HiOutlineClipboardDocumentCheck,
@@ -19,6 +18,10 @@ import { KpiBulletBar } from '@/features/teacherKpi/components/KpiBulletBar';
 import { formatGpa } from '@/types/grades';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
 import { cn } from '@/lib/utils';
+
+function formatThaiDate(ymd: string): string {
+  return new Date(`${ymd}T00:00:00`).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+}
 
 const fadeUp = {
   hidden: { opacity: 0, y: 12 },
@@ -58,7 +61,7 @@ function SectionTitle({ icon: Icon, children }: { icon: IconType; children: stri
 export default function TeacherDashboardPage() {
   const { user } = useAuth();
   const { activeYear, activeSemester } = useActiveAcademicYear();
-  const { row: me, teacherId, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const { row: me, teacherId, range, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
   const { data: grades } = useTeacherGradeSummary(
     [teacherId ?? '', user?.uid ?? ''],
   );
@@ -70,10 +73,6 @@ export default function TeacherDashboardPage() {
   if (!me) {
     return <p className="p-6 text-sm text-muted-foreground">ไม่พบข้อมูลครูที่ผูกกับบัญชีนี้</p>;
   }
-
-  const gradedPct = grades && grades.studentCount > 0
-    ? Math.round((grades.gradedCount / grades.studentCount) * 100)
-    : null;
 
   return (
     <div className="flex w-full flex-col gap-4 pb-6">
@@ -92,6 +91,7 @@ export default function TeacherDashboardPage() {
               </p>
               <p className="text-xs text-muted-foreground">
                 ปีการศึกษา {activeYear.year} ภาคเรียนที่ {activeSemester}
+                {' · '}ช่วงเก็บค่า {formatThaiDate(range.from)} – {formatThaiDate(range.to)}
               </p>
             </div>
           </CardContent>
@@ -99,7 +99,7 @@ export default function TeacherDashboardPage() {
       </motion.div>
 
       {/* การ์ดสรุป */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <StatCard
           index={1}
           icon={HiOutlineClipboardDocumentCheck}
@@ -113,13 +113,6 @@ export default function TeacherDashboardPage() {
           label="เวลาปฏิบัติงาน"
           value={me.attendanceRate === null ? '—' : `${me.attendanceRate}%`}
           sub={`มา ${me.attendedDays}/${me.workingDays} วัน · สาย ${attendance?.late ?? 0} · ขาด ${attendance?.absent ?? 0}`}
-        />
-        <StatCard
-          index={3}
-          icon={HiOutlineAcademicCap}
-          label="เกรดเฉลี่ยนักเรียน"
-          value={grades?.overallAvgGpa == null ? '—' : formatGpa(Number(grades.overallAvgGpa.toFixed(2)))}
-          sub={gradedPct === null ? 'ยังไม่มีผลการเรียน' : `ตัดเกรดแล้ว ${gradedPct}%`}
         />
       </div>
 

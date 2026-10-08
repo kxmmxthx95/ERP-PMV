@@ -24,7 +24,7 @@ import {
 import type { Student } from '@/types/student';
 
 const SCORES: ClassroomBehaviorScore[] = [3, 2, 1];
-const SCORE_VARIANT = { 3: 'default', 2: 'secondary', 1: 'destructive' } as const;
+const SCORE_VARIANT = { 3: 'success', 2: 'warning', 1: 'destructive' } as const;
 const GRID = 'grid gap-3 px-4 py-3 items-center border-b border-border last:border-b-0 hover:bg-muted/40 md:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))_5rem]';
 
 type Draft = Partial<ClassroomBehaviorScores>;
@@ -138,7 +138,10 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
       if (ec.semester != null && ec.semester !== semester) continue;
       if (canViewAll || matchesTeacherIdentity(ec.teacherId, mgr.teacherIdentityKeys)) ids.add(ec.subjectId);
     }
-    return [...ids].map((id) => ({ id, name: mgr.mySubjects.find((s) => s.id === id)?.name ?? id }));
+    return [...ids]
+      .map((id) => mgr.mySubjects.find((s) => s.id === id))
+      .filter((s): s is NonNullable<typeof s> => !!s && s.category !== 'activity')
+      .map((s) => ({ id: s.id, name: s.name }));
   }, [cls, semester, canViewAll, mgr.teacherIdentityKeys, mgr.mySubjects]);
 
   const subjectName = subjects.find((s) => s.id === subjectId)?.name ?? '';
@@ -167,9 +170,6 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
 
   const setScore = (studentId: string, key: keyof ClassroomBehaviorScores, v: ClassroomBehaviorScore) =>
     setDrafts((d) => ({ ...d, [studentId]: { ...d[studentId], [key]: v } }));
-
-  const allExcellent = () =>
-    setDrafts(Object.fromEntries(students.map((s) => [s.id, { responsibility: 3, participation: 3, effort: 3 }])));
 
   const handleSave = async () => {
     if (!cls) return;
@@ -212,8 +212,9 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
   };
 
   const subjectsInOverview = useMemo(
-    () => [...new Map(records.map((r) => [r.subjectId, r.subjectName])).entries()],
-    [records],
+    () => [...new Map(records.map((r) => [r.subjectId, r.subjectName])).entries()]
+      .filter(([sid]) => mgr.mySubjects.find((s) => s.id === sid)?.category !== 'activity'),
+    [records, mgr.mySubjects],
   );
 
   return (
@@ -265,11 +266,6 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
       {/* Rate: table */}
       {cls && !overview && subjectId && !loading && (
         <>
-          {editable && (
-            <div className="flex justify-end">
-              <Button variant="outline" onClick={allExcellent}>ให้ทุกคนเป็นดีเยี่ยม</Button>
-            </div>
-          )}
           <div className="rounded-2xl border border-border bg-card overflow-hidden">
             <div className={`${GRID} hidden md:grid text-[10px] font-black uppercase tracking-wider text-muted-foreground bg-muted/30`}>
               <span>นักเรียน</span>
@@ -327,7 +323,6 @@ export default function ClassroomBehaviorPage() {
 
   return (
     <div className="flex flex-1 flex-col min-h-0 gap-4 pb-24 font-sukhumvit">
-      <h1 className="text-lg font-black">ประเมินพฤติกรรมในชั้นเรียน</h1>
       {role === 'student'
         ? <StudentView year={yearId} semester={semester} />
         : <StaffView year={yearId} semester={semester} />}

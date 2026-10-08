@@ -57,14 +57,13 @@ export function useTeacherDashboardKpi() {
   }, [activeYear, semester, calendarEvents, deptSemesterSettings]);
 
   const today = getLocalDateString();
-  // ช่วงเก็บค่า: 1 ก.ค. – 31 ต.ค. ของปีที่ภาคเรียนเริ่ม (ตัดให้อยู่ในภาคเรียนและไม่เกินวันนี้)
+  // ช่วงเก็บค่า: 1 ก.ค. – 31 ต.ค. ของปีที่ภาคเรียนเริ่ม (เริ่ม 1 ก.ค. แม้ภาคเรียนเริ่มทีหลัง · สิ้นสุดไม่เกินวันนี้/วันสิ้นภาคเรียน)
   // ponytail: ฮาร์ดโค้ดช่วงเดือน — ถ้าต้องปรับบ่อยค่อยย้ายไปเป็นค่าตั้งใน Firestore
   const windowYear = semesterRange.startDate.slice(0, 4);
   const windowStart = windowYear ? `${windowYear}-07-01` : '';
   const windowEnd = windowYear ? `${windowYear}-10-31` : '';
   const configuredStart = settings.startDate;
   const effectiveStart = [
-    semesterRange.startDate,
     windowStart,
     configuredStart && configuredStart <= semesterRange.endDate ? configuredStart : '',
   ].reduce((a, b) => (b > a ? b : a), '');

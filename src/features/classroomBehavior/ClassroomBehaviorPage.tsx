@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { HiChevronDown, HiChevronUp, HiChevronUpDown } from 'react-icons/hi2';
 import { useAuth } from '@/hooks/useAuth';
@@ -7,6 +8,7 @@ import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeachingManager } from '@/hooks/useTeachingManager';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useCurriculumVersioned } from '@/hooks/useCurriculumVersioned';
+import { useClassroomBehaviorConfig } from '@/hooks/useClassroomBehaviorConfig';
 import { useClassroomBehaviorRecords, saveClassroomBehaviorBatch } from '@/hooks/useClassroomBehavior';
 import { resolveStudentByAuthUser } from '@/lib/resolveStudentProfile';
 import { studentIdentityKeys } from '@/lib/students/studentIdentity';
@@ -23,6 +25,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { NativeSelect } from '@/components/ui/native-select';
+import ClassroomBehaviorSettings from './ClassroomBehaviorSettings';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import {
   CLASSROOM_BEHAVIOR_CRITERIA,
@@ -31,6 +34,7 @@ import {
   classroomBehaviorAvg,
   classroomBehaviorLevelFromAvg,
   classroomBehaviorOverall,
+  subjectKey,
   type ClassroomBehaviorRecord,
   type ClassroomBehaviorScore,
   type ClassroomBehaviorScores,
@@ -145,9 +149,11 @@ function StudentView({ year, semester }: { year: string; semester: 1 | 2 }) {
     () => (student ? [...studentIdentityKeys(student)].slice(0, 30) : []),
     [student],
   );
-  const { records, loading } = useClassroomBehaviorRecords(
+  const { records: allRecords, loading } = useClassroomBehaviorRecords(
     keys.length ? { studentId: keys, academicYearId: year, semester } : null,
   );
+  const { excluded } = useClassroomBehaviorConfig();
+  const records = useMemo(() => allRecords.filter((r) => !excluded.has(subjectKey(r.subjectName))), [allRecords, excluded]);
 
   if (!resolved || loading) return <p className="py-10 text-center text-sm text-muted-foreground">กำลังโหลด...</p>;
   if (!records.length) return <p className="py-10 text-center text-sm font-bold text-muted-foreground">ยังไม่มีผลการประเมิน</p>;
@@ -177,6 +183,7 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
   const { canEdit } = useMyPermissions();
   const canViewAll = role === 'admin' || role === 'sysadmin';
   const mgr = useTeachingManager(user?.uid ?? '', canViewAll);
+  const { excluded } = useClassroomBehaviorConfig();
   const curriculum = useCurriculum();
   const { coursesByVersion, loadCoursesForVersion } = useCurriculumVersioned();
 
@@ -211,9 +218,9 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
     }
     return [...ids]
       .map((id) => mgr.mySubjects.find((s) => s.id === id))
-      .filter((s): s is NonNullable<typeof s> => !!s && s.category !== 'activity')
+      .filter((s): s is NonNullable<typeof s> => !!s && s.category !== 'activity' && !excluded.has(subjectKey(s.name)))
       .map((s) => ({ id: s.id, name: s.name }));
-  }, [cls, semester, canViewAll, mgr.teacherIdentityKeys, mgr.mySubjects]);
+  }, [cls, semester, canViewAll, mgr.teacherIdentityKeys, mgr.mySubjects, excluded]);
 
   useEffect(() => {
     if (cls?.curriculumPackageId) loadCoursesForVersion(cls.curriculumPackageId);
@@ -328,12 +335,12 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
     for (const ec of cls.enrolledCourses ?? []) {
       if (ec.semester != null && ec.semester !== semester) continue;
       const i = info.get(ec.subjectId);
-      if (i && !i.activity) out.set(ec.subjectId, i.name);
+      if (i && !i.activity && !excluded.has(subjectKey(i.name))) out.set(ec.subjectId, i.name);
     }
     // legacy records for subjects no longer resolvable
-    for (const r of records) if (!out.has(r.subjectId) && !info.get(r.subjectId)?.activity) out.set(r.subjectId, r.subjectName);
+    for (const r of records) if (!out.has(r.subjectId) && !info.get(r.subjectId)?.activity && !excluded.has(subjectKey(r.subjectName))) out.set(r.subjectId, r.subjectName);
     return [...out.entries()];
-  }, [cls, semester, coursesByVersion, curriculum.subjects, mgr.mySubjects, records]);
+  }, [cls, semester, coursesByVersion, curriculum.subjects, mgr.mySubjects, records, excluded]);
 
   // Averages (equal weight per subject; unrated subjects/students skipped)
   const overviewStats = useMemo(() => {
@@ -535,7 +542,13 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
 
 export default function ClassroomBehaviorPage() {
   const { role } = useAuth();
+  const { canDelete } = useMyPermissions();
   const { year, activeSemester, isLoaded } = useActiveAcademicYear();
+  // Header slots live in PortalLayout, already mounted when this lazy page renders
+  const [rightEl] = useState(() => document.getElementById('header-portal-right-actions'));
+  const [mobileEl] = useState(() => document.getElementById('header-portal-mobile-actions'));
+  // Settings gear in the main portal header: `full` level only (sysadmin always)
+  const showGear = role !== 'student' && canDelete('classroomBehavior');
 
   if (!isLoaded || !year) {
     return (
@@ -549,6 +562,8 @@ export default function ClassroomBehaviorPage() {
 
   return (
     <div className="flex flex-1 flex-col min-h-0 gap-4 pb-24 font-sukhumvit">
+      {showGear && rightEl && createPortal(<ClassroomBehaviorSettings />, rightEl)}
+      {showGear && mobileEl && createPortal(<ClassroomBehaviorSettings />, mobileEl)}
       {role === 'student'
         ? <StudentView year={yearId} semester={semester} />
         : <StaffView year={yearId} semester={semester} />}

@@ -54,3 +54,11 @@ export function classroomBehaviorDocId(p: {
 }): string {
   return [p.academicYearId, p.semester, p.classId, p.subjectId, p.studentId].join('_');
 }
+
+/** `system_config/classroomBehavior` — school-wide settings. */
+export interface ClassroomBehaviorConfig {
+  /** Subject names (trimmed) that do not need rating. Name-based so new curriculum versions stay covered. */
+  excludedSubjects: string[];
+}
+
+export const subjectKey = (name: string): string => name.trim();

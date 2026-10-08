@@ -31,10 +31,18 @@ export interface ClassroomBehaviorRecord extends ClassroomBehaviorScores {
   updatedAt: string;
 }
 
+/** Numeric average of the 3 criteria (1–3). */
+export function classroomBehaviorAvg(s: ClassroomBehaviorScores): number {
+  return (s.responsibility + s.participation + s.effort) / 3;
+}
+
+export function classroomBehaviorLevelFromAvg(avg: number): ClassroomBehaviorScore {
+  return avg >= 2.5 ? 3 : avg >= 1.5 ? 2 : 1;
+}
+
 /** Overall level is derived from the average, never stored. */
 export function classroomBehaviorOverall(s: ClassroomBehaviorScores): ClassroomBehaviorScore {
-  const avg = (s.responsibility + s.participation + s.effort) / 3;
-  return avg >= 2.5 ? 3 : avg >= 1.5 ? 2 : 1;
+  return classroomBehaviorLevelFromAvg(classroomBehaviorAvg(s));
 }
 
 export function classroomBehaviorDocId(p: {

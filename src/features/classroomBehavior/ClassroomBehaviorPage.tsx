@@ -27,6 +27,8 @@ import {
   CLASSROOM_BEHAVIOR_CRITERIA,
   CLASSROOM_BEHAVIOR_LEVEL,
   classroomBehaviorDocId,
+  classroomBehaviorAvg,
+  classroomBehaviorLevelFromAvg,
   classroomBehaviorOverall,
   type ClassroomBehaviorRecord,
   type ClassroomBehaviorScore,
@@ -59,6 +61,21 @@ function StatusDot({ score }: { score?: ClassroomBehaviorScore }) {
       <span className={`size-4 rounded-full ${score ? DOT_COLOR[score] : 'bg-muted-foreground/30'}`} />
       <span className="sr-only">{label}</span>
     </span>
+  );
+}
+
+/** Status dot + average number (1–3) with a "n/total" coverage hint. */
+function AvgCell({ values, total, unit }: { values: number[]; total: number; unit: string }) {
+  if (!values.length) return <StatusDot />;
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className="inline-flex items-center gap-1.5">
+        <StatusDot score={classroomBehaviorLevelFromAvg(avg)} />
+        <span className="text-sm font-black tabular-nums">{avg.toFixed(2)}</span>
+      </span>
+      <span className="text-[10px] text-muted-foreground">{values.length}/{total} {unit}</span>
+    </div>
   );
 }
 
@@ -291,6 +308,26 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
     return [...out.entries()];
   }, [cls, semester, coursesByVersion, curriculum.subjects, mgr.mySubjects, records]);
 
+  // Averages (equal weight per subject; unrated subjects/students skipped)
+  const overviewStats = useMemo(() => {
+    const subjectIdSet = new Set(subjectsInOverview.map(([sid]) => sid));
+    const cell = new Map<string, number>(); // `${studentId}|${subjectId}` → avg
+    for (const r of records) if (subjectIdSet.has(r.subjectId)) cell.set(`${r.studentId}|${r.subjectId}`, classroomBehaviorAvg(r));
+    const perStudent = new Map<string, number[]>();
+    const perSubject = new Map<string, number[]>();
+    const all: number[] = [];
+    for (const s of students) {
+      for (const [sid] of subjectsInOverview) {
+        const v = cell.get(`${s.id}|${sid}`);
+        if (v == null) continue;
+        (perStudent.get(s.id) ?? perStudent.set(s.id, []).get(s.id)!).push(v);
+        (perSubject.get(sid) ?? perSubject.set(sid, []).get(sid)!).push(v);
+        all.push(v);
+      }
+    }
+    return { perStudent, perSubject, all };
+  }, [records, students, subjectsInOverview]);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -339,6 +376,7 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
             <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/30 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
               <span className="w-48">นักเรียน</span>
               {subjectsInOverview.map(([sid, name]) => <span key={sid} className="w-32 truncate text-center" title={name}>{name}</span>)}
+              <span className="w-32 text-center">เฉลี่ย</span>
             </div>
             {students.map((s) => (
               <div key={s.id} className="flex items-center gap-3 px-4 py-3 border-b border-border last:border-b-0 hover:bg-muted/40">
@@ -351,8 +389,24 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
                     </div>
                   );
                 })}
+                <div className="flex w-32 justify-center">
+                  <AvgCell values={overviewStats.perStudent.get(s.id) ?? []} total={subjectsInOverview.length} unit="วิชา" />
+                </div>
               </div>
             ))}
+            {subjectsInOverview.length > 0 && students.length > 0 && (
+              <div className="flex items-center gap-3 px-4 py-3 border-t border-border bg-muted/30">
+                <span className="w-48 text-[10px] font-black uppercase tracking-wider text-muted-foreground">เฉลี่ยทั้งห้อง</span>
+                {subjectsInOverview.map(([sid]) => (
+                  <div key={sid} className="flex w-32 justify-center">
+                    <AvgCell values={overviewStats.perSubject.get(sid) ?? []} total={students.length} unit="คน" />
+                  </div>
+                ))}
+                <div className="flex w-32 justify-center">
+                  <AvgCell values={overviewStats.all} total={students.length * subjectsInOverview.length} unit="รายการ" />
+                </div>
+              </div>
+            )}
             {!subjectsInOverview.length && <p className="py-8 text-center text-sm text-muted-foreground">ห้องนี้ไม่มีรายวิชา</p>}
           </div>
         </div>

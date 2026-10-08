@@ -69,7 +69,7 @@ const MENU_CATEGORIES = [
     id: 'academic_teaching',
     nameTh: 'งานวิชาการและการสอน',
     nameEn: 'Academic & Teaching',
-    featureKeys: ['curriculum', 'schedule', 'calendar', 'classes', 'microSyllabus', 'courseOnDemand'],
+    featureKeys: ['curriculum', 'schedule', 'calendar', 'classes', 'microSyllabus', 'courseOnDemand', 'teacherDashboard'],
   },
   {
     id: 'assessment_testing',

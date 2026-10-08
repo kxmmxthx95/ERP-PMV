@@ -33,6 +33,7 @@ const ExamAbsencesPage = lazy(() => import('@/features/exam/ExamAbsencesPage'));
 const QuestionBankManager = lazy(() => import('@/features/questionBank/QuestionBankManager'));
 const StaffAttendancePage = lazy(() => import('@/features/attendance/StaffAttendancePage'));
 const TeacherKpiPage = lazy(() => import('@/features/teacherKpi/TeacherKpiPage'));
+const TeacherDashboardPage = lazy(() => import('@/features/teacherDashboard/TeacherDashboardPage'));
 const ClassAttendanceReportPage = lazy(() => import('@/features/classAttendanceReport/ClassAttendanceReportPage'));
 const FingerprintDeviceManagerPage = lazy(() => import('@/features/fingerprintDevices/FingerprintDeviceManagerPage'));
 const AttendanceCenterPage = lazy(() => import('@/features/attendance/AttendanceCenterPage'));
@@ -240,6 +241,11 @@ export default function App() {
             <Route path="fingerprint-devices" element={
               <PermissionGate featureKey="fingerprintDevices">
                 <FingerprintDeviceManagerPage />
+              </PermissionGate>
+            } />
+            <Route path="teacher-dashboard" element={
+              <PermissionGate featureKey="teacherDashboard">
+                <TeacherDashboardPage />
               </PermissionGate>
             } />
             <Route path="teacher-kpi" element={

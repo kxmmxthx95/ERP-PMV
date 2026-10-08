@@ -33,9 +33,10 @@ export function useClassroomBehaviorRecords(filters: Record<string, unknown> | n
   return { records: ready ? loaded.rows : NONE, loading: !!key && !ready, reload };
 }
 
-export async function saveClassroomBehaviorBatch(rows: ClassroomBehaviorRecord[]) {
+export async function saveClassroomBehaviorBatch(rows: ClassroomBehaviorRecord[], deleteIds: string[] = []) {
   // ponytail: Firestore batch cap 500 — a class is ~50 students; chunk if that changes
   const batch = writeBatch(db);
   for (const { id, ...data } of rows) batch.set(doc(db, COL, id), data);
+  for (const id of deleteIds) batch.delete(doc(db, COL, id));
   await batch.commit();
 }

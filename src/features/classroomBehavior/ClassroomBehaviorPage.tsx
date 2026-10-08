@@ -12,6 +12,15 @@ import { studentIdentityKeys } from '@/lib/students/studentIdentity';
 import { matchesTeacherIdentity } from '@/lib/teachers/teacherIdentity';
 import { logActivity } from '@/lib/activityLogger';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { NativeSelect } from '@/components/ui/native-select';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import {
@@ -129,7 +138,8 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
   const { coursesByVersion, loadCoursesForVersion } = useCurriculumVersioned();
 
   const [classId, setClassId] = useState('');
-  const [subjectId, setSubjectId] = useState('');
+  const [subjectIds, setSubjectIds] = useState<string[]>([]);
+  const [pending, setPending] = useState<{ rows: ClassroomBehaviorRecord[]; deleteIds: string[]; incomplete: number; conflicts: number } | null>(null);
   const [mode, setMode] = useState<'rate' | 'overview'>('rate');
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [saving, setSaving] = useState(false);
@@ -165,7 +175,11 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
     if (cls?.curriculumPackageId) loadCoursesForVersion(cls.curriculumPackageId);
   }, [cls?.curriculumPackageId, loadCoursesForVersion]);
 
-  const subjectName = subjects.find((s) => s.id === subjectId)?.name ?? '';
+  // Selected subjects, in list order; the first one prefills the grid.
+  const selected = useMemo(() => subjects.filter((s) => subjectIds.includes(s.id)), [subjects, subjectIds]);
+  const primaryId = selected[0]?.id ?? '';
+  const toggleSubject = (id: string) =>
+    setSubjectIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   const students = useMemo(
     () => (cls && mgr.isRosterDataLoaded
       ? mgr.getStudentsForClass(cls.id).map((x) => x.student)
@@ -177,59 +191,83 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
 
   const overview = mode === 'overview' && canOverview;
   const { records, loading, reload } = useClassroomBehaviorRecords(
-    cls && (overview || subjectId)
-      ? { classId: cls.id, academicYearId: year, semester, ...(overview ? {} : { subjectId }) }
+    cls && (overview || selected.length)
+      ? { classId: cls.id, academicYearId: year, semester }
       : null,
   );
 
-  // Reset drafts from saved records whenever the loaded set changes
+  // Reset drafts from the primary subject's saved records whenever the loaded set or primary subject changes
   useEffect(() => {
     const next: Record<string, Draft> = {};
-    for (const r of records) next[r.studentId] = { responsibility: r.responsibility, participation: r.participation, effort: r.effort };
-    setDrafts(next);
-  }, [records]);
-
-  const setScore = (studentId: string, key: keyof ClassroomBehaviorScores, v: ClassroomBehaviorScore) =>
-    setDrafts((d) => ({ ...d, [studentId]: { ...d[studentId], [key]: v } }));
-
-  const handleSave = async () => {
-    if (!cls) return;
-    const rows: ClassroomBehaviorRecord[] = [];
-    let incomplete = 0;
-    for (const s of students) {
-      const d = drafts[s.id];
-      if (!d?.responsibility || !d.participation || !d.effort) { if (d && (d.responsibility || d.participation || d.effort)) incomplete++; continue; }
-      rows.push({
-        id: classroomBehaviorDocId({ academicYearId: year, semester, classId: cls.id, subjectId, studentId: s.id }),
-        studentId: s.id,
-        studentName: `${s.prefix ?? ''}${s.firstName} ${s.lastName}`,
-        studentCode: s.studentCode ?? '',
-        classId: cls.id,
-        className: cls.className,
-        subjectId,
-        subjectName,
-        teacherId: user?.uid ?? '',
-        departmentId: cls.departmentId,
-        academicYearId: year,
-        semester,
-        responsibility: d.responsibility,
-        participation: d.participation,
-        effort: d.effort,
-        updatedAt: new Date().toISOString(),
-      });
+    for (const r of records) {
+      if (r.subjectId === primaryId) next[r.studentId] = { responsibility: r.responsibility, participation: r.participation, effort: r.effort };
     }
-    if (!rows.length) { toast.error('ยังไม่ได้ประเมินนักเรียนคนใดครบ 3 เกณฑ์'); return; }
+    setDrafts(next);
+  }, [records, primaryId]);
+
+  // Clicking the selected level again clears it
+  const setScore = (studentId: string, key: keyof ClassroomBehaviorScores, v: ClassroomBehaviorScore) =>
+    setDrafts((d) => ({ ...d, [studentId]: { ...d[studentId], [key]: d[studentId]?.[key] === v ? undefined : v } }));
+
+  const commit = async (p: NonNullable<typeof pending>) => {
+    if (!cls) return;
     setSaving(true);
     try {
-      await saveClassroomBehaviorBatch(rows);
-      logActivity({ action: 'classroom_behavior_save', category: 'academic', targetId: `${cls.id}_${subjectId}`, detail: `${rows.length} คน` });
-      toast.success(`บันทึก ${rows.length} คน${incomplete ? ` (ข้าม ${incomplete} คนที่ยังไม่ครบ)` : ''}`);
+      await saveClassroomBehaviorBatch(p.rows, p.deleteIds);
+      logActivity({ action: 'classroom_behavior_save', category: 'academic', targetId: `${cls.id}_${subjectIds.join(',')}`, detail: `บันทึก ${p.rows.length} ลบ ${p.deleteIds.length}` });
+      toast.success(`บันทึก ${p.rows.length} รายการ${p.deleteIds.length ? ` ล้างผล ${p.deleteIds.length} รายการ` : ''}${p.incomplete ? ` (ข้าม ${p.incomplete} คนที่ยังไม่ครบ)` : ''}`);
       reload();
     } catch {
       toast.error('บันทึกไม่สำเร็จ');
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSave = () => {
+    if (!cls) return;
+    const rows: ClassroomBehaviorRecord[] = [];
+    const deleteIds: string[] = [];
+    let incomplete = 0;
+    let conflicts = 0;
+    for (const s of students) {
+      const d = drafts[s.id];
+      const complete = !!(d?.responsibility && d.participation && d.effort);
+      const partial = !complete && !!(d && (d.responsibility || d.participation || d.effort));
+      if (partial) incomplete++;
+      for (const sub of selected) {
+        const id = classroomBehaviorDocId({ academicYearId: year, semester, classId: cls.id, subjectId: sub.id, studentId: s.id });
+        const old = records.find((r) => r.id === id);
+        if (!complete) {
+          if (!partial && old) deleteIds.push(id); // fully cleared → remove saved result
+          continue;
+        }
+        if (old && (old.responsibility !== d!.responsibility || old.participation !== d!.participation || old.effort !== d!.effort)) conflicts++;
+        rows.push({
+          id,
+          studentId: s.id,
+          studentName: `${s.prefix ?? ''}${s.firstName} ${s.lastName}`,
+          studentCode: s.studentCode ?? '',
+          classId: cls.id,
+          className: cls.className,
+          subjectId: sub.id,
+          subjectName: sub.name,
+          teacherId: user?.uid ?? '',
+          departmentId: cls.departmentId,
+          academicYearId: year,
+          semester,
+          responsibility: d!.responsibility!,
+          participation: d!.participation!,
+          effort: d!.effort!,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
+    if (!rows.length && !deleteIds.length) { toast.error('ยังไม่ได้ประเมินนักเรียนคนใดครบ 3 เกณฑ์'); return; }
+    const p = { rows, deleteIds, incomplete, conflicts };
+    // Several subjects at once: confirm before overwriting or deleting saved results
+    if (selected.length > 1 && (conflicts > 0 || deleteIds.length > 0)) setPending(p);
+    else void commit(p);
   };
 
   // Overview columns = every non-activity subject the class takes this semester (rated or not).
@@ -256,22 +294,32 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <NativeSelect className="w-44" value={classId} onChange={(e) => { setClassId(e.target.value); setSubjectId(''); }}>
+        <NativeSelect className="w-44" value={classId} onChange={(e) => { setClassId(e.target.value); setSubjectIds([]); }}>
           <option value="">เลือกห้อง</option>
           {classes.map((c) => <option key={c.id} value={c.id}>{c.className}</option>)}
         </NativeSelect>
-        {!overview && (
-          <NativeSelect className="w-64" value={subjectId} disabled={!cls} onChange={(e) => setSubjectId(e.target.value)}>
-            <option value="">เลือกวิชา</option>
-            {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </NativeSelect>
-        )}
         {canOverview && cls && (
           <Button variant="outline" onClick={() => setMode(overview ? 'rate' : 'overview')}>
             {overview ? 'กลับไปกรอก' : 'ภาพรวมทุกวิชา'}
           </Button>
         )}
       </div>
+
+      {cls && !overview && (
+        <div className="flex flex-wrap items-center gap-2">
+          {subjects.map((sub) => (
+            <Button key={sub.id} size="sm" variant={subjectIds.includes(sub.id) ? 'default' : 'outline'} onClick={() => toggleSubject(sub.id)}>
+              {sub.name}
+            </Button>
+          ))}
+          {subjects.length > 1 && (
+            <Button size="sm" variant="ghost" onClick={() => setSubjectIds(subjectIds.length === subjects.length ? [] : subjects.map((x) => x.id))}>
+              {subjectIds.length === subjects.length ? 'ล้างที่เลือก' : 'เลือกทั้งหมด'}
+            </Button>
+          )}
+          {!subjects.length && <span className="text-sm text-muted-foreground">ไม่มีวิชาที่ประเมินได้ในห้องนี้</span>}
+        </div>
+      )}
 
       {!cls && <p className="py-10 text-center text-sm font-bold text-muted-foreground">เลือกห้องเพื่อเริ่มประเมิน</p>}
       {cls && loading && <p className="py-6 text-center text-sm text-muted-foreground">กำลังโหลด...</p>}
@@ -311,7 +359,7 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
       )}
 
       {/* Rate: table */}
-      {cls && !overview && subjectId && !loading && (
+      {cls && !overview && selected.length > 0 && !loading && (
         <>
           <div className="rounded-2xl border border-border bg-card overflow-hidden">
             <div className={`${GRID} hidden md:grid text-[10px] font-black uppercase tracking-wider text-muted-foreground bg-muted/30`}>
@@ -345,11 +393,30 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
           </div>
           {editable && (
             <Button className="w-full" disabled={saving || !students.length} onClick={handleSave}>
-              {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+              {saving ? 'กำลังบันทึก...' : selected.length > 1 ? `บันทึกลง ${selected.length} วิชา` : 'บันทึก'}
             </Button>
           )}
         </>
       )}
+
+      <AlertDialog open={!!pending} onOpenChange={(o) => { if (!o) setPending(null); }}>
+        <AlertDialogContent className="rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{pending?.deleteIds.length ? 'เขียนทับ/ลบผลที่บันทึกไว้?' : 'เขียนทับผลที่บันทึกไว้?'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pending?.conflicts ? `มี ${pending.conflicts} รายการที่มีผลประเมินเดิมต่างจากที่กรอก จะถูกเขียนทับ` : ''}
+              {pending?.conflicts && pending.deleteIds.length ? ' และ ' : ''}
+              {pending?.deleteIds.length ? `มี ${pending.deleteIds.length} รายการที่ล้างผลจนว่าง ผลเดิมจะถูกลบ` : ''}
+              {' '}ในวิชาที่เลือก
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => { const p = pending; setPending(null); if (p) void commit(p); }}>
+              ยืนยันและบันทึก
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

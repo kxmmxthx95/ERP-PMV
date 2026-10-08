@@ -47,6 +47,7 @@ const ReportControlCenter = lazy(() => import('@/features/reports/ReportControlC
 const AnnouncementsPage = lazy(() => import('@/features/announcements/AnnouncementsPage'));
 const FeedbackPage = lazy(() => import('@/features/feedback/FeedbackPage'));
 const BehaviorScorePage = lazy(() => import('@/features/behavior/BehaviorScorePage'));
+const ClassroomBehaviorPage = lazy(() => import('@/features/classroomBehavior/ClassroomBehaviorPage'));
 const GradeBookPage = lazy(() => import('@/features/grades/GradeBookPage'));
 const StudentAnalyticsPage = lazy(() => import('@/features/studentAnalytics/StudentAnalyticsPage'));
 const LineConnectPage = lazy(() => import('@/features/profile/LineConnectPage'));
@@ -294,6 +295,11 @@ export default function App() {
             <Route path="behavior" element={
               <PermissionGate featureKey="behaviorScore">
                 <BehaviorScorePage />
+              </PermissionGate>
+            } />
+            <Route path="classroom-behavior" element={
+              <PermissionGate featureKey="classroomBehavior">
+                <ClassroomBehaviorPage />
               </PermissionGate>
             } />
             <Route path="future-plan" element={

@@ -62,6 +62,7 @@ export const FEATURE_LIST: FeaturePermission[] = [
   { featureKey: 'feedback_manage', label: 'จัดการสถานะ PMV Voice', category: 'เกรดและการเข้าเรียน', enabled: false, accessLevel: 'edit' },
   { featureKey: 'feedback_view_identity', label: 'ดูชื่อผู้ส่ง PMV Voice', category: 'เกรดและการเข้าเรียน', enabled: false, accessLevel: 'view-only' },
   { featureKey: 'behaviorScore', label: 'คะแนนพฤติกรรม', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'edit' },
+  { featureKey: 'classroomBehavior', label: 'ประเมินพฤติกรรมในชั้นเรียน', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'edit' },
 
   // ── ครูเวร ──
   { featureKey: 'dutySchedule', label: 'ตารางครูเวร', category: 'เกรดและการเข้าเรียน', enabled: true, accessLevel: 'edit' },

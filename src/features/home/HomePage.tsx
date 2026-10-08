@@ -81,7 +81,7 @@ const MENU_CATEGORIES = [
     id: 'student_affairs',
     nameTh: 'งานกิจการนักเรียนและส่วนกลาง',
     nameEn: 'Student Affairs & Operation',
-    featureKeys: ['attendance', 'morningRollCall', 'dutySchedule', 'substituteTeaching', 'announcements', 'tasks', 'feedback', 'behaviorScore', 'studentAnalytics', 'reports', 'aiAgents', 'futurePlan'],
+    featureKeys: ['attendance', 'morningRollCall', 'dutySchedule', 'substituteTeaching', 'announcements', 'tasks', 'feedback', 'behaviorScore', 'classroomBehavior', 'studentAnalytics', 'reports', 'aiAgents', 'futurePlan'],
   },
 ];
 

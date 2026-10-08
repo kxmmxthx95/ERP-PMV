@@ -13,6 +13,7 @@ import { resolveSemesterDateRange, enumerateWorkingDays } from '@/lib/teacherKpi
 import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
 import { isTimestampAtOrAfterNoon } from '@/hooks/useStaffAttendance';
 import { sessionCache } from '@/lib/sessionCache';
+import { resolveCanonicalTeacherId } from '@/lib/teachers/teacherIdentity';
 import { useTeacherKpiSettings } from '@/hooks/useTeacherKpiSettings';
 import type { ScheduleEntry } from '@/types/schedule';
 import type { TeacherKpiRow, TeacherKpiSummary, TeacherSubjectKpi } from '@/types/teacherKpi';
@@ -57,7 +58,7 @@ async function fetchStaffEntriesForDays(workingDays: string[]): Promise<Map<stri
   return attendedByDate;
 }
 
-function countExpectedSessions(teacherSchedules: ScheduleEntry[], workingDays: string[]): number {
+export function countExpectedSessions(teacherSchedules: ScheduleEntry[], workingDays: string[]): number {
   const weekdayCounts = new Map<number, number>();
   for (const dateStr of workingDays) {
     const dow = new Date(`${dateStr}T00:00:00`).getDay();
@@ -169,9 +170,12 @@ export function useTeacherKpi() {
           const data = d.data() as { teacherId?: string; date?: string; subjectId?: string };
           if (!data.teacherId || !data.date || !data.subjectId) return;
           if (data.date > computedThrough || data.date < effectiveStart) return;
-          const bySubject = sessionCountByTeacherSubject.get(data.teacherId) ?? new Map<string, number>();
+          // บางหน้าบันทึก teacherId เป็น auth uid แทน id เอกสารครู — แปลงให้เป็น id เดียวกันก่อนนับ
+          const canonicalId = resolveCanonicalTeacherId(data.teacherId, teachers);
+          if (!canonicalId) return;
+          const bySubject = sessionCountByTeacherSubject.get(canonicalId) ?? new Map<string, number>();
           bySubject.set(data.subjectId, (bySubject.get(data.subjectId) ?? 0) + 1);
-          sessionCountByTeacherSubject.set(data.teacherId, bySubject);
+          sessionCountByTeacherSubject.set(canonicalId, bySubject);
         });
 
         const attendedByDate = await fetchStaffEntriesForDays(workingDays);
@@ -192,7 +196,7 @@ export function useTeacherKpi() {
           const excludedSubjectIds = excludedByTeacher[teacher.id] ?? [];
           const schedulesBySubject = new Map<string, ScheduleEntry[]>();
           schedules
-            .filter((s) => s.teacherId === teacher.id)
+            .filter((s) => resolveCanonicalTeacherId(s.teacherId, teachers) === teacher.id)
             .forEach((s) => {
               const arr = schedulesBySubject.get(s.subjectId) ?? [];
               arr.push(s);

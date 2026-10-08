@@ -1,5 +1,6 @@
 import {
   fetchStaffAttendanceRecordsForUser,
+  type StaffAttendanceRecord,
   resolveStaffAttendanceDisplay,
   timestampToLocalDate,
   type AttendanceStatus,
@@ -32,6 +33,17 @@ export async function loadStaffCheckInHistory(
   if (!userId) return [];
 
   const entries = await fetchStaffAttendanceRecordsForUser(userId);
+  return buildCheckInHistoryRows(entries, from, to, leaveDates, isSpecialTeacher);
+}
+
+/** แปลงบันทึกเข้างานดิบเป็นแถวประวัติ — แยกออกมาให้ใช้กับ realtime listener ได้ */
+export function buildCheckInHistoryRows(
+  entries: StaffAttendanceRecord[],
+  from: string,
+  to: string,
+  leaveDates: Set<string>,
+  isSpecialTeacher = false,
+): CheckInHistoryRow[] {
   const inRange = entries.filter((entry) => entry.date >= from && entry.date <= to);
   const rows: CheckInHistoryRow[] = [];
   const seenDates = new Set<string>();

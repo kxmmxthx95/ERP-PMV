@@ -1,7 +1,5 @@
 // src/features/teacherDashboard/TeacherDashboardPage.tsx
-import { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { useQuery } from '@tanstack/react-query';
 import {
   HiOutlineAcademicCap,
   HiOutlineBriefcase,
@@ -14,9 +12,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { IndeterminateProgress } from '@/components/ui/progress';
 import { useAuth } from '@/hooks/useAuth';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
-import { useTeacherKpi } from '@/hooks/useTeacherKpi';
+import { useTeacherDashboardKpi } from '@/hooks/useTeacherDashboardKpi';
 import { useTeacherGradeSummary, GRADE_DISTRIBUTION_LETTERS } from '@/hooks/useTeacherGradeSummary';
-import { loadStaffCheckInHistory, summarizeCheckInHistory } from '@/lib/staffAttendance/checkInHistory';
 import PersonalAttendanceCalendarPanel from '@/features/home/widgets/PersonalAttendanceCalendarPanel';
 import { KpiBulletBar } from '@/features/teacherKpi/components/KpiBulletBar';
 import { formatGpa } from '@/types/grades';
@@ -61,28 +58,15 @@ function SectionTitle({ icon: Icon, children }: { icon: IconType; children: stri
 export default function TeacherDashboardPage() {
   const { user } = useAuth();
   const { activeYear, activeSemester } = useActiveAcademicYear();
-  const { summary, isLoading: kpiLoading } = useTeacherKpi();
-
-  // ตัวตนครู = แถว KPI ที่ userId ตรงกับผู้ใช้ปัจจุบันเท่านั้น (ไม่มีทางดูคนอื่น)
-  const me = useMemo(
-    () => summary?.rows.find((r) => r.userId && r.userId === user?.uid) ?? null,
-    [summary, user?.uid],
+  const { row: me, teacherId, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const { data: grades } = useTeacherGradeSummary(
+    [teacherId ?? '', user?.uid ?? ''],
   );
-  const { data: grades, isLoading: gradesLoading } = useTeacherGradeSummary(me?.teacherId);
-
-  const from = summary?.effectiveStartDate;
-  const to = summary?.computedThroughDate;
-  const { data: attendance } = useQuery({
-    queryKey: ['teacherDashboardAttendance', user?.uid, from, to],
-    enabled: !!user?.uid && !!from && !!to,
-    queryFn: async () =>
-      summarizeCheckInHistory(await loadStaffCheckInHistory(user!.uid, from!, to!, new Set())),
-  });
 
   if (!activeYear) {
     return <p className="p-6 text-sm text-muted-foreground">กรุณาตั้งค่าปีการศึกษาก่อน</p>;
   }
-  if (kpiLoading || gradesLoading) return <IndeterminateProgress />;
+  if (kpiLoading) return <IndeterminateProgress />;
   if (!me) {
     return <p className="p-6 text-sm text-muted-foreground">ไม่พบข้อมูลครูที่ผูกกับบัญชีนี้</p>;
   }

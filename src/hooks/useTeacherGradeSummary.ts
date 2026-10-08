@@ -1,6 +1,6 @@
 // src/hooks/useTeacherGradeSummary.ts
-import { useQuery } from '@tanstack/react-query';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { gradeLetterToGpa, type GradeLetter, type GradeRecord } from '@/types/grades';
@@ -73,26 +73,32 @@ function summarize(records: GradeRecord[]): TeacherGradeSummary {
 }
 
 /**
- * สรุปเกรดจาก grade_records ที่ครูบันทึกแล้ว (1 query)
+ * สรุปเกรดจาก grade_records ที่ครูบันทึกแล้ว — realtime เฉพาะของครูคนนี้
  * ponytail: นับเฉพาะ record ที่บันทึกในสมุดคะแนน — ห้องที่ยังไม่เคยกดบันทึกจะไม่ปรากฏ
  */
-export function useTeacherGradeSummary(teacherId: string | undefined) {
+export function useTeacherGradeSummary(teacherIds: string[]) {
   const { year, activeSemester } = useActiveAcademicYear();
   const semester = activeSemester === 2 ? 2 : 1;
+  const idsKey = teacherIds.filter(Boolean).join('|');
+  const [data, setData] = useState<TeacherGradeSummary | null>(null);
 
-  return useQuery({
-    queryKey: ['teacherGradeSummary', teacherId, year, semester],
-    enabled: !!teacherId && !!year,
-    queryFn: async () => {
-      const snap = await getDocs(
-        query(
-          collection(db, 'grade_records'),
-          where('academicYearId', '==', year),
-          where('semester', '==', semester),
-          where('teacherId', '==', teacherId),
-        ),
-      );
-      return summarize(snap.docs.map((d) => ({ id: d.id, ...d.data() } as GradeRecord)));
-    },
-  });
+  useEffect(() => {
+    const ids = idsKey ? idsKey.split('|') : [];
+    if (!year || ids.length === 0) return;
+    return onSnapshot(
+      query(
+        collection(db, 'grade_records'),
+        where('academicYearId', '==', year),
+        where('semester', '==', semester),
+        where('teacherId', 'in', ids),
+      ),
+      (snap) => setData(summarize(snap.docs.map((d) => ({ id: d.id, ...d.data() } as GradeRecord)))),
+      (err) => {
+        console.error('[useTeacherGradeSummary]', err);
+        setData(summarize([]));
+      },
+    );
+  }, [year, semester, idsKey]);
+
+  return { data, isLoading: data === null };
 }

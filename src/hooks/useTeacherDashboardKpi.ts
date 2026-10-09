@@ -16,7 +16,7 @@ import { loadThaiHolidaysForYear } from '@/features/calendar/hooks/useThaiHolida
 import { getSchedulesByYearSemesterStore } from '@/lib/firestoreShared/schedulesStore';
 import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
 import { getLocalDateString } from '@/lib/calendar/schoolDay';
-import { resolveSemesterDateRange, enumerateWorkingDays, filterOutExamDays } from '@/lib/teacherKpi/semesterDates';
+import { resolveSemesterDateRange, enumerateWorkingDays, filterOutNonTeachingDays } from '@/lib/teacherKpi/semesterDates';
 import { buildCheckInHistoryRows, summarizeCheckInHistory } from '@/lib/staffAttendance/checkInHistory';
 import { resolveCanonicalTeacherId } from '@/lib/teachers/teacherIdentity';
 import type { TeacherKpiRow, TeacherSubjectKpi } from '@/types/teacherKpi';
@@ -84,12 +84,12 @@ export function useTeacherDashboardKpi() {
   }, [effectiveStart, throughDate, calendarEvents]);
 
   // คาบที่เช็คชื่อแล้ว — realtime เฉพาะของครูคนนี้ (teacherId อาจเป็น id เอกสารครูหรือ auth uid)
-  // วันที่มีการเรียนจริง = วันทำงาน ตัดวันสอบ (กลางภาค/ปลายภาค) — ใช้กับ % เช็คชื่อรายวิชาเท่านั้น
+  // วันที่มีการเรียนจริง = วันทำงาน ตัดวันสอบและวันที่มีกิจกรรม — ใช้กับ % เช็คชื่อรายวิชาเท่านั้น
   // ช่วงเช็คชื่อรายวิชา: 1 ก.ค. – 2 ต.ค. (ตัดให้ไม่เกินช่วงเก็บค่าหลัก)
   // ponytail: วันสิ้นสุดฮาร์ดโค้ด — ย้ายไปเป็นค่าตั้งถ้าต้องเปลี่ยนบ่อย
   const rollCallEnd = windowYear && `${windowYear}-10-02` < throughDate ? `${windowYear}-10-02` : throughDate;
   const teachingDays = useMemo(
-    () => filterOutExamDays(workingDays, calendarEvents).filter((d) => d <= rollCallEnd),
+    () => filterOutNonTeachingDays(workingDays, calendarEvents).filter((d) => d <= rollCallEnd),
     [workingDays, calendarEvents, rollCallEnd],
   );
   const teachingDaySet = useMemo(() => new Set(teachingDays), [teachingDays]);

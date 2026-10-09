@@ -166,13 +166,14 @@ export function enumerateWorkingDays(
 }
 
 /**
- * วันที่ไม่มีการเรียนปกติเพราะสอบ (กิจกรรม type 'exam' ในปฏิทินการศึกษา ทั้งช่วงวันเริ่ม–สิ้นสุด)
- * ใช้ตัดคาบออกจากการคิด % เช็คชื่อรายวิชา
+ * ตัดวันที่ไม่มีการเรียนปกติออก: กิจกรรมประเภท 'exam' และ 'activity' ในปฏิทินการศึกษา (ทั้งช่วงวันเริ่ม–สิ้นสุด)
+ * ใช้คิด % เช็คชื่อรายวิชา
+ * ponytail: ตัดทั้งวันทุกกิจกรรม — ปฏิทินไม่เก็บระดับชั้น/เวลา จึงแยกกิจกรรมเฉพาะบางชั้นหรือครึ่งวันไม่ได้
  */
-export function filterOutExamDays(days: string[], calendarEvents: CalendarEvent[]): string[] {
-  const exams = calendarEvents.filter((e) => e.type === 'exam');
-  if (exams.length === 0) return days;
-  return days.filter((d) => !exams.some((e) => d >= e.startDate && d <= e.endDate));
+export function filterOutNonTeachingDays(days: string[], calendarEvents: CalendarEvent[]): string[] {
+  const blocking = calendarEvents.filter((e) => e.type === 'exam' || e.type === 'activity');
+  if (blocking.length === 0) return days;
+  return days.filter((d) => !blocking.some((e) => d >= e.startDate && d <= e.endDate));
 }
 
 export { toDateStr };

@@ -25,7 +25,7 @@ const fadeUp = {
 export default function TeacherDashboardPage() {
   const { activeYear, activeSemester } = useActiveAcademicYear();
   const { user } = useAuth();
-  const { row: me, teacherId, range, classSubjectPairs, mySchedule, sessions, workingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const { row: me, teacherId, range, classSubjectPairs, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
   const [calendarSubjectId, setCalendarSubjectId] = useState<string | null>(null);
   const gpaBySubject = useTeacherGradeSummary([teacherId ?? '', user?.uid ?? ''], classSubjectPairs);
 
@@ -153,7 +153,7 @@ export default function TeacherDashboardPage() {
         subject={me.subjectBreakdown.find((x) => x.subjectId === calendarSubjectId) ?? null}
         schedule={mySchedule}
         sessions={sessions}
-        workingDays={workingDays}
+        workingDays={teachingDays}
         range={range}
         today={today}
       />

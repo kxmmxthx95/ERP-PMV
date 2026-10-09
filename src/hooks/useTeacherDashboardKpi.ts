@@ -16,7 +16,7 @@ import { loadThaiHolidaysForYear } from '@/features/calendar/hooks/useThaiHolida
 import { getSchedulesByYearSemesterStore } from '@/lib/firestoreShared/schedulesStore';
 import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
 import { getLocalDateString } from '@/lib/calendar/schoolDay';
-import { resolveSemesterDateRange, enumerateWorkingDays } from '@/lib/teacherKpi/semesterDates';
+import { resolveSemesterDateRange, enumerateWorkingDays, filterOutExamDays } from '@/lib/teacherKpi/semesterDates';
 import { buildCheckInHistoryRows, summarizeCheckInHistory } from '@/lib/staffAttendance/checkInHistory';
 import { resolveCanonicalTeacherId } from '@/lib/teachers/teacherIdentity';
 import type { TeacherKpiRow, TeacherSubjectKpi } from '@/types/teacherKpi';
@@ -84,6 +84,10 @@ export function useTeacherDashboardKpi() {
   }, [effectiveStart, throughDate, calendarEvents]);
 
   // คาบที่เช็คชื่อแล้ว — realtime เฉพาะของครูคนนี้ (teacherId อาจเป็น id เอกสารครูหรือ auth uid)
+  // วันที่มีการเรียนจริง = วันทำงาน ตัดวันสอบ (กลางภาค/ปลายภาค) — ใช้กับ % เช็คชื่อรายวิชาเท่านั้น
+  const teachingDays = useMemo(() => filterOutExamDays(workingDays, calendarEvents), [workingDays, calendarEvents]);
+  const teachingDaySet = useMemo(() => new Set(teachingDays), [teachingDays]);
+
   const [sessions, setSessions] = useState<SessionLite[]>([]);
   const [sessionsReady, setSessionsReady] = useState(false);
   const teacherDocId = teacher?.id ?? '';
@@ -144,7 +148,7 @@ export function useTeacherDashboardKpi() {
 
     const doneBySubject = new Map<string, number>();
     sessions.forEach((s) => {
-      if (s.date < effectiveStart || s.date > throughDate) return;
+      if (s.date < effectiveStart || s.date > throughDate || !teachingDaySet.has(s.date)) return;
       doneBySubject.set(s.subjectId, (doneBySubject.get(s.subjectId) ?? 0) + 1);
     });
 
@@ -152,7 +156,7 @@ export function useTeacherDashboardKpi() {
       new Set([...(teacher.teachingSubjectIds ?? []), ...bySubject.keys()]),
     ).map((subjectId) => {
       const entries = bySubject.get(subjectId);
-      const expected = entries ? countExpectedSessions(entries, workingDays) : 0;
+      const expected = entries ? countExpectedSessions(entries, teachingDays) : 0;
       const completed = doneBySubject.get(subjectId) ?? 0;
       const cs = curriculumSubjects.find((s) => s.id === subjectId || s.code === subjectId);
       return {
@@ -188,7 +192,7 @@ export function useTeacherDashboardKpi() {
       expectedSessions,
       subjectBreakdown,
     };
-  }, [teacher, teachers, effectiveStart, throughDate, workingDays, attendanceRecords, schedules, sessions, settings, curriculumSubjects]);
+  }, [teacher, teachers, effectiveStart, throughDate, workingDays, teachingDays, teachingDaySet, attendanceRecords, schedules, sessions, settings, curriculumSubjects]);
 
   // คู่ห้อง/วิชาที่ครูมีในตารางสอน — ใช้เป็นแหล่งอ้างอิงสำรองตอนหาห้องที่สอน
   const classSubjectPairs = useMemo(() => {
@@ -223,7 +227,7 @@ export function useTeacherDashboardKpi() {
     classSubjectPairs,
     mySchedule,
     sessions,
-    workingDays,
+    teachingDays,
     today,
     attendanceSummary,
     isLoading: !isLoaded || teachersLoading || !sessionsReady,

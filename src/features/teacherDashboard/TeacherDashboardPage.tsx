@@ -11,6 +11,8 @@ import { Carousel, CarouselContent, CarouselItem, type CarouselApi } from '@/com
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { useHomeroomClassesForUser } from '@/hooks/useYearClassesHomeroom';
+import { GradeDistributionTable } from './components/GradeDistributionTable';
+import { useTeacherGradeDistribution } from '@/hooks/useTeacherGradeDistribution';
 import { HomeroomBehaviorTable } from './components/HomeroomBehaviorTable';
 import { DashboardSettingsButton } from './components/DashboardSettingsButton';
 import { SubjectAttendanceCalendarDrawer } from './components/SubjectAttendanceCalendarDrawer';
@@ -28,25 +30,36 @@ const fadeUp = {
 
 export default function TeacherDashboardPage() {
   const { activeYear, activeSemester } = useActiveAcademicYear();
-  const { row: me, range, rollCallRange, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const { row: me, teacherId, range, rollCallRange, classSubjectPairs, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
   const [calendarSubjectId, setCalendarSubjectId] = useState<string | null>(null);
   const { user } = useAuth();
   const { homeRoomClasses } = useHomeroomClassesForUser(activeYear?.year, user?.uid);
   const isHomeroom = homeRoomClasses.length > 0;
   const [carouselApi, setCarouselApi] = useState<CarouselApi>();
   const [slide, setSlide] = useState(0);
-  const [behaviorVisited, setBehaviorVisited] = useState(false); // โหลดตารางพฤติกรรมเมื่อปัดมาดูครั้งแรกเท่านั้น
+  const visibleSubjects = (me?.subjectBreakdown ?? []).filter((x) => !x.excluded);
+  // ลำดับสไลด์: รายวิชา → เกรด (ครูที่มีวิชา) → พฤติกรรมห้อง (ครูประจำชั้น)
+  const slideIds = ['subjects', ...(visibleSubjects.length > 0 ? ['grades'] : []), ...(isHomeroom ? ['behavior'] : [])];
+  const slideKey = slideIds.join('|');
+  // สไลด์ที่เคยปัดมาดูแล้ว — โหลดข้อมูลหนักเมื่อปัดมาดูครั้งแรกเท่านั้น
+  const [visited, setVisited] = useState<Set<string>>(() => new Set(['subjects']));
+  const gradeDist = useTeacherGradeDistribution(
+    [teacherId ?? '', user?.uid ?? ''],
+    classSubjectPairs,
+    visited.has('grades'),
+  );
 
   useEffect(() => {
     if (!carouselApi) return;
     const onSelect = () => {
       const i = carouselApi.selectedScrollSnap();
       setSlide(i);
-      if (i === 1) setBehaviorVisited(true);
+      const id = slideKey.split('|')[i];
+      if (id) setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
     };
     carouselApi.on('select', onSelect);
     return () => { carouselApi.off('select', onSelect); };
-  }, [carouselApi]);
+  }, [carouselApi, slideKey]);
 
   if (!activeYear) {
     return <p className="p-6 text-sm text-muted-foreground">กรุณาตั้งค่าปีการศึกษาก่อน</p>;
@@ -151,9 +164,9 @@ export default function TeacherDashboardPage() {
               </div>
             </div>
           </div>
-          {/* รายวิชาที่ได้รับมอบหมาย (+ สไลด์พฤติกรรมห้องประจำชั้นสำหรับครูประจำชั้น) */}
+          {/* สไลด์: รายวิชา → เกรดรายวิชา → พฤติกรรมห้องประจำชั้น (ครูประจำชั้น) */}
           <div className="flex flex-col px-6 pb-6 pt-6 md:px-10 md:pb-10">
-            {isHomeroom ? (
+            {slideIds.length > 1 ? (
               <Carousel
                 setApi={setCarouselApi}
                 opts={{ watchDrag: (_api, evt) => !(evt.target as HTMLElement | null)?.closest?.('[data-no-swipe]') }}
@@ -163,31 +176,47 @@ export default function TeacherDashboardPage() {
                     <p className="mb-3 text-sm font-bold text-muted-foreground">รายวิชาที่ได้รับมอบหมาย</p>
                     {subjectCards}
                   </CarouselItem>
-                  <CarouselItem>
-                    <p className="mb-3 text-sm font-bold text-muted-foreground">คะแนนประเมินพฤติกรรมในห้องเรียน</p>
-                    {behaviorVisited && (
-                      <HomeroomBehaviorTable
-                        classes={homeRoomClasses}
-                        year={activeYear.year}
-                        semester={(activeSemester === 2 ? 2 : 1) as 1 | 2}
-                      />
-                    )}
-                  </CarouselItem>
+                  {slideIds.includes('grades') && (
+                    <CarouselItem>
+                      <p className="mb-3 text-sm font-bold text-muted-foreground">จำนวนนักเรียนตามเกรดแต่ละรายวิชา</p>
+                      {visited.has('grades') && (
+                        <GradeDistributionTable
+                          subjects={visibleSubjects}
+                          data={gradeDist.data}
+                          loading={gradeDist.loading}
+                          refreshing={gradeDist.refreshing}
+                          onReload={gradeDist.reload}
+                        />
+                      )}
+                    </CarouselItem>
+                  )}
+                  {slideIds.includes('behavior') && (
+                    <CarouselItem>
+                      <p className="mb-3 text-sm font-bold text-muted-foreground">คะแนนประเมินพฤติกรรมในห้องเรียน</p>
+                      {visited.has('behavior') && (
+                        <HomeroomBehaviorTable
+                          classes={homeRoomClasses}
+                          year={activeYear.year}
+                          semester={(activeSemester === 2 ? 2 : 1) as 1 | 2}
+                        />
+                      )}
+                    </CarouselItem>
+                  )}
                 </CarouselContent>
                 <div className="mt-4 flex items-center justify-center gap-3">
                   <Button size="icon-sm" variant="outline" onClick={() => carouselApi?.scrollPrev()} disabled={slide === 0} aria-label="สไลด์ก่อนหน้า">
                     <HiChevronLeft className="size-4" />
                   </Button>
-                  {[0, 1].map((i) => (
+                  {slideIds.map((id, i) => (
                     <button
-                      key={i}
+                      key={id}
                       type="button"
                       onClick={() => carouselApi?.scrollTo(i)}
                       aria-label={`สไลด์ที่ ${i + 1}`}
                       className={`h-2 rounded-full transition-all ${slide === i ? 'w-6 bg-primary' : 'w-2 bg-muted-foreground/30'}`}
                     />
                   ))}
-                  <Button size="icon-sm" variant="outline" onClick={() => carouselApi?.scrollNext()} disabled={slide === 1} aria-label="สไลด์ถัดไป">
+                  <Button size="icon-sm" variant="outline" onClick={() => carouselApi?.scrollNext()} disabled={slide === slideIds.length - 1} aria-label="สไลด์ถัดไป">
                     <HiChevronRight className="size-4" />
                   </Button>
                 </div>

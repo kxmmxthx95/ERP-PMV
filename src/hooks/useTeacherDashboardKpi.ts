@@ -222,6 +222,21 @@ export function useTeacherDashboardKpi() {
     };
   }, [teacher, teachers, effectiveStart, throughDate, workingDays, teachingDays, teachingDaySet, attendanceRecords, schedules, sessions, settings, curriculumSubjects]);
 
+  // คู่ห้อง/วิชาที่ครูมีในตารางสอน — แหล่งอ้างอิงสำรองตอนหาห้องที่สอน
+  const classSubjectPairs = useMemo(() => {
+    if (!teacher) return [];
+    const seen = new Set<string>();
+    const out: { classId: string; subjectId: string }[] = [];
+    for (const e of schedules) {
+      if (resolveCanonicalTeacherId(e.teacherId, teachers) !== teacher.id) continue;
+      const k = `${e.classId}__${e.subjectId}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ classId: e.classId, subjectId: e.subjectId });
+    }
+    return out;
+  }, [teacher, teachers, schedules]);
+
   // ตารางสอนของครูคนนี้ทั้งหมด — ใช้วาดปฏิทินเช็คชื่อรายคาบ
   const mySchedule = useMemo(
     () => (teacher ? schedules.filter((e) => resolveCanonicalTeacherId(e.teacherId, teachers) === teacher.id) : []),
@@ -238,6 +253,7 @@ export function useTeacherDashboardKpi() {
     teacherId: teacher?.id,
     range: { from: effectiveStart, to: throughDate },
     rollCallRange: { from: effectiveStart, to: rollCallEnd },
+    classSubjectPairs,
     mySchedule,
     sessions,
     teachingDays,

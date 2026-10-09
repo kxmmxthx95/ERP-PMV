@@ -6,9 +6,6 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { IndeterminateProgress } from '@/components/ui/progress';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherDashboardKpi } from '@/hooks/useTeacherDashboardKpi';
-import { useTeacherGradeSummary } from '@/hooks/useTeacherGradeSummary';
-import { useAuth } from '@/hooks/useAuth';
-import { formatGpa } from '@/types/grades';
 import { DashboardSettingsButton } from './components/DashboardSettingsButton';
 import { SubjectAttendanceCalendarDrawer } from './components/SubjectAttendanceCalendarDrawer';
 import { KpiBulletBar } from '@/features/teacherKpi/components/KpiBulletBar';
@@ -25,10 +22,8 @@ const fadeUp = {
 
 export default function TeacherDashboardPage() {
   const { activeYear, activeSemester } = useActiveAcademicYear();
-  const { user } = useAuth();
-  const { row: me, teacherId, range, rollCallRange, classSubjectPairs, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const { row: me, range, rollCallRange, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
   const [calendarSubjectId, setCalendarSubjectId] = useState<string | null>(null);
-  const gpaBySubject = useTeacherGradeSummary([teacherId ?? '', user?.uid ?? ''], classSubjectPairs);
 
   if (!activeYear) {
     return <p className="p-6 text-sm text-muted-foreground">กรุณาตั้งค่าปีการศึกษาก่อน</p>;
@@ -127,25 +122,6 @@ export default function TeacherDashboardPage() {
                     </p>
                   </div>
                   <KpiBulletBar value={x.rate} />
-                  <div className="flex flex-col gap-1.5 border-t border-border pt-3 text-xs">
-                    <span className="font-bold text-muted-foreground">เกรดเฉลี่ยนักเรียนทั้งห้อง</span>
-                    {(gpaBySubject[x.subjectId] ?? []).length === 0 ? (
-                      <span className="text-base font-black">—</span>
-                    ) : (
-                      gpaBySubject[x.subjectId]
-                        .slice()
-                        .sort((p, q) => p.className.localeCompare(q.className, 'th'))
-                        .map((c) => (
-                          <div key={c.classId} className="flex items-baseline justify-between gap-2">
-                            <span className="truncate font-bold">{c.className}</span>
-                            <span className="tabular-nums">
-                              <span className="text-base font-black">{formatGpa(Number(c.avgGpa.toFixed(2)))}</span>
-                              <span className="ml-1 text-muted-foreground">({c.n} คน)</span>
-                            </span>
-                          </div>
-                        ))
-                    )}
-                  </div>
                 </div>
               ))}
               {me.subjectBreakdown.every((x) => x.excluded) && (

@@ -66,9 +66,32 @@ export function useTeacherGradeDistribution(
         if (cls) add(cls.id, p.subjectId);
       }
 
+      // รายชื่อห้องที่ถูกต้อง = ใบลงทะเบียนของปีที่สถานะ 'studying' (กติกาเดียวกับจำนวนนักเรียนในหน้าห้องเรียน)
+      // เมทริกซ์รวมทุกแหล่ง (รวมคนย้าย/จบ/ข้อมูลเก่า) จึงนับเกินได้ — กรองให้เหลือเฉพาะคนที่ยังเรียนอยู่ในห้อง
+      const studying = new Map<string, Set<string>>();
+      const mineIds = [...mine.keys()];
+      for (let i = 0; i < mineIds.length; i += 30) {
+        const snap = await getDocs(query(
+          collection(db, 'enrollments'),
+          where('academicYearId', '==', String(year)),
+          where('classId', 'in', mineIds.slice(i, i + 30)),
+        ));
+        snap.docs.forEach((d) => {
+          const e = d.data() as { classId?: string; studentId?: string; status?: string };
+          if ((e.status ?? 'studying') !== 'studying' || !e.classId || !e.studentId) return;
+          const set = studying.get(e.classId) ?? new Set<string>();
+          set.add(String(e.studentId));
+          studying.set(e.classId, set);
+        });
+      }
+
       const result: TeacherGradeDistribution = {};
       for (const [classId, subjectIds] of mine) {
-        const rows = matrix.studentsByClass[classId] ?? [];
+        const allRows = matrix.studentsByClass[classId] ?? [];
+        const roster = studying.get(classId);
+        // ไม่มีใบลงทะเบียนเลย (ข้อมูลเก่า) → ใช้รายชื่อจากเมทริกซ์เหมือนเดิม
+        const rows = roster && roster.size > 0 ? allRows.filter((r) => roster.has(r.studentId)) : allRows;
+        const total = roster && roster.size > 0 ? roster.size : allRows.length;
         const className = matrix.classRows.find((r) => r.classId === classId)?.className
           ?? classes.find((c) => c.id === classId)?.className ?? classId;
         for (const subjectId of subjectIds) {
@@ -80,7 +103,7 @@ export function useTeacherGradeDistribution(
             counts[g] = (counts[g] ?? 0) + 1;
             graded += 1;
           }
-          (result[subjectId] ??= []).push({ classId, className, total: rows.length, graded, counts });
+          (result[subjectId] ??= []).push({ classId, className, total, graded, counts });
         }
       }
 
@@ -93,6 +116,7 @@ export function useTeacherGradeDistribution(
               className: c.className,
               total: c.total,
               graded: c.graded,
+              matrixRows: (matrix.studentsByClass[c.classId] ?? []).length,
               distinctIds: new Set((matrix.studentsByClass[c.classId] ?? []).map((r) => r.studentId)).size,
               distinctCodes: new Set((matrix.studentsByClass[c.classId] ?? []).map((r) => r.studentCode).filter(Boolean)).size,
             })),

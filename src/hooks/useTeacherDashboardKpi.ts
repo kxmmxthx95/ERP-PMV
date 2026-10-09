@@ -163,6 +163,7 @@ export function useTeacherDashboardKpi() {
       : null;
 
     const excluded = settings.excludedSubjectsByTeacher?.[teacher.id] ?? [];
+    const hiddenForAll = new Set(settings.dashboardExcludedSubjectIds ?? []);
     const bySubject = new Map<string, typeof schedules>();
     schedules
       .filter((s) => resolveCanonicalTeacherId(s.teacherId, teachers) === teacher.id)
@@ -177,6 +178,7 @@ export function useTeacherDashboardKpi() {
     const subjectBreakdown: TeacherSubjectKpi[] = Array.from(
       new Set([...(teacher.teachingSubjectIds ?? []), ...bySubject.keys()]),
     ).filter((subjectId) => {
+      if (hiddenForAll.has(subjectId)) return false;
       // วิชากิจกรรม (ชุมนุม ฯลฯ) ผ่าน/ไม่ผ่าน ไม่นำมาแสดงและไม่คิด % เช็คชื่อ
       const cat = String(curriculumSubjects.find((x) => x.id === subjectId || x.code === subjectId)?.category ?? '').toLowerCase();
       return !(cat === 'activity' || cat.includes('กิจกรรม'));

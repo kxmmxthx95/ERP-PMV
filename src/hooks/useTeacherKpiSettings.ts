@@ -35,5 +35,19 @@ export function useTeacherKpiSettings(academicYearId: string, semester: 1 | 2) {
     }, { mergeFields: [`excludedSubjectsByTeacher.${teacherId}`, 'academicYearId', 'semester', 'updatedAt', 'updatedBy'] });
   }, [academicYearId, semester]);
 
-  return { settings, saveStartDate, saveExcludedSubjects };
+  /** วิชาที่ถูกเอาออกจากหน้าสรุปผลงานของครูทุกคน — เก็บเฉพาะรายการที่ถูกเอาออก */
+  const saveDashboardExcludedSubjects = useCallback(async (subjectIds: string[], updatedBy?: string) => {
+    const key = teacherKpiSettingsDocId(academicYearId, semester);
+    await setDoc(doc(db, 'teacher_kpi_settings', key), {
+      academicYearId,
+      semester,
+      dashboardExcludedSubjectIds: subjectIds,
+      updatedAt: new Date().toISOString(),
+      updatedBy: updatedBy ?? null,
+    }, { merge: true });
+    // store เป็น one-shot getDoc — publish ค่าใหม่ให้ทุกหน้าที่ subscribe เห็นทันที
+    store.publish({ ...store.getSnapshot(), dashboardExcludedSubjectIds: subjectIds });
+  }, [academicYearId, semester, store]);
+
+  return { settings, saveStartDate, saveExcludedSubjects, saveDashboardExcludedSubjects };
 }

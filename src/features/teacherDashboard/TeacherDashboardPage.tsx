@@ -9,6 +9,7 @@ import { useTeacherDashboardKpi } from '@/hooks/useTeacherDashboardKpi';
 import { useTeacherGradeSummary } from '@/hooks/useTeacherGradeSummary';
 import { useAuth } from '@/hooks/useAuth';
 import { formatGpa } from '@/types/grades';
+import { DashboardSettingsButton } from './components/DashboardSettingsButton';
 import { SubjectAttendanceCalendarDrawer } from './components/SubjectAttendanceCalendarDrawer';
 import { KpiBulletBar } from '@/features/teacherKpi/components/KpiBulletBar';
 import { DEPARTMENT_CONFIG } from '@/types/curriculum';
@@ -34,7 +35,12 @@ export default function TeacherDashboardPage() {
   }
   if (kpiLoading) return <IndeterminateProgress />;
   if (!me) {
-    return <p className="p-6 text-sm text-muted-foreground">ไม่พบข้อมูลครูที่ผูกกับบัญชีนี้</p>;
+    return (
+      <>
+        <DashboardSettingsButton />
+        <p className="p-6 text-sm text-muted-foreground">ไม่พบข้อมูลครูที่ผูกกับบัญชีนี้</p>
+      </>
+    );
   }
 
   // บรรทัดแรก = คำนำหน้า+ชื่อ · บรรทัดสอง = นามสกุล (แยกที่ช่องว่างแรก)
@@ -43,6 +49,7 @@ export default function TeacherDashboardPage() {
 
   return (
     <div className="flex w-full flex-col gap-4 pb-6">
+      <DashboardSettingsButton />
       {/* Hero: ตัวเลขซ้าย · รูปวงกลม+ชื่อขวา */}
       <motion.div custom={0} variants={fadeUp} initial="hidden" animate="show">
         <Card className="relative gap-0 py-0">

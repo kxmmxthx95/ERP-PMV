@@ -46,6 +46,8 @@ export interface TeacherKpiSettings {
   semester: 1 | 2;
   startDate: string; // "YYYY-MM-DD" — วันที่เริ่มเก็บค่า KPI (ว่าง = ใช้วันเริ่มเทอมจริง)
   excludedSubjectsByTeacher?: Record<string, string[]>; // teacherId -> subjectId[] ที่ไม่นำมาคำนวณ % เช็คชื่อ
+  /** subjectId[] ที่ sysadmin เอาออกจากหน้า 'สรุปผลงาน' ของครูทุกคน (ว่าง = นับทุกวิชา) */
+  dashboardExcludedSubjectIds?: string[];
   updatedAt?: string;
   updatedBy?: string;
 }

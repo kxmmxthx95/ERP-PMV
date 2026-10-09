@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { HiChevronDown, HiChevronUp, HiChevronUpDown } from 'react-icons/hi2';
 import { useAuth } from '@/hooks/useAuth';
 import { useMyPermissions } from '@/hooks/useMyPermissions';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
@@ -26,7 +25,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { NativeSelect } from '@/components/ui/native-select';
 import ClassroomBehaviorSettings from './ClassroomBehaviorSettings';
-import { AvgCell, DOT_COLOR, StatusDot } from './components/BehaviorCells';
+import { AvgCell, DOT_COLOR, SortHead, StatusDot, nextSort, sortStudentsByBehavior, type SortKey, type SortState } from './components/BehaviorCells';
 import StudentAvatar from '@/features/students/components/StudentAvatar';
 import {
   CLASSROOM_BEHAVIOR_CRITERIA,
@@ -53,31 +52,6 @@ function LevelBadge({ score }: { score?: ClassroomBehaviorScore }) {
     <Button size="xs" variant={SCORE_VARIANT[score]} className="pointer-events-none">
       {CLASSROOM_BEHAVIOR_LEVEL[score]}
     </Button>
-  );
-}
-
-type SortKey = 'name' | 'avg' | `s:${string}`;
-type SortState = { key: SortKey; dir: 'asc' | 'desc' } | null;
-
-function SortHead({ label, k, sort, onSort, className }: {
-  label: string;
-  k: SortKey;
-  sort: SortState;
-  onSort: (k: SortKey) => void;
-  className?: string;
-}) {
-  const active = sort?.key === k;
-  const Icon = !active ? HiChevronUpDown : sort.dir === 'asc' ? HiChevronUp : HiChevronDown;
-  return (
-    <button
-      type="button"
-      title={label}
-      onClick={() => onSort(k)}
-      className={`inline-flex items-center gap-1 uppercase tracking-wider hover:text-foreground ${active ? 'text-foreground' : ''} ${className ?? ''}`}
-    >
-      <span className="truncate">{label}</span>
-      <Icon className="size-3 shrink-0" />
-    </button>
   );
 }
 
@@ -335,31 +309,12 @@ function StaffView({ year, semester }: { year: string; semester: 1 | 2 }) {
   }, [records, students, subjectsInOverview]);
 
   // Header sort: asc → desc → back to roster order. Unrated always last.
-  const onSort = (key: SortKey) =>
-    setSort((cur) => (cur?.key !== key ? { key, dir: 'asc' } : cur.dir === 'asc' ? { key, dir: 'desc' } : null));
+  const onSort = (key: SortKey) => setSort((cur) => nextSort(cur, key));
 
-  const sortedStudents = useMemo(() => {
-    if (!sort) return students;
-    const dir = sort.dir === 'asc' ? 1 : -1;
-    const valueOf = (id: string): number | null => {
-      if (sort.key === 'avg') {
-        const v = overviewStats.perStudent.get(id);
-        return v?.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-      }
-      return overviewStats.cell.get(`${id}|${sort.key.slice(2)}`) ?? null;
-    };
-    return [...students].sort((a, b) => {
-      if (sort.key === 'name') {
-        return dir * `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`, 'th');
-      }
-      const va = valueOf(a.id);
-      const vb = valueOf(b.id);
-      if (va == null && vb == null) return 0;
-      if (va == null) return 1;
-      if (vb == null) return -1;
-      return dir * (va - vb);
-    });
-  }, [students, sort, overviewStats]);
+  const sortedStudents = useMemo(
+    () => sortStudentsByBehavior(students, sort, overviewStats.cell, overviewStats.perStudent),
+    [students, sort, overviewStats],
+  );
 
   return (
     <div className="flex flex-col gap-4">

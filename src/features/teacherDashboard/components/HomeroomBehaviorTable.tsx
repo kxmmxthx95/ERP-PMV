@@ -11,7 +11,7 @@ import { useCurriculum } from '@/hooks/useCurriculum';
 import { useClassroomBehaviorConfig } from '@/hooks/useClassroomBehaviorConfig';
 import { useClassroomBehaviorRecords } from '@/hooks/useClassroomBehavior';
 import { fetchStudentsByIds } from '@/lib/firestoreShared/fetchStudentsByIds';
-import { AvgCell, DOT_COLOR, StatusDot } from '@/features/classroomBehavior/components/BehaviorCells';
+import { AvgCell, DOT_COLOR, SortHead, StatusDot, nextSort, sortStudentsByBehavior, type SortKey, type SortState } from '@/features/classroomBehavior/components/BehaviorCells';
 import {
   CLASSROOM_BEHAVIOR_LEVEL,
   classroomBehaviorAvg,
@@ -58,6 +58,7 @@ export function HomeroomBehaviorTable({ classes, year, semester }: Props) {
     [classes],
   );
   const [classId, setClassId] = useState('');
+  const [sort, setSort] = useState<SortState>(null);
   const cls = sorted.find((c) => c.id === classId) ?? sorted[0] ?? null;
 
   const { excluded } = useClassroomBehaviorConfig();
@@ -109,8 +110,14 @@ export function HomeroomBehaviorTable({ classes, year, semester }: Props) {
         all.push(v);
       }
     }
-    return { perStudent, perSubject, all };
+    return { perStudent, perSubject, all, cell };
   }, [records, students, subjects]);
+
+  const sortedStudents = useMemo(
+    () => sortStudentsByBehavior(students, sort, stats.cell, stats.perStudent),
+    [students, sort, stats],
+  );
+  const onSort = (key: SortKey) => setSort((cur) => nextSort(cur, key));
 
   if (!cls) return null;
   const loading = rosterLoading || recordsLoading;
@@ -124,7 +131,7 @@ export function HomeroomBehaviorTable({ classes, year, semester }: Props) {
               key={c.id}
               size="xs"
               variant={c.id === cls.id ? 'default' : 'outline'}
-              onClick={() => setClassId(c.id)}
+              onClick={() => { setClassId(c.id); setSort(null); }}
             >
               {c.className}
             </Button>
@@ -158,13 +165,15 @@ export function HomeroomBehaviorTable({ classes, year, semester }: Props) {
         <div data-no-swipe className="overflow-x-auto rounded-2xl border border-border bg-card">
           <div className="min-w-max">
             <div className="flex items-center gap-3 border-b border-border bg-muted/30 px-4 py-3 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
-              <span className="w-48">นักเรียน</span>
+              <span className="w-48"><SortHead label="นักเรียน" k="name" sort={sort} onSort={onSort} /></span>
               {subjects.map(([sid, name]) => (
-                <span key={sid} className="w-32 truncate text-center" title={name}>{name}</span>
+                <span key={sid} className="flex w-32 justify-center">
+                  <SortHead label={name} k={`s:${sid}`} sort={sort} onSort={onSort} className="max-w-full" />
+                </span>
               ))}
-              <span className="w-32 text-center">เฉลี่ย</span>
+              <span className="flex w-32 justify-center"><SortHead label="เฉลี่ย" k="avg" sort={sort} onSort={onSort} /></span>
             </div>
-            {students.map((s) => (
+            {sortedStudents.map((s) => (
               <div key={s.id} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 hover:bg-muted/40">
                 <span className="w-48 truncate text-sm font-bold">{s.firstName} {s.lastName}</span>
                 {subjects.map(([sid]) => {

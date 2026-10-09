@@ -1,11 +1,17 @@
 // src/features/teacherDashboard/TeacherDashboardPage.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { HiChevronLeft, HiChevronRight } from 'react-icons/hi2';
 import { motion } from 'framer-motion';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { IndeterminateProgress } from '@/components/ui/progress';
 import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeacherDashboardKpi } from '@/hooks/useTeacherDashboardKpi';
+import { Carousel, CarouselContent, CarouselItem, type CarouselApi } from '@/components/ui/carousel';
+import { Button } from '@/components/ui/button';
+import { useAuth } from '@/hooks/useAuth';
+import { useHomeroomClassesForUser } from '@/hooks/useYearClassesHomeroom';
+import { HomeroomBehaviorTable } from './components/HomeroomBehaviorTable';
 import { DashboardSettingsButton } from './components/DashboardSettingsButton';
 import { SubjectAttendanceCalendarDrawer } from './components/SubjectAttendanceCalendarDrawer';
 import { KpiBulletBar } from '@/features/teacherKpi/components/KpiBulletBar';
@@ -24,6 +30,23 @@ export default function TeacherDashboardPage() {
   const { activeYear, activeSemester } = useActiveAcademicYear();
   const { row: me, range, rollCallRange, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
   const [calendarSubjectId, setCalendarSubjectId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const { homeRoomClasses } = useHomeroomClassesForUser(activeYear?.year, user?.uid);
+  const isHomeroom = homeRoomClasses.length > 0;
+  const [carouselApi, setCarouselApi] = useState<CarouselApi>();
+  const [slide, setSlide] = useState(0);
+  const [behaviorVisited, setBehaviorVisited] = useState(false); // โหลดตารางพฤติกรรมเมื่อปัดมาดูครั้งแรกเท่านั้น
+
+  useEffect(() => {
+    if (!carouselApi) return;
+    const onSelect = () => {
+      const i = carouselApi.selectedScrollSnap();
+      setSlide(i);
+      if (i === 1) setBehaviorVisited(true);
+    };
+    carouselApi.on('select', onSelect);
+    return () => { carouselApi.off('select', onSelect); };
+  }, [carouselApi]);
 
   if (!activeYear) {
     return <p className="p-6 text-sm text-muted-foreground">กรุณาตั้งค่าปีการศึกษาก่อน</p>;
@@ -41,6 +64,38 @@ export default function TeacherDashboardPage() {
   // บรรทัดแรก = คำนำหน้า+ชื่อ · บรรทัดสอง = นามสกุล (แยกที่ช่องว่างแรก)
   const [firstName, ...rest] = me.name.trim().split(/\s+/);
   const lastName = rest.join(' ');
+
+  const subjectCards = (
+    <div className="grid auto-rows-min grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {me.subjectBreakdown.filter((x) => !x.excluded).map((x) => (
+        <div
+          key={x.subjectId}
+          role="button"
+          tabIndex={0}
+          onClick={() => setCalendarSubjectId(x.subjectId)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setCalendarSubjectId(x.subjectId); }}
+          className="flex cursor-pointer flex-col gap-3 rounded-2xl bg-muted/40 p-5 transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <div className="min-w-0">
+            <p className="truncate text-base font-black">{x.subjectName}</p>
+            <p className="truncate text-xs text-muted-foreground">{x.subjectCode}</p>
+          </div>
+          <div className="flex items-end justify-between gap-2">
+            <p className="text-4xl font-black tabular-nums leading-none">
+              {x.rate === null ? '—' : `${x.rate}%`}
+            </p>
+            <p className="text-xs tabular-nums text-muted-foreground">
+              {x.completedSessions}/{x.expectedSessions} คาบ
+            </p>
+          </div>
+          <KpiBulletBar value={x.rate} />
+        </div>
+      ))}
+      {me.subjectBreakdown.every((x) => x.excluded) && (
+        <p className="text-xs text-muted-foreground">ไม่มีรายวิชา</p>
+      )}
+    </div>
+  );
 
   return (
     <div className="flex w-full flex-col gap-4 pb-6">
@@ -96,38 +151,53 @@ export default function TeacherDashboardPage() {
               </div>
             </div>
           </div>
-          {/* รายวิชาที่ได้รับมอบหมาย: เต็มความกว้างและพื้นที่ที่เหลือ */}
+          {/* รายวิชาที่ได้รับมอบหมาย (+ สไลด์พฤติกรรมห้องประจำชั้นสำหรับครูประจำชั้น) */}
           <div className="flex flex-col px-6 pb-6 pt-6 md:px-10 md:pb-10">
-            <p className="mb-3 text-sm font-bold text-muted-foreground">รายวิชาที่ได้รับมอบหมาย</p>
-            <div className="grid auto-rows-min grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {me.subjectBreakdown.filter((x) => !x.excluded).map((x) => (
-                <div
-                  key={x.subjectId}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setCalendarSubjectId(x.subjectId)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setCalendarSubjectId(x.subjectId); }}
-                  className="flex cursor-pointer flex-col gap-3 rounded-2xl bg-muted/40 p-5 transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-base font-black">{x.subjectName}</p>
-                    <p className="truncate text-xs text-muted-foreground">{x.subjectCode}</p>
-                  </div>
-                  <div className="flex items-end justify-between gap-2">
-                    <p className="text-4xl font-black tabular-nums leading-none">
-                      {x.rate === null ? '—' : `${x.rate}%`}
-                    </p>
-                    <p className="text-xs tabular-nums text-muted-foreground">
-                      {x.completedSessions}/{x.expectedSessions} คาบ
-                    </p>
-                  </div>
-                  <KpiBulletBar value={x.rate} />
+            {isHomeroom ? (
+              <Carousel
+                setApi={setCarouselApi}
+                opts={{ watchDrag: (_api, evt) => !(evt.target as HTMLElement | null)?.closest?.('[data-no-swipe]') }}
+              >
+                <CarouselContent>
+                  <CarouselItem>
+                    <p className="mb-3 text-sm font-bold text-muted-foreground">รายวิชาที่ได้รับมอบหมาย</p>
+                    {subjectCards}
+                  </CarouselItem>
+                  <CarouselItem>
+                    <p className="mb-3 text-sm font-bold text-muted-foreground">คะแนนประเมินพฤติกรรมในห้องเรียน</p>
+                    {behaviorVisited && (
+                      <HomeroomBehaviorTable
+                        classes={homeRoomClasses}
+                        year={activeYear.year}
+                        semester={(activeSemester === 2 ? 2 : 1) as 1 | 2}
+                      />
+                    )}
+                  </CarouselItem>
+                </CarouselContent>
+                <div className="mt-4 flex items-center justify-center gap-3">
+                  <Button size="icon-sm" variant="outline" onClick={() => carouselApi?.scrollPrev()} disabled={slide === 0} aria-label="สไลด์ก่อนหน้า">
+                    <HiChevronLeft className="size-4" />
+                  </Button>
+                  {[0, 1].map((i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => carouselApi?.scrollTo(i)}
+                      aria-label={`สไลด์ที่ ${i + 1}`}
+                      className={`h-2 rounded-full transition-all ${slide === i ? 'w-6 bg-primary' : 'w-2 bg-muted-foreground/30'}`}
+                    />
+                  ))}
+                  <Button size="icon-sm" variant="outline" onClick={() => carouselApi?.scrollNext()} disabled={slide === 1} aria-label="สไลด์ถัดไป">
+                    <HiChevronRight className="size-4" />
+                  </Button>
                 </div>
-              ))}
-              {me.subjectBreakdown.every((x) => x.excluded) && (
-                <p className="text-xs text-muted-foreground">ไม่มีรายวิชา</p>
-              )}
-            </div>
+              </Carousel>
+            ) : (
+              <>
+                <p className="mb-3 text-sm font-bold text-muted-foreground">รายวิชาที่ได้รับมอบหมาย</p>
+                {subjectCards}
+              </>
+            )}
           </div>
         </Card>
       </motion.div>

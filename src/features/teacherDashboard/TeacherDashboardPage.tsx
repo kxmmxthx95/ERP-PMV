@@ -10,9 +10,10 @@ import { useTeacherDashboardKpi } from '@/hooks/useTeacherDashboardKpi';
 import { Carousel, CarouselContent, CarouselItem, type CarouselApi } from '@/components/ui/carousel';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
+import { useMyPermissions } from '@/hooks/useMyPermissions';
+import { useAllTeachersDashboard } from '@/hooks/useAllTeachersDashboard';
+import { AdminTeacherSummaryTable } from './components/AdminTeacherSummaryTable';
 import { useHomeroomClassesForUser } from '@/hooks/useYearClassesHomeroom';
-import { GradeDistributionTable } from './components/GradeDistributionTable';
-import { useTeacherGradeDistribution } from '@/hooks/useTeacherGradeDistribution';
 import { HomeroomBehaviorTable } from './components/HomeroomBehaviorTable';
 import { DashboardSettingsButton } from './components/DashboardSettingsButton';
 import { SubjectAttendanceCalendarDrawer } from './components/SubjectAttendanceCalendarDrawer';
@@ -30,24 +31,21 @@ const fadeUp = {
 
 export default function TeacherDashboardPage() {
   const { activeYear, activeSemester } = useActiveAcademicYear();
-  const { row: me, teacherId, range, rollCallRange, classSubjectPairs, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const { row: me, range, rollCallRange, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
   const [calendarSubjectId, setCalendarSubjectId] = useState<string | null>(null);
   const { user } = useAuth();
+  const { canDelete } = useMyPermissions();
+  const isAdmin = canDelete('teacherDashboard'); // ระดับ full: เห็นภาพรวมครูทั้งหมด (sysadmin ผ่านอัตโนมัติ)
+  const [viewMode, setViewMode] = useState<'all' | 'mine'>('all');
   const { homeRoomClasses } = useHomeroomClassesForUser(activeYear?.year, user?.uid);
   const isHomeroom = homeRoomClasses.length > 0;
   const [carouselApi, setCarouselApi] = useState<CarouselApi>();
   const [slide, setSlide] = useState(0);
-  const visibleSubjects = (me?.subjectBreakdown ?? []).filter((x) => !x.excluded);
-  // ลำดับสไลด์: รายวิชา → เกรด (ครูที่มีวิชา) → พฤติกรรมห้อง (ครูประจำชั้น)
-  const slideIds = ['subjects', ...(visibleSubjects.length > 0 ? ['grades'] : []), ...(isHomeroom ? ['behavior'] : [])];
+  // ลำดับสไลด์: รายวิชา → พฤติกรรมห้อง (ครูประจำชั้น)
+  const slideIds = ['subjects', ...(isHomeroom ? ['behavior'] : [])];
   const slideKey = slideIds.join('|');
   // สไลด์ที่เคยปัดมาดูแล้ว — โหลดข้อมูลหนักเมื่อปัดมาดูครั้งแรกเท่านั้น
   const [visited, setVisited] = useState<Set<string>>(() => new Set(['subjects']));
-  const gradeDist = useTeacherGradeDistribution(
-    [teacherId ?? '', user?.uid ?? ''],
-    classSubjectPairs,
-    visited.has('grades'),
-  );
 
   useEffect(() => {
     if (!carouselApi) return;
@@ -61,17 +59,38 @@ export default function TeacherDashboardPage() {
     return () => { carouselApi.off('select', onSelect); };
   }, [carouselApi, slideKey]);
 
+  // แอดมินเห็นตารางครูทั้งหมดเป็นค่าเริ่มต้น · ถ้าไม่มีแถวครูผูกบัญชี ไม่มีมุมมอง "ของฉัน" ให้สลับไป
+  const showAdmin = isAdmin && (viewMode === 'all' || (!kpiLoading && !me));
+  const allTeachers = useAllTeachersDashboard(showAdmin);
+
+  const modeToggle = isAdmin && me ? (
+    <div className="flex gap-1.5">
+      <Button size="xs" variant={showAdmin ? 'default' : 'outline'} onClick={() => setViewMode('all')}>ภาพรวมครูทั้งหมด</Button>
+      <Button size="xs" variant={showAdmin ? 'outline' : 'default'} onClick={() => setViewMode('mine')}>ของฉัน</Button>
+    </div>
+  ) : null;
+
   if (!activeYear) {
     return <p className="p-6 text-sm text-muted-foreground">กรุณาตั้งค่าปีการศึกษาก่อน</p>;
   }
+  if (showAdmin) {
+    return (
+      <div className="flex w-full flex-col gap-4 pb-6">
+        <DashboardSettingsButton />
+        {modeToggle}
+        <AdminTeacherSummaryTable
+          rows={allTeachers.rows}
+          loading={allTeachers.loading}
+          refreshing={allTeachers.refreshing}
+          onReload={allTeachers.reload}
+          range={allTeachers.range}
+        />
+      </div>
+    );
+  }
   if (kpiLoading) return <IndeterminateProgress />;
   if (!me) {
-    return (
-      <>
-        <DashboardSettingsButton />
-        <p className="p-6 text-sm text-muted-foreground">ไม่พบข้อมูลครูที่ผูกกับบัญชีนี้</p>
-      </>
-    );
+    return <p className="p-6 text-sm text-muted-foreground">ไม่พบข้อมูลครูที่ผูกกับบัญชีนี้</p>;
   }
 
   // บรรทัดแรก = คำนำหน้า+ชื่อ · บรรทัดสอง = นามสกุล (แยกที่ช่องว่างแรก)
@@ -113,6 +132,7 @@ export default function TeacherDashboardPage() {
   return (
     <div className="flex w-full flex-col gap-4 pb-6">
       <DashboardSettingsButton />
+      {modeToggle}
       {/* Hero: ตัวเลขซ้าย · รูปวงกลม+ชื่อขวา */}
       <motion.div custom={0} variants={fadeUp} initial="hidden" animate="show">
         <Card className="relative gap-0 py-0">
@@ -164,7 +184,7 @@ export default function TeacherDashboardPage() {
               </div>
             </div>
           </div>
-          {/* สไลด์: รายวิชา → เกรดรายวิชา → พฤติกรรมห้องประจำชั้น (ครูประจำชั้น) */}
+          {/* สไลด์: รายวิชา → พฤติกรรมห้องประจำชั้น (ครูประจำชั้น) */}
           <div className="flex flex-col px-6 pb-6 pt-6 md:px-10 md:pb-10">
             {slideIds.length > 1 ? (
               <Carousel
@@ -176,20 +196,6 @@ export default function TeacherDashboardPage() {
                     <p className="mb-3 text-sm font-bold text-muted-foreground">รายวิชาที่ได้รับมอบหมาย</p>
                     {subjectCards}
                   </CarouselItem>
-                  {slideIds.includes('grades') && (
-                    <CarouselItem>
-                      <p className="mb-3 text-sm font-bold text-muted-foreground">จำนวนนักเรียนตามเกรดแต่ละรายวิชา</p>
-                      {visited.has('grades') && (
-                        <GradeDistributionTable
-                          subjects={visibleSubjects}
-                          data={gradeDist.data}
-                          loading={gradeDist.loading}
-                          refreshing={gradeDist.refreshing}
-                          onReload={gradeDist.reload}
-                        />
-                      )}
-                    </CarouselItem>
-                  )}
                   {slideIds.includes('behavior') && (
                     <CarouselItem>
                       <p className="mb-3 text-sm font-bold text-muted-foreground">คะแนนประเมินพฤติกรรมในห้องเรียน</p>

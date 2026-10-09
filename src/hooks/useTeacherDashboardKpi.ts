@@ -5,40 +5,28 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { collection, collectionGroup, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
-import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
+import { useDashboardWindow } from '@/hooks/useDashboardWindow';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
 import { useCurriculum } from '@/hooks/useCurriculum';
-import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
 import { useMyLeaveRequests } from '@/hooks/useLeaveRequests';
 import { useTeacherKpiSettings } from '@/hooks/useTeacherKpiSettings';
-import { countExpectedSessions } from '@/hooks/useTeacherKpi';
-import { isTimestampAtOrAfterNoon, type StaffAttendanceRecord } from '@/hooks/useStaffAttendance';
-import { loadThaiHolidaysForYear } from '@/features/calendar/hooks/useThaiHolidays';
+import type { StaffAttendanceRecord } from '@/hooks/useStaffAttendance';
 import { getSchedulesByYearSemesterStore } from '@/lib/firestoreShared/schedulesStore';
-import { deptSemestersStore } from '@/lib/firestoreShared/deptSemestersStore';
-import { getLocalDateString } from '@/lib/calendar/schoolDay';
-import { resolveSemesterDateRange, enumerateWorkingDays, filterOutNonTeachingDays } from '@/lib/teacherKpi/semesterDates';
-import { buildCheckInHistoryRows, summarizeCheckInHistory } from '@/lib/staffAttendance/checkInHistory';
+import {
+  approvedLeaveDates,
+  computeTeacherDashboard,
+  type SessionLite,
+} from '@/lib/teacherDashboard/computeTeacherDashboard';
 import { resolveCanonicalTeacherId } from '@/lib/teachers/teacherIdentity';
-import type { TeacherKpiRow, TeacherSubjectKpi } from '@/types/teacherKpi';
 
-export interface SessionLite {
-  date: string;
-  subjectId: string;
-  classId?: string;
-  period?: number;
-}
+export type { SessionLite };
 
 export function useTeacherDashboardKpi() {
   const { user } = useAuth();
   const uid = user?.uid ?? '';
-  const { activeYear, activeSemester, isLoaded } = useActiveAcademicYear();
+  const { isLoaded, academicYearId, semester, today, range, workingDays, baseDays } = useDashboardWindow();
   const { teachers, loading: teachersLoading } = useTeachersCollection();
   const { subjects: curriculumSubjects } = useCurriculum();
-  const { events: calendarEvents } = useAcademicCalendar();
-
-  const academicYearId = activeYear?.year ?? '';
-  const semester = (activeSemester === 2 ? 2 : 1) as 1 | 2;
   const { settings } = useTeacherKpiSettings(academicYearId, semester);
 
   const teacher = useMemo(
@@ -48,68 +36,15 @@ export function useTeacherDashboardKpi() {
 
   const schedulesStore = getSchedulesByYearSemesterStore(academicYearId, semester);
   const schedules = useSyncExternalStore(schedulesStore.subscribe, schedulesStore.getSnapshot, schedulesStore.getSnapshot);
-  const deptSemesterSettings = useSyncExternalStore(
-    deptSemestersStore.subscribe,
-    deptSemestersStore.getSnapshot,
-    deptSemestersStore.getSnapshot,
-  );
 
-  const semesterRange = useMemo(() => {
-    if (!activeYear) return { startDate: '', endDate: '' };
-    return resolveSemesterDateRange(activeYear, semester, calendarEvents, deptSemesterSettings);
-  }, [activeYear, semester, calendarEvents, deptSemesterSettings]);
+  const effectiveStart = range.from;
+  const throughDate = range.to;
+  const rollCallEnd = range.rollCallEnd;
 
-  const today = getLocalDateString();
-  // ช่วงเก็บค่า: 1 ก.ค. – 31 ต.ค. ของปีที่ภาคเรียนเริ่ม (เริ่ม 1 ก.ค. แม้ภาคเรียนเริ่มทีหลัง · สิ้นสุดไม่เกินวันนี้/วันสิ้นภาคเรียน)
-  // ponytail: ฮาร์ดโค้ดช่วงเดือน — ถ้าต้องปรับบ่อยค่อยย้ายไปเป็นค่าตั้งใน Firestore
-  const windowYear = semesterRange.startDate.slice(0, 4);
-  const windowStart = windowYear ? `${windowYear}-07-01` : '';
-  const windowEnd = windowYear ? `${windowYear}-10-31` : '';
-  // ไม่ใช้ settings.startDate ของหน้า KPI ผู้บริหาร — หน้านี้เริ่ม 1 ก.ค. เสมอ
-  const effectiveStart = windowStart;
-  const throughDate = [today, semesterRange.endDate, windowEnd]
-    .filter(Boolean)
-    .reduce((a, b) => (b < a ? b : a));
-
-  // วันทำงาน (ต้องโหลดวันหยุดนักขัตฤกษ์ one-shot ต่อปี)
-  const [workingDays, setWorkingDays] = useState<string[]>([]);
-  useEffect(() => {
-    if (!effectiveStart || !throughDate) return;
-    let cancelled = false;
-    const years = Array.from(new Set([effectiveStart.slice(0, 4), throughDate.slice(0, 4)])).map(Number);
-    void Promise.all(years.map((y) => loadThaiHolidaysForYear(y).catch(() => [])))
-      .then((sets) => {
-        if (!cancelled) setWorkingDays(enumerateWorkingDays(effectiveStart, throughDate, calendarEvents, sets.flat()));
-      });
-    return () => { cancelled = true; };
-  }, [effectiveStart, throughDate, calendarEvents]);
-
-  // คาบที่เช็คชื่อแล้ว — realtime เฉพาะของครูคนนี้ (teacherId อาจเป็น id เอกสารครูหรือ auth uid)
-  // วันที่มีการเรียนจริง = วันทำงาน ตัดวันสอบและวันที่มีกิจกรรม — ใช้กับ % เช็คชื่อรายวิชาเท่านั้น
-  // ช่วงเช็คชื่อรายวิชา: 1 ก.ค. – 2 ต.ค. (ตัดให้ไม่เกินช่วงเก็บค่าหลัก)
-  // ponytail: วันสิ้นสุดฮาร์ดโค้ด — ย้ายไปเป็นค่าตั้งถ้าต้องเปลี่ยนบ่อย
-  const rollCallEnd = windowYear && `${windowYear}-10-02` < throughDate ? `${windowYear}-10-02` : throughDate;
   // วันที่ครูลา (อนุมัติแล้ว) ไม่นำมาคิดเช็คชื่อรายวิชา — store เฉพาะใบลาของครูคนนี้
   const { requests: myLeaves } = useMyLeaveRequests(uid, 'staff');
-  const leaveDates = useMemo(() => {
-    const out = new Set<string>();
-    for (const req of myLeaves) {
-      if (req.status !== 'approved') continue;
-      const cursor = new Date(`${req.startDate}T12:00:00`);
-      const end = new Date(`${req.endDate}T12:00:00`);
-      for (; cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
-        out.add(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`);
-      }
-    }
-    return out;
-  }, [myLeaves]);
-
-  const teachingDays = useMemo(
-    () => filterOutNonTeachingDays(workingDays, calendarEvents).filter((d) => d <= rollCallEnd && !leaveDates.has(d)),
-    [workingDays, calendarEvents, rollCallEnd, leaveDates],
-  );
-  const teachingDaySet = useMemo(() => new Set(teachingDays), [teachingDays]);
-
+  const leaveDates = useMemo(() => approvedLeaveDates(myLeaves), [myLeaves]);
+  // คาบที่เช็คชื่อแล้ว — realtime เฉพาะของครูคนนี้ (teacherId อาจเป็น id เอกสารครูหรือ auth uid)
   const [sessions, setSessions] = useState<SessionLite[]>([]);
   const [sessionsReady, setSessionsReady] = useState(false);
   const teacherDocId = teacher?.id ?? '';
@@ -149,116 +84,38 @@ export function useTeacherDashboardKpi() {
     );
   }, [uid]);
 
-  const row = useMemo<TeacherKpiRow | null>(() => {
-    if (!teacher || !effectiveStart) return null;
-
-    const attended = new Set(
-      attendanceRecords
-        .filter((r) => r.date >= effectiveStart && r.date <= throughDate && r.checkInTime && !isTimestampAtOrAfterNoon(r.checkInTime))
-        .map((r) => r.date),
-    );
-    const attendedDays = workingDays.filter((d) => attended.has(d)).length;
-    const attendanceRate = workingDays.length > 0
-      ? Math.round((attendedDays / workingDays.length) * 1000) / 10
-      : null;
-
-    const excluded = settings.excludedSubjectsByTeacher?.[teacher.id] ?? [];
-    const hiddenForAll = new Set(settings.dashboardExcludedSubjectIds ?? []);
-    const bySubject = new Map<string, typeof schedules>();
-    schedules
-      .filter((s) => resolveCanonicalTeacherId(s.teacherId, teachers) === teacher.id)
-      .forEach((s) => bySubject.set(s.subjectId, [...(bySubject.get(s.subjectId) ?? []), s]));
-
-    const doneBySubject = new Map<string, number>();
-    sessions.forEach((s) => {
-      if (s.date < effectiveStart || s.date > rollCallEnd || !teachingDaySet.has(s.date)) return;
-      doneBySubject.set(s.subjectId, (doneBySubject.get(s.subjectId) ?? 0) + 1);
-    });
-
-    const subjectBreakdown: TeacherSubjectKpi[] = Array.from(
-      new Set([...(teacher.teachingSubjectIds ?? []), ...bySubject.keys()]),
-    ).filter((subjectId) => {
-      if (hiddenForAll.has(subjectId)) return false;
-      // วิชากิจกรรม (ชุมนุม ฯลฯ) ผ่าน/ไม่ผ่าน ไม่นำมาแสดงและไม่คิด % เช็คชื่อ
-      const cat = String(curriculumSubjects.find((x) => x.id === subjectId || x.code === subjectId)?.category ?? '').toLowerCase();
-      return !(cat === 'activity' || cat.includes('กิจกรรม'));
-    }).map((subjectId) => {
-      const entries = bySubject.get(subjectId);
-      const expected = entries ? countExpectedSessions(entries, teachingDays) : 0;
-      const completed = doneBySubject.get(subjectId) ?? 0;
-      const cs = curriculumSubjects.find((s) => s.id === subjectId || s.code === subjectId);
-      return {
-        subjectId,
-        subjectName: entries?.[0].subjectName ?? cs?.name ?? subjectId,
-        subjectCode: entries?.[0].subjectCode ?? cs?.code,
-        rate: expected > 0 ? Math.min(100, Math.round((completed / expected) * 1000) / 10) : null,
-        completedSessions: completed,
-        expectedSessions: expected,
-        excluded: excluded.includes(subjectId),
-        inSchedule: !!entries,
-      };
-    }).sort((a, b) => a.subjectName.localeCompare(b.subjectName, 'th'));
-
-    const included = subjectBreakdown.filter((s) => !s.excluded);
-    const expectedSessions = included.reduce((n, s) => n + s.expectedSessions, 0);
-    const completedSessions = included.reduce((n, s) => n + s.completedSessions, 0);
-
-    return {
-      teacherId: teacher.id,
-      userId: teacher.userId ?? null,
-      name: teacher.name,
-      photoURL: teacher.photoURL,
-      department: teacher.department,
-      position: teacher.position,
-      attendanceRate,
-      attendedDays,
-      workingDays: workingDays.length,
-      rollCallRate: expectedSessions > 0
-        ? Math.min(100, Math.round((completedSessions / expectedSessions) * 1000) / 10)
-        : null,
-      completedSessions,
-      expectedSessions,
-      subjectBreakdown,
-    };
-  }, [teacher, teachers, effectiveStart, throughDate, workingDays, teachingDays, teachingDaySet, attendanceRecords, schedules, sessions, settings, curriculumSubjects]);
-
-  // คู่ห้อง/วิชาที่ครูมีในตารางสอน — แหล่งอ้างอิงสำรองตอนหาห้องที่สอน
-  const classSubjectPairs = useMemo(() => {
-    if (!teacher) return [];
-    const seen = new Set<string>();
-    const out: { classId: string; subjectId: string }[] = [];
-    for (const e of schedules) {
-      if (resolveCanonicalTeacherId(e.teacherId, teachers) !== teacher.id) continue;
-      const k = `${e.classId}__${e.subjectId}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push({ classId: e.classId, subjectId: e.subjectId });
-    }
-    return out;
-  }, [teacher, teachers, schedules]);
-
-  // ตารางสอนของครูคนนี้ทั้งหมด — ใช้วาดปฏิทินเช็คชื่อรายคาบ
   const mySchedule = useMemo(
     () => (teacher ? schedules.filter((e) => resolveCanonicalTeacherId(e.teacherId, teachers) === teacher.id) : []),
     [teacher, teachers, schedules],
   );
 
-  const attendanceSummary = useMemo(
-    () => summarizeCheckInHistory(buildCheckInHistoryRows(attendanceRecords, effectiveStart, throughDate, new Set())),
-    [attendanceRecords, effectiveStart, throughDate],
-  );
+  const computed = useMemo(() => {
+    if (!teacher || !effectiveStart) return null;
+    return computeTeacherDashboard({
+      teacher,
+      schedule: mySchedule,
+      sessions,
+      attendanceRecords,
+      leaveDates,
+      range,
+      workingDays,
+      baseTeachingDays: baseDays,
+      excludedSubjectIds: settings.excludedSubjectsByTeacher?.[teacher.id] ?? [],
+      hiddenForAll: new Set(settings.dashboardExcludedSubjectIds ?? []),
+      curriculumSubjects,
+    });
+  }, [teacher, effectiveStart, mySchedule, sessions, attendanceRecords, leaveDates, range, workingDays, baseDays, settings, curriculumSubjects]);
 
   return {
-    row,
+    row: computed?.row ?? null,
     teacherId: teacher?.id,
     range: { from: effectiveStart, to: throughDate },
     rollCallRange: { from: effectiveStart, to: rollCallEnd },
-    classSubjectPairs,
     mySchedule,
     sessions,
-    teachingDays,
+    teachingDays: computed?.teachingDays ?? [],
     today,
-    attendanceSummary,
+    attendanceSummary: computed?.attendanceSummary ?? { present: 0, late: 0, absent: 0, leave: 0, total: 0 },
     isLoading: !isLoaded || teachersLoading || !sessionsReady,
   };
 }

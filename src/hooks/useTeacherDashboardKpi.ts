@@ -9,6 +9,7 @@ import { useActiveAcademicYear } from '@/hooks/useActiveAcademicYear';
 import { useTeachersCollection } from '@/hooks/useTeachersCollection';
 import { useCurriculum } from '@/hooks/useCurriculum';
 import { useAcademicCalendar } from '@/hooks/useAcademicCalendar';
+import { useMyLeaveRequests } from '@/hooks/useLeaveRequests';
 import { useTeacherKpiSettings } from '@/hooks/useTeacherKpiSettings';
 import { countExpectedSessions } from '@/hooks/useTeacherKpi';
 import { isTimestampAtOrAfterNoon, type StaffAttendanceRecord } from '@/hooks/useStaffAttendance';
@@ -88,9 +89,24 @@ export function useTeacherDashboardKpi() {
   // ช่วงเช็คชื่อรายวิชา: 1 ก.ค. – 2 ต.ค. (ตัดให้ไม่เกินช่วงเก็บค่าหลัก)
   // ponytail: วันสิ้นสุดฮาร์ดโค้ด — ย้ายไปเป็นค่าตั้งถ้าต้องเปลี่ยนบ่อย
   const rollCallEnd = windowYear && `${windowYear}-10-02` < throughDate ? `${windowYear}-10-02` : throughDate;
+  // วันที่ครูลา (อนุมัติแล้ว) ไม่นำมาคิดเช็คชื่อรายวิชา — store เฉพาะใบลาของครูคนนี้
+  const { requests: myLeaves } = useMyLeaveRequests(uid, 'staff');
+  const leaveDates = useMemo(() => {
+    const out = new Set<string>();
+    for (const req of myLeaves) {
+      if (req.status !== 'approved') continue;
+      const cursor = new Date(`${req.startDate}T12:00:00`);
+      const end = new Date(`${req.endDate}T12:00:00`);
+      for (; cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+        out.add(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`);
+      }
+    }
+    return out;
+  }, [myLeaves]);
+
   const teachingDays = useMemo(
-    () => filterOutNonTeachingDays(workingDays, calendarEvents).filter((d) => d <= rollCallEnd),
-    [workingDays, calendarEvents, rollCallEnd],
+    () => filterOutNonTeachingDays(workingDays, calendarEvents).filter((d) => d <= rollCallEnd && !leaveDates.has(d)),
+    [workingDays, calendarEvents, rollCallEnd, leaveDates],
   );
   const teachingDaySet = useMemo(() => new Set(teachingDays), [teachingDays]);
 

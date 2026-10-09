@@ -85,7 +85,13 @@ export function useTeacherDashboardKpi() {
 
   // คาบที่เช็คชื่อแล้ว — realtime เฉพาะของครูคนนี้ (teacherId อาจเป็น id เอกสารครูหรือ auth uid)
   // วันที่มีการเรียนจริง = วันทำงาน ตัดวันสอบ (กลางภาค/ปลายภาค) — ใช้กับ % เช็คชื่อรายวิชาเท่านั้น
-  const teachingDays = useMemo(() => filterOutExamDays(workingDays, calendarEvents), [workingDays, calendarEvents]);
+  // ช่วงเช็คชื่อรายวิชา: 1 ก.ค. – 2 ต.ค. (ตัดให้ไม่เกินช่วงเก็บค่าหลัก)
+  // ponytail: วันสิ้นสุดฮาร์ดโค้ด — ย้ายไปเป็นค่าตั้งถ้าต้องเปลี่ยนบ่อย
+  const rollCallEnd = windowYear && `${windowYear}-10-02` < throughDate ? `${windowYear}-10-02` : throughDate;
+  const teachingDays = useMemo(
+    () => filterOutExamDays(workingDays, calendarEvents).filter((d) => d <= rollCallEnd),
+    [workingDays, calendarEvents, rollCallEnd],
+  );
   const teachingDaySet = useMemo(() => new Set(teachingDays), [teachingDays]);
 
   const [sessions, setSessions] = useState<SessionLite[]>([]);
@@ -148,7 +154,7 @@ export function useTeacherDashboardKpi() {
 
     const doneBySubject = new Map<string, number>();
     sessions.forEach((s) => {
-      if (s.date < effectiveStart || s.date > throughDate || !teachingDaySet.has(s.date)) return;
+      if (s.date < effectiveStart || s.date > rollCallEnd || !teachingDaySet.has(s.date)) return;
       doneBySubject.set(s.subjectId, (doneBySubject.get(s.subjectId) ?? 0) + 1);
     });
 
@@ -224,6 +230,7 @@ export function useTeacherDashboardKpi() {
     row,
     teacherId: teacher?.id,
     range: { from: effectiveStart, to: throughDate },
+    rollCallRange: { from: effectiveStart, to: rollCallEnd },
     classSubjectPairs,
     mySchedule,
     sessions,

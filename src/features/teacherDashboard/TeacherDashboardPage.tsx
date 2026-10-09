@@ -25,7 +25,7 @@ const fadeUp = {
 export default function TeacherDashboardPage() {
   const { activeYear, activeSemester } = useActiveAcademicYear();
   const { user } = useAuth();
-  const { row: me, teacherId, range, classSubjectPairs, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
+  const { row: me, teacherId, range, rollCallRange, classSubjectPairs, mySchedule, sessions, teachingDays, today, attendanceSummary: attendance, isLoading: kpiLoading } = useTeacherDashboardKpi();
   const [calendarSubjectId, setCalendarSubjectId] = useState<string | null>(null);
   const gpaBySubject = useTeacherGradeSummary([teacherId ?? '', user?.uid ?? ''], classSubjectPairs);
 
@@ -68,7 +68,8 @@ export default function TeacherDashboardPage() {
             <div className="flex flex-col gap-6 px-6 pt-6 md:order-1 md:px-10 md:pt-10">
               <p className="text-xs font-bold text-destructive">
                 ปีการศึกษา {activeYear.year} ภาคเรียนที่ {activeSemester}
-                {' · '}ช่วงเก็บค่า {formatThaiDate(range.from)} – {formatThaiDate(range.to)}
+                {' · '}เวลาปฏิบัติงาน {formatThaiDate(range.from)} – {formatThaiDate(range.to)}
+                {' · '}เช็คชื่อรายวิชา {formatThaiDate(rollCallRange.from)} – {formatThaiDate(rollCallRange.to)}
               </p>
 
               <div className="grid grid-cols-2 gap-6">
@@ -154,7 +155,7 @@ export default function TeacherDashboardPage() {
         schedule={mySchedule}
         sessions={sessions}
         workingDays={teachingDays}
-        range={range}
+        range={rollCallRange}
         today={today}
       />
     </div>

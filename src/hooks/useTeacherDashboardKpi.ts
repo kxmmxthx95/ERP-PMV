@@ -176,7 +176,11 @@ export function useTeacherDashboardKpi() {
 
     const subjectBreakdown: TeacherSubjectKpi[] = Array.from(
       new Set([...(teacher.teachingSubjectIds ?? []), ...bySubject.keys()]),
-    ).map((subjectId) => {
+    ).filter((subjectId) => {
+      // วิชากิจกรรม (ชุมนุม ฯลฯ) ผ่าน/ไม่ผ่าน ไม่นำมาแสดงและไม่คิด % เช็คชื่อ
+      const cat = String(curriculumSubjects.find((x) => x.id === subjectId || x.code === subjectId)?.category ?? '').toLowerCase();
+      return !(cat === 'activity' || cat.includes('กิจกรรม'));
+    }).map((subjectId) => {
       const entries = bySubject.get(subjectId);
       const expected = entries ? countExpectedSessions(entries, teachingDays) : 0;
       const completed = doneBySubject.get(subjectId) ?? 0;

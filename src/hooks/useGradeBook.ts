@@ -538,7 +538,8 @@ export function useGradeBook() {
       grade: null,
       result,
       absent: false,
-      note: stu.note,
+      // Firestore ปฏิเสธ undefined — ใส่ note เฉพาะเมื่อมีค่า
+      ...(stu.note !== undefined && { note: stu.note }),
       updatedAt: now,
     };
     await setDoc(ref, record, { merge: true });

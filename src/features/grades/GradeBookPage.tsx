@@ -8,7 +8,7 @@ import {
 import {
   HiBookOpen, HiAdjustmentsHorizontal, HiClipboardDocumentList, HiCalendarDays,
   HiBars3, HiOutlineFunnel, HiChevronRight, HiChevronLeft, HiArrowLeft,
-  HiAcademicCap, HiPlus, HiXMark, HiArrowDownTray,
+  HiAcademicCap, HiPlus, HiXMark, HiArrowDownTray, HiOutlineCheckCircle,
 } from 'react-icons/hi2';
 import type { IconType } from 'react-icons';
 import { toast } from 'sonner';
@@ -54,6 +54,16 @@ import { GLASS } from '@/components/layouts/PortalLayout';
 import { cn } from '@/lib/utils';
 import { getLocalDateString } from '@/lib/dateUtils';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { HEADER_ICON_BTN, HEADER_ICON_BTN_GROUP } from '@/lib/headerIconBtn';
 import {
   DEFAULT_COLOR_ID,
@@ -867,6 +877,41 @@ export default function GradeBookPage() {
     );
   }, [gradeBook.summaries, gradeBook.config, onlineExamScoreSync]);
 
+  // ผ่านทั้งหมด (วิชาแบบผ่าน/ไม่ผ่าน) — ถ้ามีคนที่ถูกตั้งเป็น "ไม่ผ่าน" ไว้แล้ว ถามยืนยันก่อนทับ
+  const [passAllConfirmOpen, setPassAllConfirmOpen] = useState(false);
+  const [passAllSaving, setPassAllSaving] = useState(false);
+  const failCount = displaySummaries.filter((x) => x.result === 'fail').length;
+  const doPassAll = async () => {
+    if (!selectedClass || !selectedSubject || !academicYear) return;
+    setPassAllSaving(true);
+    try {
+      const n = await gradeBook.saveAllPassFail({
+        subjectId: selectedSubjectId,
+        subjectName: selectedSubject.name,
+        subjectCode: selectedSubject.code ?? '',
+        classId: selectedClassId,
+        className: selectedClass.className,
+        teacherId: user?.uid ?? '',
+        departmentId: (selectedClass.departmentId ?? 'secondary') as Department,
+        academicYearId: String(academicYear),
+        semester: selectedSemester,
+      });
+      toast.success(`บันทึกผ่านทั้งหมด ${n} คน`);
+      logActivity({
+        action: 'บันทึกผลผ่านทั้งหมด',
+        category: 'academic',
+        targetId: selectedClassId,
+        detail: `${selectedSubject.name} · ${selectedClass.className} · ${n} คน`,
+      });
+    } catch (err) {
+      console.error(err);
+      toast.error('บันทึกผลการเรียนไม่สำเร็จ');
+    } finally {
+      setPassAllSaving(false);
+      setPassAllConfirmOpen(false);
+    }
+  };
+
   const prevClassSelectionRef = useRef({ classId: '', semester: selectedSemester });
 
   useEffect(() => {
@@ -1668,6 +1713,20 @@ export default function GradeBookPage() {
                   </Button>
                 )}
 
+                {activeTab === 'table' && passFailMode && canEditGrades && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="ml-auto gap-1.5 text-xs font-bold"
+                    disabled={passAllSaving || displaySummaries.length === 0}
+                    onClick={() => (failCount > 0 ? setPassAllConfirmOpen(true) : void doPassAll())}
+                  >
+                    <HiOutlineCheckCircle className="h-4 w-4" />
+                    ผ่านทั้งหมด
+                  </Button>
+                )}
+
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -1675,7 +1734,7 @@ export default function GradeBookPage() {
                   onClick={handleReload}
                   className={cn(
                     'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground transition-colors hover:bg-muted/80',
-                    !(activeTab === 'table' && !passFailMode) && 'ml-auto',
+                    !(activeTab === 'table' && (!passFailMode || canEditGrades)) && 'ml-auto',
                   )}
                 >
                   <RefreshCw size={13} />
@@ -2228,6 +2287,22 @@ export default function GradeBookPage() {
           </div>
         </DrawerContent>
       </Drawer>
+      <AlertDialog open={passAllConfirmOpen} onOpenChange={setPassAllConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>บันทึกผ่านทั้งหมด</AlertDialogTitle>
+            <AlertDialogDescription>
+              มีนักเรียน {failCount} คนที่ถูกบันทึกว่า "ไม่ผ่าน" ไว้แล้ว การดำเนินการนี้จะเปลี่ยนเป็น "ผ่าน" ทั้งห้อง
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={passAllSaving}>ยกเลิก</AlertDialogCancel>
+            <AlertDialogAction disabled={passAllSaving} onClick={(e) => { e.preventDefault(); void doPassAll(); }}>
+              ยืนยันผ่านทั้งหมด
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

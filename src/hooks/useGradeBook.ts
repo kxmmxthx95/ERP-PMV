@@ -9,7 +9,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import {
-  collection, getDocs, setDoc, deleteDoc, doc, query, where,
+  collection, getDocs, setDoc, deleteDoc, doc, query, where, writeBatch,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type {
@@ -550,6 +550,63 @@ export function useGradeBook() {
     cacheKey.current = '';
   }, [summaries]);
 
+  /** บันทึกผล "ผ่าน" ให้นักเรียนทุกคนในห้อง (วิชากิจกรรม) — batch เดียว */
+  const saveAllPassFail = useCallback(async (params: {
+    subjectId: string;
+    subjectName: string;
+    subjectCode: string;
+    classId: string;
+    className: string;
+    teacherId: string;
+    departmentId: Department;
+    academicYearId: string;
+    semester: 1 | 2;
+  }) => {
+    const result: PassFailResult = 'pass';
+    const now = new Date().toISOString();
+    // ponytail: batch 500 doc — ห้องหนึ่งราว 50 คน; แบ่งเป็นก้อนถ้าเกิน
+    const batch = writeBatch(db);
+    const records: Array<{ id: string } & NewGradeRecord> = summaries.map((stu) => {
+      const id = `${params.subjectId}_${params.classId}_${stu.studentId}_${params.academicYearId}_${params.semester}`;
+      const record: NewGradeRecord = {
+        studentId: stu.studentId,
+        studentName: stu.studentName,
+        studentCode: stu.studentCode,
+        subjectId: params.subjectId,
+        subjectName: params.subjectName,
+        subjectCode: params.subjectCode,
+        classId: params.classId,
+        className: params.className,
+        teacherId: params.teacherId,
+        departmentId: params.departmentId,
+        academicYearId: params.academicYearId,
+        semester: params.semester,
+        classworkScore: null,
+        midtermScore: null,
+        finalScore: null,
+        totalScore: null,
+        grade: null,
+        result,
+        absent: false,
+        ...(stu.note !== undefined && { note: stu.note }),
+        updatedAt: now,
+      };
+      batch.set(doc(db, 'grade_records', id), record, { merge: true });
+      return { id, ...record };
+    });
+    await batch.commit();
+
+    setSummaries((prev) => prev.map((s) => ({
+      ...s, result, grade: null, classworkScore: null, midtermScore: null, finalScore: null, totalScore: null,
+    })));
+    setSavedRecords((prev) => {
+      const ids = new Set(records.map((r) => r.studentId));
+      return [...prev.filter((r) => !ids.has(r.studentId)), ...records];
+    });
+    cacheKey.current = '';
+    return records.length;
+  }, [summaries]);
+
   /** ครูใส่/แก้ % พิเศษต่อคน — เก็บแยกใน grade_bonuses ไม่แตะ grade_records */
   const updateBonusScore = useCallback(async (
     params: {
@@ -604,6 +661,7 @@ export function useGradeBook() {
     applyOnlineExamScores,
     revertOnlineExamScores,
     savePassFailResult,
+    saveAllPassFail,
     updateBonusScore,
   };
 }
